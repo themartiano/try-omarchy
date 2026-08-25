@@ -147,8 +147,9 @@ copy_tree "$source_dir/config" "$root/etc/skel/.config"
 install_file 0644 "$source_dir/default/bashrc" "$root/etc/skel/.bashrc"
 mkdir -p "$root/etc/skel/.local/share/applications"
 copy_contents "$source_dir/applications" "$root/etc/skel/.local/share/applications"
+# Presence of a file here enables that Hyprland flag. default/hypr/toggles is
+# the catalog (window-no-gaps, 1:1 single window), not the factory default.
 mkdir -p "$root/etc/skel/.local/state/omarchy/toggles/hypr"
-copy_contents "$source_dir/default/hypr/toggles" "$root/etc/skel/.local/state/omarchy/toggles/hypr"
 
 if [[ -d $source_dir/default/nautilus-python/extensions ]]; then
   copy_tree "$source_dir/default/nautilus-python/extensions" "$root/etc/skel/.local/share/nautilus-python/extensions"

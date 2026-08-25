@@ -66,6 +66,13 @@ def main() -> None:
     check('output="$repo_dir/dist/guest"' in container, "guest output defaults to dist/guest")
     check("try-omarchy-guest-work" in container, "guest cache has a project-scoped Docker volume")
 
+    materialize = read(GUEST / "scripts/materialize-omarchy.sh")
+    check(
+        'mkdir -p "$root/etc/skel/.local/state/omarchy/toggles/hypr"' in materialize
+        and 'copy_contents "$source_dir/default/hypr/toggles"' not in materialize,
+        "skel hypr toggles stay empty so catalog flags are off by default",
+    )
+
     configure = read(GUEST / "scripts/configure-rootfs.sh")
     check("factory-overlay" in configure and "native-overlay" in configure, "rootfs receives only native factory overlays")
     check("omarchy-provision-owner.service" in configure, "first boot uses upstream owner provisioning")
