@@ -87,11 +87,18 @@ def main() -> None:
     check("omarchy-provision-owner.service" in configure, "first boot uses upstream owner provisioning")
     check("omarchy-native-audio-bridge" in configure, "guest installs native host-audio integration")
     check(
-        'pacman_templates="$root/usr/share/omarchy/default/pacman"' in configure
-        and "for channel in stable rc edge" in configure
-        and "ARM pacman templates must not include multilib" in configure
+        "pre-refresh-pacman-restore-arm.sh" in configure
+        and "pre-refresh-pacman.d/restore-arm-pacman" in configure
+        and "for channel in stable rc edge" not in configure
         and "install -m 0644 /etc/pacman.d/mirrorlist" not in configure,
-        "omarchy-refresh-pacman templates stay on Arch Linux ARM",
+        "ARM pacman restore uses the pre-refresh-pacman hook, not Omarchy templates",
+    )
+    restore_hook = read(GUEST / "fragments/pre-refresh-pacman-restore-arm.sh")
+    check(
+        "install -m 0644 /usr/share/try-omarchy/pacman.conf /etc/pacman.conf" in restore_hook
+        and "install -m 0644 /usr/share/try-omarchy/mirrorlist /etc/pacman.d/mirrorlist"
+        in restore_hook,
+        "pre-refresh-pacman hook restores ARM pacman files from try-omarchy",
     )
     zram_override = read(
         GUEST
@@ -224,6 +231,7 @@ HOTPLUG=1
         display_sync,
         *GUEST.glob("*.sh"),
         *GUEST.glob("scripts/*.sh"),
+        *GUEST.glob("fragments/*.sh"),
     ]
     for path in sorted(shell_files):
         subprocess.run(["bash", "-n", str(path)], check=True)

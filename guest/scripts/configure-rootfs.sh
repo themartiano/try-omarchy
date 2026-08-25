@@ -106,10 +106,8 @@ arm_mirrorlist="$guest_dir/mirrorlist.aarch64"
 install -m 0644 "$guest_dir/$pacman_input" "$root/etc/pacman.conf"
 install -m 0644 "$arm_mirrorlist" "$root/etc/pacman.d/mirrorlist"
 
-# omarchy-refresh-pacman copies these templates over /etc. Keep them ARM so an
-# update cannot point pacman at x86_64 Omarchy mirrors or drop the local repo.
-pacman_templates="$root/usr/share/omarchy/default/pacman"
-[[ -d $pacman_templates ]] || fail "Omarchy pacman templates are missing"
+# Keep Omarchy's x86_64 channel templates untouched. omarchy-refresh-pacman
+# copies them over /etc, then the pre-refresh-pacman hook restores these files.
 {
   cat "$guest_dir/$pacman_input"
   cat <<'EOF'
@@ -121,17 +119,18 @@ Server = file:///usr/share/try-omarchy/repo
 EOF
 } >"$root/usr/share/try-omarchy/pacman.conf"
 install -m 0644 "$arm_mirrorlist" "$root/usr/share/try-omarchy/mirrorlist"
-for channel in stable rc edge; do
-  install -m 0644 "$root/usr/share/try-omarchy/pacman.conf" "$pacman_templates/pacman-$channel.conf"
-  install -m 0644 "$arm_mirrorlist" "$pacman_templates/mirrorlist-$channel"
-done
 grep -q '^\[multilib\]$' "$root/usr/share/try-omarchy/pacman.conf" &&
-  fail "ARM pacman templates must not include multilib"
-grep -q '^Server = https://stable-mirror.omarchy.org' "$root/usr/share/try-omarchy/pacman.conf" \
-  "$pacman_templates/mirrorlist-stable" &&
-  fail "ARM pacman templates must not use Omarchy x86_64 mirrors"
+  fail "ARM pacman files must not include multilib"
+grep -q '^Server = https://stable-mirror.omarchy.org' "$root/usr/share/try-omarchy/pacman.conf" &&
+  fail "ARM pacman files must not use Omarchy x86_64 mirrors"
 grep -q '^\[try-omarchy\]$' "$root/usr/share/try-omarchy/pacman.conf" ||
-  fail "ARM pacman refresh template must keep the local try-omarchy repository"
+  fail "ARM pacman files must keep the local try-omarchy repository"
+
+refresh_hook="$guest_dir/fragments/pre-refresh-pacman-restore-arm.sh"
+[[ -f $refresh_hook ]] || fail "ARM pacman refresh hook not found: $refresh_hook"
+install -d -m 0755 "$root/etc/skel/.config/omarchy/hooks/pre-refresh-pacman.d"
+install -m 0755 "$refresh_hook" \
+  "$root/etc/skel/.config/omarchy/hooks/pre-refresh-pacman.d/restore-arm-pacman"
 
 provision_unit="$root/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
 [[ -f $provision_unit ]] || fail "pinned upstream owner-provisioning service is missing"
