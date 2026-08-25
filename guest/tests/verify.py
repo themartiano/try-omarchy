@@ -51,6 +51,22 @@ def main() -> None:
     for path in spec["inputs"].values():
         check((GUEST / path).is_file(), f"spec input exists: {path}")
 
+    pacman_conf = read(GUEST / spec["inputs"]["pacmanConfig"])
+    check("[core]" in pacman_conf and "[alarm]" in pacman_conf, "factory pacman uses Arch Linux ARM repos")
+    check("[multilib]" not in pacman_conf, "factory pacman has no x86_64 multilib repo")
+    check(
+        "Server = https://stable-mirror.omarchy.org" not in pacman_conf
+        and "Server = https://pkgs.omarchy.org" not in pacman_conf,
+        "factory pacman does not use Omarchy x86_64 mirrors",
+    )
+    check("IgnorePkg = linux-aarch64" in pacman_conf, "factory pacman holds the QEMU-booted kernel")
+    arm_mirrorlist = read(GUEST / "mirrorlist.aarch64")
+    check(
+        "mirror.archlinuxarm.org/$arch/$repo" in arm_mirrorlist
+        and "stable-mirror.omarchy.org" not in arm_mirrorlist,
+        "factory mirrorlist is Arch Linux ARM",
+    )
+
     package_text = (GUEST / spec["inputs"]["packages"]).read_bytes()
     package_lock = json_file(GUEST / spec["inputs"]["packageLock"])
     check(package_lock.get("architecture") == "aarch64", "package lock is ARM64")
@@ -70,6 +86,13 @@ def main() -> None:
     check("factory-overlay" in configure and "native-overlay" in configure, "rootfs receives only native factory overlays")
     check("omarchy-provision-owner.service" in configure, "first boot uses upstream owner provisioning")
     check("omarchy-native-audio-bridge" in configure, "guest installs native host-audio integration")
+    check(
+        'pacman_templates="$root/usr/share/omarchy/default/pacman"' in configure
+        and "for channel in stable rc edge" in configure
+        and "ARM pacman templates must not include multilib" in configure
+        and "install -m 0644 /etc/pacman.d/mirrorlist" not in configure,
+        "omarchy-refresh-pacman templates stay on Arch Linux ARM",
+    )
     zram_override = read(
         GUEST
         / "factory-overlay/etc/systemd/zram-generator.conf.d/99-try-omarchy.conf"

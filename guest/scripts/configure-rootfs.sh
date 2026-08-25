@@ -101,8 +101,37 @@ ln -sfn /usr/share/zoneinfo/UTC "$root/etc/localtime"
 # Keep the reviewed Arch Linux ARM package and mirror configuration.
 pacman_input=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"].get("pacmanConfig", ""))' "$spec")
 [[ -n $pacman_input ]] || fail "native guest spec must provide pacmanConfig"
+arm_mirrorlist="$guest_dir/mirrorlist.aarch64"
+[[ -f $arm_mirrorlist ]] || fail "ARM mirrorlist not found: $arm_mirrorlist"
 install -m 0644 "$guest_dir/$pacman_input" "$root/etc/pacman.conf"
-install -m 0644 /etc/pacman.d/mirrorlist "$root/etc/pacman.d/mirrorlist"
+install -m 0644 "$arm_mirrorlist" "$root/etc/pacman.d/mirrorlist"
+
+# omarchy-refresh-pacman copies these templates over /etc. Keep them ARM so an
+# update cannot point pacman at x86_64 Omarchy mirrors or drop the local repo.
+pacman_templates="$root/usr/share/omarchy/default/pacman"
+[[ -d $pacman_templates ]] || fail "Omarchy pacman templates are missing"
+{
+  cat "$guest_dir/$pacman_input"
+  cat <<'EOF'
+
+# Immutable packages assembled from the checksummed Try Omarchy build spec.
+[try-omarchy]
+SigLevel = Optional TrustAll
+Server = file:///usr/share/try-omarchy/repo
+EOF
+} >"$root/usr/share/try-omarchy/pacman.conf"
+install -m 0644 "$arm_mirrorlist" "$root/usr/share/try-omarchy/mirrorlist"
+for channel in stable rc edge; do
+  install -m 0644 "$root/usr/share/try-omarchy/pacman.conf" "$pacman_templates/pacman-$channel.conf"
+  install -m 0644 "$arm_mirrorlist" "$pacman_templates/mirrorlist-$channel"
+done
+grep -q '^\[multilib\]$' "$root/usr/share/try-omarchy/pacman.conf" &&
+  fail "ARM pacman templates must not include multilib"
+grep -q '^Server = https://stable-mirror.omarchy.org' "$root/usr/share/try-omarchy/pacman.conf" \
+  "$pacman_templates/mirrorlist-stable" &&
+  fail "ARM pacman templates must not use Omarchy x86_64 mirrors"
+grep -q '^\[try-omarchy\]$' "$root/usr/share/try-omarchy/pacman.conf" ||
+  fail "ARM pacman refresh template must keep the local try-omarchy repository"
 
 provision_unit="$root/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
 [[ -f $provision_unit ]] || fail "pinned upstream owner-provisioning service is missing"

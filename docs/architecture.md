@@ -52,6 +52,9 @@ creates the account on first boot.
   and host audio-device routing.
 - The pinned Omarchy runtime trees are copied from upstream. Guest overlays add
   the QEMU and ARM64 integration around them.
+- `omarchy-refresh-pacman` copies `/usr/share/omarchy/default/pacman/` over
+  `/etc`. Those templates are replaced with Arch Linux ARM mirrors plus the
+  local `try-omarchy` package repo. Omarchy's x86_64 mirrors are not used.
 
 Nothing is overwritten while the app runs. The app bundle and packaged factory
 disk remain unchanged. Normal user launches use one private writable disk under
