@@ -69,8 +69,9 @@ def main() -> None:
     materialize = read(GUEST / "scripts/materialize-omarchy.sh")
     check(
         'mkdir -p "$root/etc/skel/.local/state/omarchy/toggles/hypr"' in materialize
-        and 'copy_contents "$source_dir/default/hypr/toggles"' not in materialize,
-        "skel hypr toggles stay empty so catalog flags are off by default",
+        and 'copy_contents "$source_dir/default/hypr/toggles"' not in materialize
+        and 'toggles/flags.lua' in materialize,
+        "skel hypr toggles seed only flags.lua, not the catalog",
     )
 
     configure = read(GUEST / "scripts/configure-rootfs.sh")
