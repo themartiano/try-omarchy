@@ -2,7 +2,7 @@ import AppKit
 import Testing
 @testable import OmarchyVMHelper
 
-@Suite("Start menu layout")
+@Suite("Start menu layout", .serialized)
 @MainActor
 struct StartMenuWindowTests {
     @Test("missing-permission actions share one aligned column and launch text is centered")
