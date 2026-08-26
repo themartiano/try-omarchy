@@ -311,20 +311,22 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         launchButton.controlSize = .large
         launchButton.font = launchButtonFont
         launchButton.isEnabled = !launchInProgress && !resetInProgress && !microphoneRequestInFlight
-        if !launchButton.isEnabled {
-            launchButton.title = ""
-            let disabledTitle = MouseIgnoringTextField(labelWithString: launchButtonTitle)
-            disabledTitle.font = launchButtonFont
-            disabledTitle.textColor = .controlTextColor
-            disabledTitle.alignment = .center
-            disabledTitle.setAccessibilityElement(false)
-            disabledTitle.translatesAutoresizingMaskIntoConstraints = false
-            launchButton.addSubview(disabledTitle)
-            NSLayoutConstraint.activate([
-                disabledTitle.centerXAnchor.constraint(equalTo: launchButton.centerXAnchor),
-                disabledTitle.centerYAnchor.constraint(equalTo: launchButton.centerYAnchor),
-            ])
-        }
+        launchButton.title = ""
+        launchButton.identifier = NSUserInterfaceItemIdentifier("launch-button")
+        let launchButtonLabel = MouseIgnoringTextField(labelWithString: launchButtonTitle)
+        launchButtonLabel.font = launchButtonFont
+        launchButtonLabel.textColor = launchButton.isEnabled
+            ? .alternateSelectedControlTextColor
+            : .controlTextColor
+        launchButtonLabel.alignment = .center
+        launchButtonLabel.setAccessibilityElement(false)
+        launchButtonLabel.identifier = NSUserInterfaceItemIdentifier("launch-button-label")
+        launchButtonLabel.translatesAutoresizingMaskIntoConstraints = false
+        launchButton.addSubview(launchButtonLabel)
+        NSLayoutConstraint.activate([
+            launchButtonLabel.centerXAnchor.constraint(equalTo: launchButton.centerXAnchor),
+            launchButtonLabel.centerYAnchor.constraint(equalTo: launchButton.centerYAnchor),
+        ])
         launchButton.translatesAutoresizingMaskIntoConstraints = false
         launchButton.setAccessibilityLabel(launchInProgress ? "Launching Omarchy" : "Launch Omarchy")
         if launchInProgress {
@@ -466,6 +468,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             let button = NSButton(title: actionTitle, target: self, action: action)
             button.controlSize = .small
             button.isEnabled = !microphoneRequestInFlight && !launchInProgress && !resetInProgress
+            button.identifier = NSUserInterfaceItemIdentifier("permission-action-\(symbolName)")
             trailingViews.append(button)
         }
         let trailing = NSStackView(views: trailingViews)
@@ -482,6 +485,9 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             row.heightAnchor.constraint(greaterThanOrEqualToConstant: 76),
             trailing.widthAnchor.constraint(equalToConstant: 112),
         ])
+        if let button = trailingViews.last as? NSButton {
+            button.widthAnchor.constraint(equalTo: trailing.widthAnchor).isActive = true
+        }
         labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
         labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         trailing.setContentHuggingPriority(.required, for: .horizontal)
