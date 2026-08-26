@@ -204,6 +204,16 @@ cat >"$shim_dir/file" <<'SH'
 printf '%s: Mach-O 64-bit executable arm64\n' "$1"
 SH
 
+cat >"$shim_dir/sysctl" <<'SH'
+#!/bin/bash
+set -euo pipefail
+if [[ $# == 2 && $1 == -n && ($2 == hw.logicalcpu || $2 == hw.ncpu) ]]; then
+  printf '8\n'
+  exit 0
+fi
+exec /usr/sbin/sysctl "$@"
+SH
+
 cat >"$shim_dir/swift" <<'SH'
 #!/bin/bash
 exit 0
