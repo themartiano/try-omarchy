@@ -111,22 +111,35 @@ class ClipboardSyncTests(unittest.TestCase):
         self.assertTrue(sync.host_changed(bridge.TEXT_FORMAT, b"from mac"))
         self.assertFalse(sync.guest_changed(bridge.TEXT_FORMAT, b"from mac"))
 
+    def test_opposite_change_clears_the_echo_marker(self) -> None:
+        clock = [0.0]
+        recorder = Recorder()
+        sync = bridge.ClipboardSync(recorder.send, recorder.copy, clock=lambda: clock[0])
+
+        # Guest copies B, the Mac copies A, then the Mac copies B right away.
+        # The final B is new content, not an echo of the guest's write.
+        self.assertTrue(sync.guest_changed(bridge.TEXT_FORMAT, b"B"))
+        self.assertTrue(sync.host_changed(bridge.TEXT_FORMAT, b"A"))
+        self.assertTrue(sync.host_changed(bridge.TEXT_FORMAT, b"B"))
+        self.assertEqual([payload for _, payload in recorder.copied], [b"A", b"B"])
+
+        # Mirror image: Mac copies C, guest copies D, guest copies C again.
+        self.assertTrue(sync.host_changed(bridge.TEXT_FORMAT, b"C"))
+        self.assertFalse(sync.guest_changed(bridge.TEXT_FORMAT, b"C"))  # the wl-copy echo
+        self.assertTrue(sync.guest_changed(bridge.TEXT_FORMAT, b"D"))
+        self.assertTrue(sync.guest_changed(bridge.TEXT_FORMAT, b"C"))
+        self.assertEqual(len(recorder.sent), 3)
+
     def test_echo_markers_expire(self) -> None:
         clock = [0.0]
         recorder = Recorder()
         sync = bridge.ClipboardSync(recorder.send, recorder.copy, clock=lambda: clock[0])
 
-        # Guest copies B, the Mac copies A, then the Mac copies B again well
-        # after the guest's write. The final B is new content, not an echo.
-        self.assertTrue(sync.guest_changed(bridge.TEXT_FORMAT, b"B"))
-        clock[0] += bridge.ECHO_WINDOW_SECONDS + 1
-        self.assertTrue(sync.host_changed(bridge.TEXT_FORMAT, b"A"))
         self.assertTrue(sync.host_changed(bridge.TEXT_FORMAT, b"B"))
-        self.assertEqual([payload for _, payload in recorder.copied], [b"A", b"B"])
-
-        # Inside the window the mirrored write is still recognized as an echo.
+        # Inside the window the mirrored write is recognized as an echo.
         clock[0] += 0.1
         self.assertFalse(sync.guest_changed(bridge.TEXT_FORMAT, b"B"))
+        # Long after, the same content from the guest is a real change.
         clock[0] += bridge.ECHO_WINDOW_SECONDS + 1
         self.assertTrue(sync.guest_changed(bridge.TEXT_FORMAT, b"B"))
 

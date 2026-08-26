@@ -89,10 +89,13 @@ def decode_message(line: bytes) -> tuple[str, bytes] | None:
 class ClipboardSync:
     """Echo-safe two-way state shared by the tests and the live agent.
 
-    Each direction remembers the fingerprint of its last write for a short
-    window. Without the expiry a marker would outlive the content it
-    protects: guest copies B, Mac copies A, Mac copies B again, and the final
-    B would be mistaken for the original echo and lost.
+    A marker only protects content that is still on the other side's
+    clipboard. Accepting a new change in one direction therefore clears the
+    other direction's marker: after guest copies B and Mac copies A, the Mac
+    pasteboard no longer holds B, so a later Mac copy of B is new content and
+    must not be mistaken for the original echo. Echoes are delivered in order
+    before any later user copy, so clearing cannot let one through. A short
+    expiry backs this up for markers that never see an opposite change.
     """
 
     def __init__(self, send: Any, copy: Any, clock: Any = time.monotonic) -> None:
@@ -117,6 +120,7 @@ class ClipboardSync:
         if self._is_echo(self.last_from_host, key, now):
             return False
         self.last_from_guest = (key, now)
+        self.last_from_host = None
         self.send(encode_message(mime, payload))
         return True
 
@@ -127,6 +131,7 @@ class ClipboardSync:
         if self._is_echo(self.last_from_guest, key, now):
             return False
         self.last_from_host = (key, now)
+        self.last_from_guest = None
         self.copy(mime, payload)
         return True
 

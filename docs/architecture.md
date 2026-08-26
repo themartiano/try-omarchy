@@ -38,8 +38,9 @@ port (`dev.tryomarchy.clipboard`) carries newline-delimited JSON between a
 Swift bridge on the Mac, which watches the `NSPasteboard` change count, and a
 Python agent in the Omarchy session, which uses wl-clipboard's data-control
 protocol. Text and PNG payloads flow both ways; each side remembers the
-fingerprint of what it last wrote for a couple of seconds so the immediate
-echo is dropped while a later genuine repeat of the same content still flows.
+fingerprint of what it last wrote so the immediate echo is dropped. The marker
+is cleared as soon as the other side moves on to new content, and expires after
+a couple of seconds regardless, so a genuine repeat of the same content still flows.
 
 ## The ARM64 image
 

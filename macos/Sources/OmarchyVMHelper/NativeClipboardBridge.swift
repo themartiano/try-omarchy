@@ -99,10 +99,13 @@ struct ClipboardMessage: Equatable {
 /// change count, and writing the Mac pasteboard into the guest triggers the
 /// guest watcher; both are recognized by fingerprint and dropped.
 ///
-/// An echo follows its write within milliseconds, so each marker is only
-/// honored for a short window. Without the expiry a marker would outlive
-/// the content it protects: guest copies B, Mac copies A, Mac copies B again,
-/// and the final B would be mistaken for the original echo and lost.
+/// A marker only protects content that is still on the other side's
+/// clipboard. Accepting a new change in one direction therefore clears the
+/// other direction's marker: after guest copies B and Mac copies A, the
+/// pasteboard no longer holds B, so a later Mac copy of B is new content and
+/// must not be mistaken for the original echo. Echoes are delivered in order
+/// before any later user copy, so clearing cannot let one through. A short
+/// expiry backs this up for markers that never see an opposite change.
 struct ClipboardSyncState: Equatable {
     /// How long a write may be mirrored back before it counts as new content.
     static let echoWindow: TimeInterval = 2
@@ -133,6 +136,7 @@ struct ClipboardSyncState: Equatable {
         // that echo is dropped. A repeat of earlier Mac content is a change.
         guard !Self.isEcho(fromGuest, key, at: now) else { return false }
         fromHost = Marker(fingerprint: key, at: now)
+        fromGuest = nil
         return true
     }
 
@@ -144,6 +148,7 @@ struct ClipboardSyncState: Equatable {
         let key = message.fingerprint
         guard !Self.isEcho(fromHost, key, at: now) else { return false }
         fromGuest = Marker(fingerprint: key, at: now)
+        fromHost = nil
         return true
     }
 }
