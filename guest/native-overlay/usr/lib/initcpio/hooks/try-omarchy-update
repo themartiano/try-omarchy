@@ -1,0 +1,64 @@
+#!/usr/bin/ash
+
+run_latehook() {
+  [ "$(getarg tryomarchy.update)" = 1 ] || return 0
+  transaction=$(getarg tryomarchy.transaction)
+  release_environment=/try-omarchy-update/release.env
+  [ -f "$release_environment" ] || return 1
+  # shellcheck disable=SC1090
+  . "$release_environment"
+
+  control_device="/dev/virtio-ports/$TRY_OMARCHY_CONTROL_PORT"
+  attempts=0
+  while { [ ! -b /dev/vdb ] || [ ! -e "$control_device" ]; } && [ "$attempts" -lt 100 ]; do
+    sleep 0.05
+    attempts=$((attempts + 1))
+  done
+  [ -b /dev/vdb ] && [ -e "$control_device" ] || {
+    err "Try Omarchy update devices did not appear"
+    poweroff -f
+    return 1
+  }
+
+  candidate_root=/sysroot
+  update_mount="$candidate_root/run/try-omarchy-update"
+  mkdir -p "$update_mount" "$candidate_root/dev" "$candidate_root/proc" "$candidate_root/sys"
+  mount -t ext4 -o ro,nosuid,nodev,noexec /dev/vdb "$update_mount" || {
+    err "Could not mount the Try Omarchy update disk"
+    poweroff -f
+    return 1
+  }
+  mount -o bind /dev "$candidate_root/dev" || update_setup_failed=1
+  mount -t proc proc "$candidate_root/proc" || update_setup_failed=1
+  mount -t sysfs sys "$candidate_root/sys" || update_setup_failed=1
+  for protected in home root; do
+    protected_path="$candidate_root/$protected"
+    if [ ! -d "$protected_path" ] || [ -L "$protected_path" ] \
+      || ! mount -o bind "$protected_path" "$protected_path" \
+      || ! mount -o remount,bind,ro "$protected_path"; then
+      update_setup_failed=1
+    fi
+  done
+
+  update_status=0
+  if [ "${update_setup_failed:-0}" -ne 0 ]; then
+    update_status=1
+  else
+    TRY_OMARCHY_RELEASE_ENV="$release_environment" \
+      /try-omarchy-update/update-runner \
+      "$candidate_root" "$update_mount" "$transaction" "$control_device" \
+      || update_status=$?
+  fi
+
+  umount "$candidate_root/root" 2>/dev/null || true
+  umount "$candidate_root/home" 2>/dev/null || true
+  umount "$candidate_root/sys" 2>/dev/null || true
+  umount "$candidate_root/proc" 2>/dev/null || true
+  umount "$candidate_root/dev" 2>/dev/null || true
+  umount "$update_mount" 2>/dev/null || true
+  if [ "$update_status" -ne 0 ]; then
+    err "Try Omarchy candidate update failed"
+    poweroff -f
+    return "$update_status"
+  fi
+}

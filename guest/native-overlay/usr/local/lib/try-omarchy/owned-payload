@@ -1,0 +1,262 @@
+#!/bin/sh
+
+# Converge the complete release-owned filesystem without ever targeting /home,
+# /root, or mutable application state. Replaced local bytes are moved into a
+# release-addressed recovery tree before the target is installed.
+
+set -eu
+
+[ "$#" -eq 3 ] || exit 64
+mode=$1
+candidate_root=$2
+update_mount=$3
+payload_manifest="$update_mount/payload.tsv"
+payload_paths="$update_mount/payload-paths.txt"
+managed_roots="$update_mount/managed-roots.txt"
+initramfs_root=${TRY_OMARCHY_INITRAMFS_ROOT:-/try-omarchy-update}
+
+[ -d "$candidate_root" ] && [ ! -L "$candidate_root" ] || exit 1
+for required in "$payload_manifest" "$payload_paths" "$managed_roots" \
+  "$update_mount/release.json" "$update_mount/target-state.json"; do
+  [ -f "$required" ] && [ ! -L "$required" ] || exit 1
+done
+
+release_id=$(sed -n \
+  's/^.*"releaseId":"\([0-9a-f][0-9a-f]*\)".*$/\1/p' \
+  "$update_mount/target-state.json")
+case "$release_id" in *[!0-9a-f]*|'') exit 1 ;; esac
+[ "${#release_id}" -eq 64 ] || exit 1
+backup_root="$candidate_root/var/lib/try-omarchy/preserved/$release_id"
+
+valid_destination() {
+  destination=$1
+  case "$destination" in /etc/*|/usr/*) ;; *) return 1 ;; esac
+  case "$destination/" in *'/../'*|*'/./'*|*'//'*) return 1 ;; esac
+  case "$destination" in *"$(printf '\t')"*) return 1 ;; esac
+}
+
+ensure_parent() {
+  requested=$1
+  case "$requested" in "$candidate_root"/*) ;; *) return 1 ;; esac
+  relative=${requested#"$candidate_root"/}
+  parent=${relative%/*}
+  current=$candidate_root
+  old_ifs=$IFS
+  IFS=/
+  set -- $parent
+  IFS=$old_ifs
+  for component do
+    case "$component" in ''|.|..) return 1 ;; esac
+    current="$current/$component"
+    if [ -e "$current" ] || [ -L "$current" ]; then
+      [ -d "$current" ] && [ ! -L "$current" ] || return 1
+    else
+      mkdir "$current" || return 1
+    fi
+  done
+}
+
+backup_existing() {
+  destination=$1
+  installed="$candidate_root$destination"
+  [ -e "$installed" ] || [ -L "$installed" ] || return 0
+  backup="$backup_root$destination"
+  ensure_parent "$backup" || return 1
+  if [ -e "$backup" ] || [ -L "$backup" ]; then
+    if [ -d "$installed" ] && [ ! -L "$installed" ] \
+      && [ -d "$backup" ] && [ ! -L "$backup" ]; then
+      rmdir "$installed"
+      return
+    fi
+    return 1
+  fi
+  mv "$installed" "$backup"
+}
+
+record_matches() {
+  kind=$1
+  identity=$2
+  record_mode=$3
+  destination=$4
+  installed="$candidate_root$destination"
+  case "$kind" in
+    f)
+      [ -f "$installed" ] && [ ! -L "$installed" ] || return 1
+      actual=$(sha256sum "$installed") || return 1
+      [ "${actual%% *}" = "$identity" ] || return 1
+      [ "$(find "$installed" -prune -type f -perm "$record_mode" -print)" = \
+        "$installed" ]
+      ;;
+    l)
+      [ -L "$installed" ] || return 1
+      [ "$(readlink "$installed")" = "$identity" ]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_record() {
+  kind=$1
+  identity=$2
+  record_mode=$3
+  destination=$4
+  extra=${5:-}
+  [ -z "$extra" ] || return 1
+  valid_destination "$destination" || return 1
+  case "$kind" in
+    f)
+      case "$identity" in *[!0-9a-f]*|'') return 1 ;; esac
+      [ "${#identity}" -eq 64 ] || return 1
+      case "$record_mode" in 0[0-7][0-7][0-7]) ;; *) return 1 ;; esac
+      source_file="$update_mount/payload/files$destination"
+      [ -f "$source_file" ] && [ ! -L "$source_file" ] || return 1
+      actual=$(sha256sum "$source_file") || return 1
+      [ "${actual%% *}" = "$identity" ]
+      ;;
+    l)
+      [ "$record_mode" = - ] || return 1
+      [ -n "$identity" ] || return 1
+      case "$identity" in *"$(printf '\t')"*) return 1 ;; esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+managed_tree_is_exact() {
+  while IFS= read -r managed || [ -n "$managed" ]; do
+    case "$managed" in
+      /etc/skel|/usr/share/licenses/omarchy|/usr/share/omarchy|/usr/share/try-omarchy/repo) ;;
+      *) return 1 ;;
+    esac
+    installed_root="$candidate_root$managed"
+    [ -e "$installed_root" ] || continue
+    [ -d "$installed_root" ] && [ ! -L "$installed_root" ] || return 1
+    while IFS= read -r installed; do
+      [ -n "$installed" ] || continue
+      destination=${installed#"$candidate_root"}
+      grep -F -x "$destination" "$payload_paths" >/dev/null || return 1
+    done <<EOF
+$(find "$installed_root" -depth \( -type f -o -type l \) -print)
+EOF
+  done <"$managed_roots"
+}
+
+verify_payload() {
+  while IFS="$(printf '\t')" read -r kind identity record_mode destination extra \
+    || [ -n "${kind:-}" ]; do
+    validate_record "$kind" "$identity" "$record_mode" "$destination" "${extra:-}" \
+      || return 1
+    record_matches "$kind" "$identity" "$record_mode" "$destination" || return 1
+  done <"$payload_manifest"
+  managed_tree_is_exact || return 1
+  installed_update="$candidate_root/usr/share/try-omarchy/update"
+  for metadata in payload.tsv payload-paths.txt managed-roots.txt; do
+    [ -f "$installed_update/$metadata" ] \
+      && [ ! -L "$installed_update/$metadata" ] \
+      && cmp -s "$update_mount/$metadata" "$installed_update/$metadata" \
+      || return 1
+  done
+  [ -f "$installed_update/release.json" ] \
+    && [ ! -L "$installed_update/release.json" ] \
+    && cmp -s "$update_mount/release.json" "$installed_update/release.json" \
+    || return 1
+  [ -f "$installed_update/release.env" ] \
+    && [ ! -L "$installed_update/release.env" ] \
+    && cmp -s "$initramfs_root/release.env" "$installed_update/release.env"
+  [ -f "$candidate_root/var/lib/pacman/sync/try-omarchy.db" ] \
+    && [ ! -L "$candidate_root/var/lib/pacman/sync/try-omarchy.db" ] \
+    && cmp -s \
+      "$candidate_root/usr/share/try-omarchy/repo/try-omarchy.db.tar.gz" \
+      "$candidate_root/var/lib/pacman/sync/try-omarchy.db"
+}
+
+reconcile_managed_trees() {
+  while IFS= read -r managed || [ -n "$managed" ]; do
+    case "$managed" in
+      /etc/skel|/usr/share/licenses/omarchy|/usr/share/omarchy|/usr/share/try-omarchy/repo) ;;
+      *) return 1 ;;
+    esac
+    installed_root="$candidate_root$managed"
+    if [ ! -e "$installed_root" ] && [ ! -L "$installed_root" ]; then
+      ensure_parent "$installed_root/file" || return 1
+      continue
+    fi
+    [ -d "$installed_root" ] && [ ! -L "$installed_root" ] || {
+      backup_existing "$managed" || return 1
+      mkdir "$installed_root" || return 1
+    }
+    while IFS= read -r installed; do
+      [ -n "$installed" ] || continue
+      destination=${installed#"$candidate_root"}
+      if ! grep -F -x "$destination" "$payload_paths" >/dev/null; then
+        valid_destination "$destination" || return 1
+        backup_existing "$destination" || return 1
+      fi
+    done <<EOF
+$(find "$installed_root" -depth \( -type f -o -type l \) -print)
+EOF
+  done <"$managed_roots"
+}
+
+install_metadata() {
+  source_file=$1
+  destination=$2
+  expected_mode=$3
+  installed="$candidate_root$destination"
+  if [ -f "$installed" ] && [ ! -L "$installed" ] \
+    && cmp -s "$source_file" "$installed"; then
+    chmod "$expected_mode" "$installed"
+    return
+  fi
+  backup_existing "$destination" || return 1
+  ensure_parent "$installed" || return 1
+  temporary="${installed%/*}/.${installed##*/}.try-omarchy-update.$$"
+  [ ! -e "$temporary" ] && [ ! -L "$temporary" ] || return 1
+  cp "$source_file" "$temporary" || return 1
+  chmod "$expected_mode" "$temporary" || return 1
+  mv "$temporary" "$installed"
+}
+
+apply_payload() {
+  reconcile_managed_trees || return 1
+  while IFS="$(printf '\t')" read -r kind identity record_mode destination extra \
+    || [ -n "${kind:-}" ]; do
+    validate_record "$kind" "$identity" "$record_mode" "$destination" "${extra:-}" \
+      || return 1
+    record_matches "$kind" "$identity" "$record_mode" "$destination" && continue
+    installed="$candidate_root$destination"
+    backup_existing "$destination" || return 1
+    ensure_parent "$installed" || return 1
+    temporary="${installed%/*}/.${installed##*/}.try-omarchy-update.$$"
+    [ ! -e "$temporary" ] && [ ! -L "$temporary" ] || return 1
+    case "$kind" in
+      f)
+        cp "$update_mount/payload/files$destination" "$temporary" || return 1
+        chmod "$record_mode" "$temporary" || return 1
+        ;;
+      l) ln -s "$identity" "$temporary" || return 1 ;;
+    esac
+    mv "$temporary" "$installed" || return 1
+  done <"$payload_manifest"
+
+  install_metadata "$payload_manifest" \
+    /usr/share/try-omarchy/update/payload.tsv 0644 || return 1
+  install_metadata "$payload_paths" \
+    /usr/share/try-omarchy/update/payload-paths.txt 0644 || return 1
+  install_metadata "$managed_roots" \
+    /usr/share/try-omarchy/update/managed-roots.txt 0644 || return 1
+  install_metadata "$update_mount/release.json" \
+    /usr/share/try-omarchy/update/release.json 0644 || return 1
+  install_metadata "$initramfs_root/release.env" \
+    /usr/share/try-omarchy/update/release.env 0644 || return 1
+  install_metadata \
+    "$candidate_root/usr/share/try-omarchy/repo/try-omarchy.db.tar.gz" \
+    /var/lib/pacman/sync/try-omarchy.db 0644 || return 1
+  sync
+}
+
+case "$mode" in
+  verify) verify_payload ;;
+  apply) apply_payload ;;
+  *) exit 64 ;;
+esac

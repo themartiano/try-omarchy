@@ -62,17 +62,33 @@ creates the account on first boot.
 - The pinned Omarchy runtime trees are copied from upstream. Guest overlays add
   the QEMU and ARM64 integration around them.
 
-Nothing is overwritten while the app runs. The app bundle and packaged factory
-disk remain unchanged. Normal user launches use one private writable disk under
-`~/Library/Application Support/Try Omarchy/VM/v1`. Its factory-image identity is immutable:
-the launcher never pairs a saved root filesystem with a different bundled kernel
-or initramfs. When a guest build changes, the start menu asks for an explicitly
-confirmed factory reset before creating the replacement disk. A compatible
-legacy identity-keyed disk can be migrated into the single workspace without
-discarding its contents. If several recognized legacy disks exist, normal launch
-stops at the start menu; confirmed reset safely removes them before publishing
-one fresh workspace. Unrecognized host files are always left untouched.
-Ephemeral mode uses a disposable disk.
+Nothing is overwritten in place. The app bundle and packaged factory disk remain
+unchanged, and normal launches use one private writable disk under
+`~/Library/Application Support/Try Omarchy/VM/v1`. Each saved generation is
+paired with its exact kernel/initramfs identity.
+
+When the bundled guest identity changes, the start menu offers a non-destructive
+update. The host APFS-clones the active disk (falling back to a full copy),
+attaches the signed update filesystem read-only as `/dev/vdb`, and boots the
+candidate headlessly with the target kernel and initramfs. The initramfs applies
+the pinned offline package transaction and the unique chain of guest migrations.
+A private virtio-serial channel must deliver both a nonce-bound update completion
+and a post-switch-root health report, and QEMU must then exit cleanly. Only after
+all three conditions does the journal atomically promote the candidate. A crash
+or failure before that point preserves the active disk; journal recovery makes
+prepare, commit, and rollback restartable.
+
+The predecessor remains as a rollback generation through the first normal
+launch. That graphical launch gets its own non-transactional health channel;
+the multi-user reporter waits for a per-boot marker from a UWSM user service
+that has verified both the Wayland socket and a successful Hyprland monitor
+query. The predecessor is removed only after this explicit graphical health
+report and a clean QEMU exit.
+A compatible legacy identity-keyed disk can first be relocated into the single
+workspace without discarding its contents. Ambiguous, malformed, oversized, or
+otherwise unsafe storage still requires the separately confirmed factory-reset
+path. Unrecognized host files are always left untouched. Ephemeral mode uses a
+disposable disk and never participates in persistent updates.
 
 ## Build layout
 
@@ -88,5 +104,9 @@ Ephemeral mode uses a disposable disk.
 The app validates the exact guest file set, JSON schemas, hashes, sizes, pinned
 upstream identity, runtime contract, kernel command line, architecture, and
 factory profile before QEMU starts. It also verifies the app signature and
-required QEMU features. Updates to a pinned dependency should update its digest,
-contract tests, notices, and review evidence together.
+required QEMU features. The update disk has its own signed raw/compressed digest
+contract; its internal manifest is also pinned into the signed initramfs. Guest
+status is treated only as a report from a user-controlled VM, while host paths,
+transaction identity, and activation remain host-controlled. Updates to a pinned
+dependency should update its digest, migration generation, contract tests,
+notices, and review evidence together.

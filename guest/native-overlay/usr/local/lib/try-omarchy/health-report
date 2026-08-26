@@ -1,0 +1,405 @@
+#!/usr/bin/env python3
+"""Validate the installed guest contract and report boot health to the host."""
+
+from __future__ import annotations
+
+import errno
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import time
+
+
+STATE_KEYS = {
+    "bootABI",
+    "guestStateSchema",
+    "kind",
+    "protocolVersion",
+    "releaseId",
+    "schemaVersion",
+}
+RELEASE_KEYS = STATE_KEYS | {"controlPort", "ownedPayloadSha256"}
+TRANSACTION_PATTERN = re.compile(r"[0-9a-f]{64}")
+BOOT_ID_PATTERN = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
+WAYLAND_DISPLAY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def load_object(path: Path, expected_keys: set[str], kind: str) -> dict[str, object]:
+    payload = path.read_bytes()
+    if len(payload) > 16_384:
+        raise ValueError(f"{path} is too large")
+    value = json.loads(payload)
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise ValueError(f"{path} has an unexpected schema")
+    if value.get("schemaVersion") != 1 or value.get("kind") != kind:
+        raise ValueError(f"{path} has an unsupported identity")
+    if not isinstance(value.get("guestStateSchema"), int) or value["guestStateSchema"] < 1:
+        raise ValueError(f"{path} has an invalid guest state schema")
+    if not isinstance(value.get("protocolVersion"), int) or value["protocolVersion"] < 1:
+        raise ValueError(f"{path} has an invalid protocol version")
+    if not isinstance(value.get("bootABI"), str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value["bootABI"]
+    ):
+        raise ValueError(f"{path} has an invalid boot ABI")
+    if not isinstance(value.get("releaseId"), str) or not re.fullmatch(
+        r"[0-9a-f]{64}", value["releaseId"]
+    ):
+        raise ValueError(f"{path} has an invalid release identity")
+    return value
+
+
+def transaction_from_cmdline(path: Path) -> str | None:
+    transactions = [
+        argument.partition("=")[2]
+        for argument in path.read_text(encoding="utf-8").split()
+        if argument.startswith("tryomarchy.transaction=")
+    ]
+    if not transactions:
+        return None
+    if len(transactions) != 1 or TRANSACTION_PATTERN.fullmatch(transactions[0]) is None:
+        raise ValueError("kernel command line has an invalid update transaction")
+    return transactions[0]
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_owned_payload(guest_root: Path, release: dict[str, object]) -> None:
+    expected_manifest = release.get("ownedPayloadSha256")
+    if not isinstance(expected_manifest, str) or re.fullmatch(
+        r"[0-9a-f]{64}", expected_manifest
+    ) is None:
+        raise ValueError("release has an invalid owned payload identity")
+    manifest = guest_root / "usr/share/try-omarchy/update/payload.tsv"
+    if not manifest.is_file() or manifest.is_symlink() or manifest.stat().st_size > 4_194_304:
+        raise ValueError("installed owned payload manifest is missing or unsafe")
+    if file_sha256(manifest) != expected_manifest:
+        raise ValueError("installed owned payload manifest has the wrong identity")
+
+    destinations: set[str] = set()
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        fields = line.split("\t")
+        if len(fields) != 4:
+            raise ValueError("installed owned payload manifest is malformed")
+        kind, identity, raw_mode, destination = fields
+        if (
+            not destination.startswith(("/etc/", "/usr/"))
+            or "//" in destination
+            or "/../" in destination + "/"
+            or "/./" in destination + "/"
+            or destination in destinations
+        ):
+            raise ValueError("installed owned payload path is unsafe or duplicated")
+        destinations.add(destination)
+        installed = guest_root / destination.removeprefix("/")
+        if kind == "f":
+            if (
+                re.fullmatch(r"[0-9a-f]{64}", identity) is None
+                or re.fullmatch(r"0[0-7]{3}", raw_mode) is None
+                or not installed.is_file()
+                or installed.is_symlink()
+                or stat.S_IMODE(installed.stat().st_mode) != int(raw_mode, 8)
+                or file_sha256(installed) != identity
+            ):
+                raise ValueError(f"release-owned file failed verification: {destination}")
+        elif kind == "l":
+            if raw_mode != "-" or not identity or not installed.is_symlink():
+                raise ValueError(f"release-owned symlink failed verification: {destination}")
+            if os.readlink(installed) != identity:
+                raise ValueError(f"release-owned symlink target is wrong: {destination}")
+        else:
+            raise ValueError("installed owned payload has an unknown record kind")
+
+
+def encode_health(release: dict[str, object], transaction: str | None) -> bytes:
+    message: dict[str, object] = {
+        "bootABI": release["bootABI"],
+        "guestStateSchema": release["guestStateSchema"],
+        "protocolVersion": release["protocolVersion"],
+        "readiness": "system" if transaction is not None else "graphical",
+        "status": "ready",
+        "type": "health",
+    }
+    if transaction is not None:
+        message["transaction"] = transaction
+    return (json.dumps(message, separators=(",", ":"), sort_keys=True) + "\n").encode()
+
+
+def write_message(path: Path, payload: bytes) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        offset = 0
+        while offset < len(payload):
+            try:
+                written = os.write(descriptor, payload[offset:])
+            except BlockingIOError as error:
+                raise OSError(errno.EAGAIN, "host control channel is not accepting health") from error
+            if written <= 0:
+                raise OSError(errno.EIO, "host control channel closed during health report")
+            offset += written
+    finally:
+        os.close(descriptor)
+
+
+def request_trial_poweroff() -> None:
+    if os.environ.get("TRY_OMARCHY_SKIP_POWEROFF") == "1":
+        return
+    subprocess.run(
+        ["/usr/bin/systemctl", "--no-block", "poweroff"],
+        check=True,
+        stdin=subprocess.DEVNULL,
+    )
+
+
+def boot_identity() -> str:
+    path = Path(
+        os.environ.get(
+            "TRY_OMARCHY_BOOT_ID_PATH", "/proc/sys/kernel/random/boot_id"
+        )
+    )
+    identity = path.read_text(encoding="ascii").strip()
+    if BOOT_ID_PATTERN.fullmatch(identity) is None:
+        raise ValueError("kernel boot identity is invalid")
+    return identity
+
+
+def direct_owned_directory(path: Path, owner: int) -> None:
+    information = path.lstat()
+    if (
+        not stat.S_ISDIR(information.st_mode)
+        or information.st_uid != owner
+        or stat.S_IMODE(information.st_mode) & 0o022
+    ):
+        raise ValueError(f"graphical readiness directory is unsafe: {path}")
+
+
+def publish_graphical_readiness() -> None:
+    """Run inside the UWSM user session after its compositor is available."""
+
+    cmdline = Path(os.environ.get("TRY_OMARCHY_CMDLINE_PATH", "/proc/cmdline"))
+    if transaction_from_cmdline(cmdline) is not None:
+        raise ValueError("headless update trials cannot publish graphical readiness")
+
+    owner = os.getuid()
+    runtime_value = os.environ.get("XDG_RUNTIME_DIR", "")
+    if not runtime_value or not runtime_value.startswith("/"):
+        raise ValueError("graphical session has no absolute XDG runtime directory")
+    runtime = Path(runtime_value)
+    direct_owned_directory(runtime, owner)
+
+    display = os.environ.get("WAYLAND_DISPLAY", "")
+    if WAYLAND_DISPLAY_PATTERN.fullmatch(display) is None:
+        raise ValueError("graphical session has no safe Wayland display")
+    wayland_socket = runtime / display
+    socket_information = wayland_socket.lstat()
+    if (
+        not stat.S_ISSOCK(socket_information.st_mode)
+        or socket_information.st_uid != owner
+    ):
+        raise ValueError("graphical session Wayland socket is not ready")
+
+    hyprctl = Path(os.environ.get("TRY_OMARCHY_HYPRCTL", "/usr/bin/hyprctl"))
+    if (
+        not hyprctl.is_absolute()
+        or not hyprctl.is_file()
+        or hyprctl.is_symlink()
+        or not os.access(hyprctl, os.X_OK)
+    ):
+        raise ValueError("Hyprland control client is missing or unsafe")
+    result = subprocess.run(
+        [str(hyprctl), "-j", "monitors"],
+        check=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+    )
+    if len(result.stdout) > 1_048_576:
+        raise ValueError("Hyprland monitor response is too large")
+    monitors = json.loads(result.stdout)
+    if (
+        not isinstance(monitors, list)
+        or not monitors
+        or not all(
+            isinstance(monitor, dict)
+            and isinstance(monitor.get("name"), str)
+            and bool(monitor["name"])
+            for monitor in monitors
+        )
+    ):
+        raise ValueError("Hyprland has no ready graphical monitor")
+
+    marker_directory = runtime / "try-omarchy"
+    marker_directory.mkdir(mode=0o700, exist_ok=True)
+    direct_owned_directory(marker_directory, owner)
+    marker = marker_directory / "graphical-ready-v1"
+    temporary = marker_directory / f".graphical-ready-v1.{os.getpid()}"
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+    )
+    try:
+        payload = (boot_identity() + "\n").encode("ascii")
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError(errno.EIO, "cannot publish graphical readiness")
+            offset += written
+        os.fsync(descriptor)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    finally:
+        os.close(descriptor)
+    os.replace(temporary, marker)
+
+
+def marker_proves_graphical_readiness(marker: Path, identity: str) -> bool:
+    try:
+        runtime = marker.parents[1]
+        if not runtime.name.isascii() or not runtime.name.isdecimal():
+            return False
+        owner = int(runtime.name)
+        direct_owned_directory(runtime, owner)
+        direct_owned_directory(marker.parent, owner)
+        information = marker.lstat()
+        if (
+            not stat.S_ISREG(information.st_mode)
+            or information.st_uid != owner
+            or stat.S_IMODE(information.st_mode) != 0o600
+            or information.st_size > 128
+        ):
+            return False
+        return marker.read_text(encoding="ascii") == identity + "\n"
+    except (OSError, UnicodeError, ValueError):
+        return False
+
+
+def wait_for_graphical_readiness() -> None:
+    run_user_root = Path(
+        os.environ.get("TRY_OMARCHY_RUN_USER_ROOT", "/run/user")
+    )
+    raw_timeout = os.environ.get("TRY_OMARCHY_GRAPHICAL_WAIT_SECONDS", "240")
+    try:
+        timeout = float(raw_timeout)
+    except ValueError as error:
+        raise ValueError("graphical readiness timeout is invalid") from error
+    if not 0 <= timeout <= 600:
+        raise ValueError("graphical readiness timeout is outside the safe range")
+
+    identity = boot_identity()
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            markers = sorted(
+                run_user_root.glob("[0-9]*/try-omarchy/graphical-ready-v1")
+            )
+        except OSError:
+            markers = []
+        if any(marker_proves_graphical_readiness(marker, identity) for marker in markers):
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("graphical desktop did not become ready")
+        time.sleep(min(0.25, remaining))
+
+
+def main() -> None:
+    if sys.argv[1:] == ["--mark-graphical-ready"]:
+        publish_graphical_readiness()
+        return
+    if sys.argv[1:] not in ([], ["--report"]):
+        raise ValueError("unsupported health-report mode")
+
+    state_path = Path(
+        os.environ.get("TRY_OMARCHY_STATE_PATH", "/var/lib/try-omarchy/state.json")
+    )
+    release_path = Path(
+        os.environ.get(
+            "TRY_OMARCHY_RELEASE_PATH", "/usr/share/try-omarchy/update/release.json"
+        )
+    )
+    cmdline_path = Path(os.environ.get("TRY_OMARCHY_CMDLINE_PATH", "/proc/cmdline"))
+
+    state = load_object(state_path, STATE_KEYS, "try-omarchy-guest-state")
+    release = load_object(
+        release_path, RELEASE_KEYS, "try-omarchy-release-contract"
+    )
+    for key in ("bootABI", "guestStateSchema", "protocolVersion", "releaseId"):
+        if state[key] != release[key]:
+            raise ValueError(f"installed state does not match release field {key}")
+
+    control_port = release.get("controlPort")
+    if not isinstance(control_port, str) or not re.fullmatch(
+        r"dev\.tryomarchy\.[a-z0-9-]+", control_port
+    ):
+        raise ValueError("release has an invalid control port")
+    control_path = Path(
+        os.environ.get(
+            "TRY_OMARCHY_CONTROL_PATH", f"/dev/virtio-ports/{control_port}"
+        )
+    )
+    transaction = transaction_from_cmdline(cmdline_path)
+    required_paths = [
+        "/usr/local/bin/omarchy-native-audio-bridge",
+        "/usr/local/bin/omarchy-native-clipboard-bridge",
+        "/usr/local/bin/omarchy-native-display-sync",
+        "/usr/local/lib/try-omarchy/owned-payload",
+        "/usr/lib/systemd/system/try-omarchy-health.service",
+        "/usr/lib/systemd/user/omarchy-native-audio-bridge.service",
+        "/usr/lib/systemd/user/omarchy-native-clipboard-bridge.service",
+        "/usr/lib/systemd/user/try-omarchy-graphical-health.service",
+    ]
+    guest_root = Path(os.environ.get("TRY_OMARCHY_HEALTH_ROOT", "/"))
+    verify_owned_payload(guest_root, release)
+    for required in required_paths:
+        path = guest_root / required.removeprefix("/")
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"required guest integration is missing: {required}")
+    kernel_release = os.environ.get("TRY_OMARCHY_KERNEL_RELEASE") or os.uname().release
+    modules = guest_root / "usr/lib/modules" / kernel_release
+    if not modules.is_dir() or modules.is_symlink():
+        raise ValueError("running kernel has no matching guest module tree")
+
+    # Update trials intentionally boot only to multi-user.target. Their
+    # transaction-bound health proves the migrated system contract without
+    # requiring a desktop. A normal first boot must additionally receive the
+    # per-boot marker emitted only after UWSM has a live Wayland compositor.
+    if transaction is None:
+        wait_for_graphical_readiness()
+
+    write_message(
+        control_path,
+        encode_health(release, transaction),
+    )
+    if transaction is not None:
+        request_trial_poweroff()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        # A failed headless trial must end promptly so the host can roll back;
+        # otherwise a broken integration would wait for the full host timeout.
+        cmdline = Path(os.environ.get("TRY_OMARCHY_CMDLINE_PATH", "/proc/cmdline"))
+        try:
+            if transaction_from_cmdline(cmdline) is not None:
+                request_trial_poweroff()
+        except Exception:
+            pass
+        raise

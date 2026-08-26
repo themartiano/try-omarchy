@@ -72,7 +72,12 @@ chmod 0755 \
   "$root/usr/bin/omarchy-audio-input-set-default" \
   "$root/usr/local/bin/omarchy-native-audio-bridge" \
   "$root/usr/local/bin/omarchy-native-clipboard-bridge" \
-  "$root/usr/local/bin/omarchy-native-display-sync"
+  "$root/usr/local/bin/omarchy-native-display-sync" \
+  "$root/usr/local/lib/try-omarchy/health-report" \
+  "$root/usr/local/lib/try-omarchy/owned-payload" \
+  "$root/usr/local/lib/try-omarchy/update-runner" \
+  "$root/usr/lib/initcpio/hooks/try-omarchy-update" \
+  "$root/usr/lib/initcpio/install/try-omarchy-update"
 audio_helper_source_digest=$(sha256sum \
   "$guest_dir/native-overlay/usr/bin/omarchy-audio-input-set-default")
 audio_helper_source_digest=${audio_helper_source_digest%% *}
@@ -89,6 +94,14 @@ ln -sfn /usr/lib/systemd/user/omarchy-native-audio-bridge.service \
 # graphical session rather than the plain user manager.
 ln -sfn /usr/lib/systemd/user/omarchy-native-clipboard-bridge.service \
   "$root/etc/systemd/user/graphical-session.target.wants/omarchy-native-clipboard-bridge.service"
+# This probe runs in the UWSM environment, proves that Hyprland and its
+# Wayland socket are responsive, then gives the root health reporter a
+# per-boot readiness marker. Headless update trials do not start this target.
+ln -sfn /usr/lib/systemd/user/try-omarchy-graphical-health.service \
+  "$root/etc/systemd/user/graphical-session.target.wants/try-omarchy-graphical-health.service"
+mkdir -p "$root/etc/systemd/system/multi-user.target.wants"
+ln -sfn /usr/lib/systemd/system/try-omarchy-health.service \
+  "$root/etc/systemd/system/multi-user.target.wants/try-omarchy-health.service"
 cat "$guest_dir/fragments/hypr-monitors-arm-qemu.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
 
 hostname=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["guest"]["hostname"])' "$spec")

@@ -1,0 +1,364 @@
+#!/bin/sh
+
+# Runs from the signed Try Omarchy initramfs against a cloned candidate disk.
+# The sole persistent state marker is published only after packages, migrations,
+# verification, and initramfs regeneration all succeed.
+
+set -eu
+
+usage() {
+  echo "Usage: update-runner ROOT UPDATE_MOUNT TRANSACTION CONTROL_DEVICE" >&2
+  exit 64
+}
+
+[ "$#" -eq 4 ] || usage
+candidate_root=$1
+update_mount=$2
+transaction=$3
+control_device=$4
+release_environment=${TRY_OMARCHY_RELEASE_ENV:-/try-omarchy-update/release.env}
+
+case "$candidate_root" in
+  /*) ;;
+  *) usage ;;
+esac
+case "$update_mount" in
+  "$candidate_root"/*) ;;
+  *) usage ;;
+esac
+case "$transaction" in
+  *[!0-9a-f]*|'') usage ;;
+esac
+[ "${#transaction}" -eq 64 ] || usage
+[ -d "$candidate_root" ] && [ ! -L "$candidate_root" ] || usage
+[ -d "$update_mount" ] && [ ! -L "$update_mount" ] || usage
+[ -e "$control_device" ] && [ ! -L "$control_device" ] || usage
+[ -f "$release_environment" ] && [ ! -L "$release_environment" ] || usage
+for top_level in etc home root usr var; do
+  [ -d "$candidate_root/$top_level" ] \
+    && [ ! -L "$candidate_root/$top_level" ] || exit 65
+done
+
+# This file is generated from the signed build spec and embedded in the
+# initramfs. Every value is validated again before it enters a path or JSON.
+# shellcheck disable=SC1090
+. "$release_environment"
+case "${TRY_OMARCHY_BOOT_ABI:-}" in
+  *[!A-Za-z0-9._-]*|'') exit 65 ;;
+esac
+case "${TRY_OMARCHY_CONTROL_PORT:-}" in
+  dev.tryomarchy.*) ;;
+  *) exit 65 ;;
+esac
+case "${TRY_OMARCHY_RELEASE_ID:-}" in
+  *[!0-9a-f]*|'') exit 65 ;;
+esac
+[ "${#TRY_OMARCHY_RELEASE_ID}" -eq 64 ] || exit 65
+case "${TRY_OMARCHY_OWNED_PAYLOAD_SHA256:-}" in
+  *[!0-9a-f]*|'') exit 65 ;;
+esac
+[ "${#TRY_OMARCHY_OWNED_PAYLOAD_SHA256}" -eq 64 ] || exit 65
+case "${TRY_OMARCHY_UPDATE_SHA256SUMS:-}" in
+  *[!0-9a-f]*|'') exit 65 ;;
+esac
+[ "${#TRY_OMARCHY_UPDATE_SHA256SUMS}" -eq 64 ] || exit 65
+case "${TRY_OMARCHY_GUEST_STATE_SCHEMA:-}" in
+  ''|*[!0-9]*) exit 65 ;;
+esac
+case "${TRY_OMARCHY_PROTOCOL_VERSION:-}" in
+  ''|*[!0-9]*) exit 65 ;;
+esac
+[ "$TRY_OMARCHY_GUEST_STATE_SCHEMA" -gt 0 ] || exit 65
+[ "$TRY_OMARCHY_PROTOCOL_VERSION" -gt 0 ] || exit 65
+
+from_schema=0
+current_schema=0
+result_sent=0
+
+emit_result() {
+  result_status=$1
+  result_schema=$2
+  result_error=${3:-}
+  if [ -n "$result_error" ]; then
+    printf '{"bootABI":"%s","errorCode":"%s","fromGuestStateSchema":%s,"guestStateSchema":%s,"protocolVersion":%s,"status":"failed","transaction":"%s","type":"update"}\n' \
+      "$TRY_OMARCHY_BOOT_ABI" "$result_error" "$from_schema" "$result_schema" \
+      "$TRY_OMARCHY_PROTOCOL_VERSION" "$transaction" >"$control_device" || true
+  else
+    printf '{"bootABI":"%s","fromGuestStateSchema":%s,"guestStateSchema":%s,"protocolVersion":%s,"status":"%s","transaction":"%s","type":"update"}\n' \
+      "$TRY_OMARCHY_BOOT_ABI" "$from_schema" "$result_schema" \
+      "$TRY_OMARCHY_PROTOCOL_VERSION" "$result_status" "$transaction" >"$control_device" || true
+  fi
+  result_sent=1
+}
+
+fail_update() {
+  failure_code=$1
+  echo "try-omarchy-update: $failure_code" >&2
+  [ "$result_sent" -eq 1 ] || emit_result failed "$current_schema" "$failure_code"
+  exit 1
+}
+
+state_path="$candidate_root/var/lib/try-omarchy/state.json"
+if [ -e "$state_path" ] || [ -L "$state_path" ]; then
+  [ -f "$state_path" ] && [ ! -L "$state_path" ] || fail_update invalid-state-marker
+  [ "$(wc -c <"$state_path")" -le 16384 ] || fail_update invalid-state-marker
+  state_content=$(cat "$state_path")
+  parsed_state=$(printf '%s' "$state_content" | sed -n \
+    's/^{"bootABI":"\([A-Za-z0-9._-][A-Za-z0-9._-]*\)","guestStateSchema":\([0-9][0-9]*\),"kind":"try-omarchy-guest-state","protocolVersion":\([0-9][0-9]*\),"releaseId":"\([0-9a-f][0-9a-f]*\)","schemaVersion":1}$/\1 \2 \3 \4/p')
+  # The canonical marker fields cannot contain spaces, so positional parsing
+  # also proves that no extra JSON or duplicate field was accepted.
+  set -- $parsed_state
+  [ "$#" -eq 4 ] || fail_update invalid-state-marker
+  current_boot_abi=$1
+  current_schema=$2
+  current_protocol=$3
+  current_release_id=$4
+  [ "${#current_release_id}" -eq 64 ] || fail_update invalid-state-marker
+else
+  [ -f "$candidate_root/usr/share/try-omarchy/build-spec.json" ] \
+    && [ -f "$candidate_root/usr/share/omarchy/version" ] \
+    || fail_update unrecognized-legacy-state
+  current_schema=0
+fi
+from_schema=$current_schema
+[ "$current_schema" -le "$TRY_OMARCHY_GUEST_STATE_SCHEMA" ] \
+  || fail_update downgrade-not-supported
+if [ "$current_schema" -eq "$TRY_OMARCHY_GUEST_STATE_SCHEMA" ]; then
+  [ "$current_boot_abi" = "$TRY_OMARCHY_BOOT_ABI" ] \
+    && [ "$current_protocol" = "$TRY_OMARCHY_PROTOCOL_VERSION" ] \
+    && [ "$current_release_id" = "$TRY_OMARCHY_RELEASE_ID" ] \
+    || fail_update release-schema-not-advanced
+fi
+
+sums_path="$update_mount/SHA256SUMS"
+[ -f "$sums_path" ] && [ ! -L "$sums_path" ] || fail_update update-manifest-missing
+actual_sums_sha=$(sha256sum "$sums_path") || fail_update update-manifest-unreadable
+actual_sums_sha=${actual_sums_sha%% *}
+[ "$actual_sums_sha" = "$TRY_OMARCHY_UPDATE_SHA256SUMS" ] \
+  || fail_update update-manifest-mismatch
+(cd "$update_mount" && sha256sum -c SHA256SUMS >&2) \
+  || fail_update update-payload-mismatch
+owned_payload="$update_mount/payload.tsv"
+[ -f "$owned_payload" ] && [ ! -L "$owned_payload" ] \
+  || fail_update owned-payload-missing
+actual_owned_sha=$(sha256sum "$owned_payload") \
+  || fail_update owned-payload-unreadable
+actual_owned_sha=${actual_owned_sha%% *}
+[ "$actual_owned_sha" = "$TRY_OMARCHY_OWNED_PAYLOAD_SHA256" ] \
+  || fail_update owned-payload-mismatch
+
+target_state="$update_mount/target-state.json"
+[ -f "$target_state" ] && [ ! -L "$target_state" ] || fail_update target-state-missing
+target_content=$(cat "$target_state")
+expected_target=$(printf \
+  '{"bootABI":"%s","guestStateSchema":%s,"kind":"try-omarchy-guest-state","protocolVersion":%s,"releaseId":"%s","schemaVersion":1}' \
+  "$TRY_OMARCHY_BOOT_ABI" "$TRY_OMARCHY_GUEST_STATE_SCHEMA" \
+  "$TRY_OMARCHY_PROTOCOL_VERSION" "$TRY_OMARCHY_RELEASE_ID")
+[ "$target_content" = "$expected_target" ] || fail_update target-state-mismatch
+if [ "$current_schema" -eq "$TRY_OMARCHY_GUEST_STATE_SCHEMA" ]; then
+  cmp -s "$state_path" "$target_state" || fail_update release-schema-not-advanced
+fi
+
+if [ "$current_schema" -lt "$TRY_OMARCHY_GUEST_STATE_SCHEMA" ]; then
+  # Pacman owns some /etc paths outside Try Omarchy's explicit manifest. Keep
+  # one complete pre-transaction copy so even an unusual package scriptlet or
+  # non-backup config replacement cannot make a local edit unrecoverable.
+  [ -d "$candidate_root/var/lib" ] && [ ! -L "$candidate_root/var/lib" ] \
+    || fail_update unsafe-state-directory
+  for preserved_directory in \
+    "$candidate_root/var/lib/try-omarchy" \
+    "$candidate_root/var/lib/try-omarchy/preserved" \
+    "$candidate_root/var/lib/try-omarchy/preserved/$TRY_OMARCHY_RELEASE_ID"; do
+    if [ -e "$preserved_directory" ] || [ -L "$preserved_directory" ]; then
+      [ -d "$preserved_directory" ] && [ ! -L "$preserved_directory" ] \
+        || fail_update unsafe-state-directory
+    else
+      mkdir "$preserved_directory" || fail_update state-backup-failed
+    fi
+  done
+  etc_backup="$candidate_root/var/lib/try-omarchy/preserved/$TRY_OMARCHY_RELEASE_ID/original-etc"
+  if [ ! -e "$etc_backup" ] && [ ! -L "$etc_backup" ]; then
+    etc_backup_temporary="$etc_backup.$transaction"
+    [ ! -e "$etc_backup_temporary" ] && [ ! -L "$etc_backup_temporary" ] \
+      || fail_update state-backup-failed
+    cp -a "$candidate_root/etc" "$etc_backup_temporary" \
+      || fail_update state-backup-failed
+    mv "$etc_backup_temporary" "$etc_backup" \
+      || fail_update state-backup-failed
+    sync
+  else
+    [ -d "$etc_backup" ] && [ ! -L "$etc_backup" ] \
+      || fail_update state-backup-failed
+  fi
+
+  targets="$update_mount/targets.txt"
+  [ -s "$targets" ] && [ ! -L "$targets" ] || fail_update package-targets-missing
+  explicit_targets="$update_mount/explicit-targets.txt"
+  [ -s "$explicit_targets" ] && [ ! -L "$explicit_targets" ] \
+    || fail_update explicit-targets-missing
+  obsolete_targets="/tmp/try-omarchy-obsolete.$transaction"
+  rm -f "$obsolete_targets"
+  : >"$obsolete_targets" || fail_update package-inventory-failed
+  old_managed_inventory="$candidate_root/usr/share/try-omarchy/packages.lock.txt"
+  if [ -f "$old_managed_inventory" ] && [ ! -L "$old_managed_inventory" ]; then
+    while IFS=' ' read -r old_name old_version old_extra \
+      || [ -n "${old_name:-}" ]; do
+      case "$old_name" in ''|*[!a-z0-9@._+-]*) fail_update invalid-package-inventory ;; esac
+      [ -n "$old_version" ] && [ -z "${old_extra:-}" ] \
+        || fail_update invalid-package-inventory
+      target_found=0
+      while IFS= read -r target || [ -n "$target" ]; do
+        [ "${target%%=*}" = "$old_name" ] || continue
+        target_found=1
+        break
+      done <"$targets"
+      [ "$target_found" -eq 1 ] || printf '%s\n' "$old_name" >>"$obsolete_targets"
+    done <"$old_managed_inventory"
+  fi
+  set --
+  while IFS= read -r target || [ -n "$target" ]; do
+    target_name=${target%%=*}
+    target_version=${target#*=}
+    case "$target_name" in ''|*[!a-z0-9@._+-]*) fail_update invalid-package-target ;; esac
+    case "$target_version" in ''|*[!A-Za-z0-9@._+:~-]*) fail_update invalid-package-target ;; esac
+    [ "$target" != "$target_name" ] || fail_update invalid-package-target
+    set -- "$@" "$target"
+  done <"$targets"
+  [ "$#" -gt 0 ] || fail_update package-targets-missing
+  rm -f "$candidate_root/var/lib/pacman/db.lck"
+  if ! chroot "$candidate_root" /usr/bin/env SYSTEMD_OFFLINE=1 \
+    /usr/bin/pacman --config /run/try-omarchy-update/pacman.conf \
+    --noconfirm -Syyuu "$@"; then
+    fail_update package-transaction-failed
+  fi
+
+  # Remove only packages recorded as factory-managed by the previous release
+  # and absent from the target closure. A normal dependency check protects any
+  # user-installed package that still needs one; such a conflict rolls back.
+  set --
+  while IFS= read -r obsolete || [ -n "$obsolete" ]; do
+    if chroot "$candidate_root" /usr/bin/pacman -Q "$obsolete" >/dev/null 2>&1; then
+      set -- "$@" "$obsolete"
+    fi
+  done <"$obsolete_targets"
+  if [ "$#" -gt 0 ]; then
+    chroot "$candidate_root" /usr/bin/env SYSTEMD_OFFLINE=1 \
+      /usr/bin/pacman --noconfirm -R "$@" \
+      || fail_update obsolete-package-removal-failed
+  fi
+  rm -f "$obsolete_targets"
+
+  installed_inventory="/tmp/try-omarchy-installed.$transaction"
+  rm -f "$installed_inventory"
+  chroot "$candidate_root" /usr/bin/pacman -Q >"$installed_inventory" \
+    || fail_update package-inventory-failed
+  while IFS= read -r target || [ -n "$target" ]; do
+    target_name=${target%%=*}
+    target_version=${target#*=}
+    grep -F -x "$target_name $target_version" "$installed_inventory" >/dev/null \
+      || fail_update package-target-mismatch
+  done <"$targets"
+  rm -f "$installed_inventory"
+
+  # Passing the complete closure guarantees exact bytes but would otherwise
+  # mark every dependency explicit. Restore the target factory's reviewed
+  # install-reason inventory without touching foreign/user package reasons.
+  set --
+  while IFS= read -r target || [ -n "$target" ]; do
+    set -- "$@" "${target%%=*}"
+  done <"$targets"
+  chroot "$candidate_root" /usr/bin/pacman -D --asdeps "$@" \
+    || fail_update package-reason-update-failed
+  set --
+  while IFS= read -r explicit || [ -n "$explicit" ]; do
+    case "$explicit" in ''|*[!a-z0-9@._+-]*) fail_update invalid-explicit-target ;; esac
+    explicit_found=0
+    while IFS= read -r target || [ -n "$target" ]; do
+      [ "${target%%=*}" = "$explicit" ] || continue
+      explicit_found=1
+      break
+    done <"$targets"
+    [ "$explicit_found" -eq 1 ] || fail_update invalid-explicit-target
+    set -- "$@" "$explicit"
+  done <"$explicit_targets"
+  [ "$#" -gt 0 ] || fail_update explicit-targets-missing
+  chroot "$candidate_root" /usr/bin/pacman -D --asexplicit "$@" \
+    || fail_update package-reason-update-failed
+
+  catalog="$update_mount/migrations/catalog.tsv"
+  [ -s "$catalog" ] && [ ! -L "$catalog" ] || fail_update migration-catalog-missing
+  while [ "$current_schema" -lt "$TRY_OMARCHY_GUEST_STATE_SCHEMA" ]; do
+    selected=''
+    matches=0
+    while IFS="$(printf '\t')" read -r migration_from migration_to migration_id migration_sha \
+      || [ -n "${migration_from:-}" ]; do
+      [ "$migration_from" = "$current_schema" ] || continue
+      selected=$(printf '%s\t%s\t%s\t%s' \
+        "$migration_from" "$migration_to" "$migration_id" "$migration_sha")
+      matches=$((matches + 1))
+    done <"$catalog"
+    [ "$matches" -eq 1 ] || fail_update migration-path-not-unique
+    IFS="$(printf '\t')" read -r migration_from migration_to migration_id migration_sha <<EOF
+$selected
+EOF
+    case "$migration_to" in
+      ''|*[!0-9]*) fail_update invalid-migration-catalog ;;
+    esac
+    [ "$migration_to" -gt "$current_schema" ] \
+      && [ "$migration_to" -le "$TRY_OMARCHY_GUEST_STATE_SCHEMA" ] \
+      || fail_update invalid-migration-catalog
+    case "$migration_id" in
+      *[!a-z0-9-]*|'') fail_update invalid-migration-catalog ;;
+    esac
+    case "$migration_sha" in
+      *[!0-9a-f]*|'') fail_update invalid-migration-catalog ;;
+    esac
+    [ "${#migration_sha}" -eq 64 ] || fail_update invalid-migration-catalog
+    migration="$update_mount/migrations/$migration_id.sh"
+    [ -f "$migration" ] && [ ! -L "$migration" ] || fail_update migration-missing
+    actual_migration_sha=$(sha256sum "$migration") || fail_update migration-unreadable
+    actual_migration_sha=${actual_migration_sha%% *}
+    [ "$actual_migration_sha" = "$migration_sha" ] || fail_update migration-digest-mismatch
+    if ! /bin/sh "$migration" verify "$candidate_root" "$update_mount"; then
+      /bin/sh "$migration" apply "$candidate_root" "$update_mount" \
+        || fail_update migration-apply-failed
+      /bin/sh "$migration" verify "$candidate_root" "$update_mount" \
+        || fail_update migration-verification-failed
+    fi
+    current_schema=$migration_to
+  done
+fi
+
+# Release-owned filesystem convergence is a protocol invariant, not a one-off
+# schema migration. Running the target copy from the signed initramfs makes it
+# apply on every future release and on crash-resume paths as well.
+owned_payload_runner=${TRY_OMARCHY_OWNED_PAYLOAD_RUNNER:-/try-omarchy-update/owned-payload}
+[ -f "$owned_payload_runner" ] && [ ! -L "$owned_payload_runner" ] \
+  && [ -x "$owned_payload_runner" ] || fail_update owned-payload-runner-missing
+if ! "$owned_payload_runner" verify "$candidate_root" "$update_mount"; then
+  "$owned_payload_runner" apply "$candidate_root" "$update_mount" \
+    || fail_update owned-payload-apply-failed
+  "$owned_payload_runner" verify "$candidate_root" "$update_mount" \
+    || fail_update owned-payload-verification-failed
+fi
+
+# The direct-boot app uses its signed external kernel and initramfs. Still
+# regenerate /boot so the candidate contains a matching recovery boot kit and
+# future package operations retain this update hook.
+chroot "$candidate_root" /usr/bin/mkinitcpio -P \
+  || fail_update initramfs-regeneration-failed
+kernel_release=$(uname -r)
+[ -d "$candidate_root/usr/lib/modules/$kernel_release" ] \
+  || fail_update kernel-modules-mismatch
+
+state_directory=${state_path%/*}
+mkdir -p "$state_directory" || fail_update state-publish-failed
+state_temporary="$state_directory/.state.json.$transaction"
+rm -f "$state_temporary"
+cp "$target_state" "$state_temporary" || fail_update state-publish-failed
+chmod 0644 "$state_temporary" || fail_update state-publish-failed
+sync
+mv -f "$state_temporary" "$state_path" || fail_update state-publish-failed
+sync
+current_schema=$TRY_OMARCHY_GUEST_STATE_SCHEMA
+emit_result complete "$current_schema"

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: macos/run-qemu-gpu.sh [--ephemeral | --reset-storage | --reset-storage-only] [GUEST_DIR]" >&2
+  echo "Usage: macos/run-qemu-gpu.sh [--ephemeral | --reset-storage | --reset-storage-only | --update-storage-only] [GUEST_DIR]" >&2
   exit 64
 }
 
@@ -14,6 +14,7 @@ fail() {
 
 storage_mode=persistent
 reset_only=0
+update_only=0
 case ${1:-} in
   --ephemeral)
     storage_mode=ephemeral
@@ -26,6 +27,10 @@ case ${1:-} in
   --reset-storage-only)
     storage_mode=reset
     reset_only=1
+    shift
+    ;;
+  --update-storage-only)
+    update_only=1
     shift
     ;;
   --*) usage ;;
@@ -158,13 +163,20 @@ if [[ -f $launch_configuration && ! -L $launch_configuration ]]; then
   plist_read() {
     /usr/libexec/PlistBuddy -c "Print :$1" "$launch_configuration" 2>/dev/null
   }
-  bundle_validation=$(printf '%s\t%s\t%s\t%s\t%s\t%s' \
+  bundle_validation=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
     "$(plist_read bundleIdentity)" \
     "$(plist_read sourceDiskSHA256)" \
     "$(plist_read sourceDiskBytes)" \
     "$(plist_read compressedDiskBytes)" \
     "$(plist_read workingDiskBytes)" \
-    "$(plist_read kernelCommandLine)")
+    "$(plist_read kernelCommandLine)" \
+    "$(plist_read updateDiskSHA256)" \
+    "$(plist_read updateDiskBytes)" \
+    "$(plist_read compressedUpdateDiskBytes)" \
+    "$(plist_read guestStateSchema)" \
+    "$(plist_read bootABI)" \
+    "$(plist_read controlPort)" \
+    "$(plist_read protocolVersion)")
 else
   command -v python3 >/dev/null 2>&1 || {
     fail "bundled launch configuration is missing and Python is unavailable for development validation"
@@ -221,11 +233,14 @@ expected_artifacts = {
     "provenance.json": ("guest-metadata", "application/json"),
     "rootfs.ext4": ("guest-rootfs", "application/vnd.omarchy.ext4"),
     "rootfs.ext4.zst": ("guest-rootfs-compressed", "application/zstd"),
+    "update.ext4": ("guest-update-disk", "application/vnd.try-omarchy.update-ext4"),
+    "update.ext4.zst": ("guest-update-disk-compressed", "application/zstd"),
     "vmlinuz-linux": ("guest-kernel", "application/vnd.linux.kernel"),
 }
 packaged_artifacts = set(expected_artifacts)
-if not (guest / "rootfs.ext4").exists():
-    packaged_artifacts.remove("rootfs.ext4")
+for optional_raw_image in ("rootfs.ext4", "update.ext4"):
+    if not (guest / optional_raw_image).exists():
+        packaged_artifacts.remove(optional_raw_image)
 expected_files = packaged_artifacts | {"guest-manifest.json", "SHA256SUMS"}
 
 try:
@@ -352,6 +367,7 @@ runtime = exact_keys(
         "network",
         "recommendedMemoryMiB",
         "storage",
+        "update",
         "virtualMachineMonitor",
     },
     "build spec runtime",
@@ -400,6 +416,30 @@ storage = {
     "fallback": "full-copy",
     "expandedSizeMiB": 24576,
 }
+update = exact_keys(
+    runtime.get("update"),
+    {
+        "bootABI",
+        "compressedImage",
+        "controlPort",
+        "guestStateSchema",
+        "image",
+        "protocolVersion",
+    },
+    "build spec runtime update",
+)
+update_schema = update.get("guestStateSchema")
+if (
+    update.get("bootABI") != "arm64-qemu-direct-v1"
+    or update.get("compressedImage") != "update.ext4.zst"
+    or update.get("controlPort") != "dev.tryomarchy.control"
+    or not isinstance(update_schema, int)
+    or isinstance(update_schema, bool)
+    or update_schema < 1
+    or update.get("image") != "update.ext4"
+    or update.get("protocolVersion") != 1
+):
+    fail("native update contract is invalid")
 if (
     runtime.get("kernel") != "vmlinuz-linux"
     or runtime.get("kernelSource") != "/boot/Image"
@@ -476,8 +516,14 @@ arguments = command_line.split(" ")
 for required in ("root=/dev/vda", "rw", "rootwait", "console=tty0", "console=hvc0"):
     if arguments.count(required) != 1:
         fail(f"kernel command line must contain exactly one {required}")
-if any(argument.startswith("omarchy.qemu_virgl=") for argument in arguments):
-    fail("kernel command line already contains a QEMU VirGL role")
+launcher_owned_arguments = {
+    "omarchy.qemu_virgl",
+    "systemd.unit",
+    "tryomarchy.transaction",
+    "tryomarchy.update",
+}
+if any(argument.partition("=")[0] in launcher_owned_arguments for argument in arguments):
+    fail("kernel command line contains a launcher-owned argument")
 
 records = manifest.get("artifacts")
 if not isinstance(records, list) or len(records) != len(expected_artifacts):
@@ -550,6 +596,15 @@ if rootfs.exists():
 with (guest / "rootfs.ext4.zst").open("rb") as handle:
     if handle.read(4) != b"\x28\xb5\x2f\xfd":
         fail("rootfs.ext4.zst is not a Zstandard frame")
+update_image = guest / "update.ext4"
+if update_image.exists():
+    with update_image.open("rb") as handle:
+        handle.seek(1024 + 56)
+        if handle.read(2) != b"\x53\xef":
+            fail("update.ext4 does not have an ext4 superblock")
+with (guest / "update.ext4.zst").open("rb") as handle:
+    if handle.read(4) != b"\x28\xb5\x2f\xfd":
+        fail("update.ext4.zst is not a Zstandard frame")
 
 rootfs_record = records_by_path["rootfs.ext4"]
 expanded_size_mib = storage.get("expandedSizeMiB", image["sizeMiB"])
@@ -564,6 +619,13 @@ sys.stdout.write(
             str(records_by_path["rootfs.ext4.zst"]["bytes"]),
             str(expanded_size_mib * 1024 * 1024),
             command_line,
+            str(records_by_path["update.ext4"]["sha256"]),
+            str(records_by_path["update.ext4"]["bytes"]),
+            str(records_by_path["update.ext4.zst"]["bytes"]),
+            str(update["guestStateSchema"]),
+            str(update["bootABI"]),
+            str(update["controlPort"]),
+            str(update["protocolVersion"]),
         )
     )
 )
@@ -571,7 +633,8 @@ PY
   )
 fi
 IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes compressed_disk_bytes \
-  expanded_disk_bytes kernel_command_line \
+  expanded_disk_bytes kernel_command_line update_disk_sha update_disk_bytes \
+  compressed_update_disk_bytes guest_state_schema boot_abi control_port protocol_version \
   <<<"$bundle_validation"
 [[ $bundle_identity =~ ^[0-9a-f]{64}$ ]] || fail "validated bundle identity is invalid"
 [[ $source_disk_sha =~ ^[0-9a-f]{64}$ ]] || fail "validated rootfs digest is invalid"
@@ -580,6 +643,13 @@ IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes compressed_d
 [[ $expanded_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated working-disk size is invalid"
 (( expanded_disk_bytes >= source_disk_bytes )) || fail "working disk cannot be smaller than its source"
 [[ -n $kernel_command_line ]] || fail "validated kernel command line is empty"
+[[ $update_disk_sha =~ ^[0-9a-f]{64}$ ]] || fail "validated update-disk digest is invalid"
+[[ $update_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated update-disk size is invalid"
+[[ $compressed_update_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated compressed update-disk size is invalid"
+[[ $guest_state_schema =~ ^[1-9][0-9]*$ ]] || fail "validated guest-state schema is unsupported"
+[[ $boot_abi == arm64-qemu-direct-v1 ]] || fail "validated boot ABI is unsupported"
+[[ $control_port == dev.tryomarchy.control ]] || fail "validated update control port is unsupported"
+[[ $protocol_version == 1 ]] || fail "validated update protocol is unsupported"
 case ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} in
   1)
     printf '%s\n' "$bundle_validation"
@@ -609,6 +679,10 @@ owner_token=""
 qemu_pid=""
 audio_bridge_pid=""
 clipboard_bridge_pid=""
+control_bridge_pid=""
+control_bridge_status=""
+normal_health_required=0
+normal_health_valid=0
 
 terminate_child() {
   local pid=$1
@@ -641,6 +715,9 @@ cleanup() {
   fi
   if [[ $clipboard_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$clipboard_bridge_pid" 20
+  fi
+  if [[ $control_bridge_pid =~ ^[0-9]+$ ]]; then
+    terminate_child "$control_bridge_pid" 20
   fi
   qemu_persistent_storage_release_lock
   if [[ -n $work_dir && -n $owner_marker && -n $owner_token ]]; then
@@ -733,8 +810,199 @@ chmod 600 "$owner_marker"
 qmp_socket="/tmp/${work_dir##*/}/qmp.sock"
 audio_bridge_socket="/tmp/${work_dir##*/}/audio.sock"
 clipboard_bridge_socket="/tmp/${work_dir##*/}/clipboard.sock"
+control_bridge_socket="/tmp/${work_dir##*/}/control.sock"
+control_event="$work_dir/.control-event"
 audio_route_dir="/tmp/${work_dir##*/}/audio-routes"
 mkdir -m 700 "$work_dir/audio-routes"
+
+control_event_is_valid() {
+  [[ -f $control_event && ! -L $control_event ]] && \
+    [[ $(stat -f '%u' "$control_event" 2>/dev/null) == $(id -u) ]] && \
+    [[ $(stat -f '%Lp' "$control_event" 2>/dev/null) == 600 ]] && \
+    [[ $(<"$control_event") == validated ]]
+}
+
+if (( update_only )); then
+  qemu_persistent_storage_materialize_update_image \
+    "$bundle_identity" \
+    "$guest_dir/update.ext4.zst" \
+    "$compressed_update_disk_bytes" \
+    "$update_disk_sha" \
+    "$update_disk_bytes" \
+    "$resources_dir/runtime/bin/zstd" || fail "could not materialize the signed update disk"
+  update_image=$QEMU_PERSISTENT_STORAGE_UPDATE_IMAGE
+
+  if qemu_persistent_storage_prepare_update \
+    "$bundle_identity" \
+    "$source_disk_sha" \
+    "$source_disk_bytes" \
+    "$expanded_disk_bytes" \
+    "$guest_dir/vmlinuz-linux" \
+    "$guest_dir/initramfs-linux.img"; then
+    :
+  else
+    storage_status=$?
+    if (( storage_status == QEMU_PERSISTENT_STORAGE_INCOMPATIBLE_STATUS )); then
+      exit "$storage_status"
+    fi
+    fail "could not prepare a safe update candidate"
+  fi
+
+  case "$QEMU_PERSISTENT_STORAGE_UPDATE_STATE" in
+    none)
+      echo "[qemu-gpu] The saved VM already matches this release." >&2
+      exit 0
+      ;;
+    committed)
+      echo "[qemu-gpu] The healthy update is already committed; keeping its rollback until a normal launch exits cleanly." >&2
+      exit 0
+      ;;
+    candidate) ;;
+    *) fail "persistent storage returned an unknown update state" ;;
+  esac
+
+  working_disk=$QEMU_PERSISTENT_STORAGE_CANDIDATE_DISK
+  update_kernel=$QEMU_PERSISTENT_STORAGE_CANDIDATE_KERNEL
+  update_initramfs=$QEMU_PERSISTENT_STORAGE_CANDIDATE_INITRAMFS
+  update_transaction=$QEMU_PERSISTENT_STORAGE_UPDATE_HEALTH_TOKEN
+  [[ -f $working_disk && ! -L $working_disk ]] || fail "update candidate disk is missing or unsafe"
+  [[ -f $update_kernel && ! -L $update_kernel ]] || fail "update candidate kernel is missing or unsafe"
+  [[ -f $update_initramfs && ! -L $update_initramfs ]] || fail "update candidate initramfs is missing or unsafe"
+  [[ $update_transaction =~ ^[0-9a-f]{64}$ ]] || fail "update transaction token is invalid"
+
+  update_qemu_args=(
+    -name 'Try Omarchy Update'
+    -machine 'virt,accel=hvf,gic-version=2'
+    -cpu 'host,pmu=off'
+    -smp "$vcpu_count,sockets=1,cores=$vcpu_count,threads=1"
+    -m 4G
+    -nodefaults
+    -no-reboot
+    -display none
+    -serial none
+    -monitor none
+    -qmp "unix:$qmp_socket,server=on,wait=off"
+    -kernel "$update_kernel"
+    -initrd "$update_initramfs"
+    -append "$kernel_command_line tryomarchy.update=1 tryomarchy.transaction=$update_transaction systemd.unit=multi-user.target"
+    -drive "if=none,id=omarchy-root,file=$working_disk,format=raw,media=disk,cache=writeback"
+    -device 'virtio-blk-pci,drive=omarchy-root,serial=omarchy-root'
+    -drive "if=none,id=omarchy-update,file=$update_image,format=raw,media=disk,readonly=on,cache=none"
+    -device 'virtio-blk-pci,drive=omarchy-update,serial=omarchy-update'
+    -object 'rng-random,id=omarchy-rng,filename=/dev/urandom'
+    -device 'virtio-rng-pci,rng=omarchy-rng'
+    -device 'virtio-serial-pci,id=omarchy-serial'
+    -chardev "file,id=omarchy-update-console,path=$work_dir/update-console.log"
+    -device 'virtconsole,bus=omarchy-serial.0,nr=0,chardev=omarchy-update-console'
+    -chardev "socket,id=omarchy-control,path=$control_bridge_socket,server=on,wait=off"
+    -device "virtserialport,bus=omarchy-serial.0,nr=3,chardev=omarchy-control,name=$control_port"
+    -add-fd "$QEMU_PERSISTENT_STORAGE_QEMU_ADD_FD"
+  )
+
+  case ${OMARCHY_QEMU_GPU_DRY_RUN:-0} in
+    1)
+      printf '[qemu-gpu] update dry-run command:' >&2
+      printf ' %q' "$qemu_bin" "${update_qemu_args[@]}" >&2
+      printf '\n[qemu-gpu] control bridge command: %q --bridge-native-control QEMU_PID %q %q update %q %q %q\n' \
+        "$native_bridge" "$control_bridge_socket" "$control_event" \
+        "$update_transaction" "$boot_abi" "$guest_state_schema" >&2
+      exit 0
+      ;;
+    0) ;;
+    *) fail "OMARCHY_QEMU_GPU_DRY_RUN must be 0 or 1" ;;
+  esac
+
+  update_timeout_seconds=${OMARCHY_QEMU_UPDATE_TIMEOUT_SECONDS:-1800}
+  [[ $update_timeout_seconds =~ ^[1-9][0-9]*$ ]] || fail "update timeout must be a positive integer"
+  (( update_timeout_seconds <= 7200 )) || fail "update timeout cannot exceed two hours"
+  echo "[qemu-gpu] Updating a protected clone of the saved VM." >&2
+  "$qemu_bin" "${update_qemu_args[@]}" &
+  qemu_pid=$!
+  printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid"
+  chmod 600 "$work_dir/.qemu.pid"
+
+  for ((attempt = 0; attempt < 200; attempt++)); do
+    [[ -S $qmp_socket && -S $control_bridge_socket ]] && break
+    kill -0 "$qemu_pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  if [[ ! -S $qmp_socket || ! -S $control_bridge_socket ]]; then
+    terminate_child "$qemu_pid" 40
+    qemu_pid=""
+    qemu_persistent_storage_rollback_update || true
+    fail "update VM exited before creating its private control channel"
+  fi
+
+  "$native_bridge" --bridge-native-control \
+    "$qemu_pid" "$control_bridge_socket" "$control_event" update \
+    "$update_transaction" "$boot_abi" "$guest_state_schema" 9>&- &
+  control_bridge_pid=$!
+
+  update_deadline=$((SECONDS + update_timeout_seconds))
+  update_timed_out=0
+  update_bridge_failed=0
+  while (( SECONDS < update_deadline )); do
+    qemu_state=$(ps -p "$qemu_pid" -o state= 2>/dev/null || true)
+    [[ -n $qemu_state && $qemu_state != *Z* ]] || break
+    if [[ ! -e $control_event && $control_bridge_pid =~ ^[0-9]+$ ]]; then
+      control_bridge_state=$(ps -p "$control_bridge_pid" -o state= 2>/dev/null || true)
+      if [[ -z $control_bridge_state || $control_bridge_state == *Z* ]]; then
+        update_bridge_failed=1
+        break
+      fi
+    fi
+    sleep 0.1
+  done
+  qemu_state=$(ps -p "$qemu_pid" -o state= 2>/dev/null || true)
+  if [[ -n $qemu_state && $qemu_state != *Z* ]]; then
+    (( update_bridge_failed )) || update_timed_out=1
+    terminate_child "$qemu_pid" 40
+    qemu_status=124
+  elif wait "$qemu_pid"; then
+    qemu_status=0
+  else
+    qemu_status=$?
+  fi
+  qemu_pid=""
+
+  for ((attempt = 0; attempt < 40; attempt++)); do
+    control_bridge_state=$(ps -p "$control_bridge_pid" -o state= 2>/dev/null || true)
+    [[ -n $control_bridge_state && $control_bridge_state != *Z* ]] || break
+    sleep 0.05
+  done
+  control_bridge_state=$(ps -p "$control_bridge_pid" -o state= 2>/dev/null || true)
+  if [[ -n $control_bridge_state && $control_bridge_state != *Z* ]]; then
+    terminate_child "$control_bridge_pid" 20
+    control_bridge_status=143
+  elif wait "$control_bridge_pid"; then
+    control_bridge_status=0
+  else
+    control_bridge_status=$?
+  fi
+  control_bridge_pid=""
+
+  control_event_valid=0
+  control_event_is_valid && control_event_valid=1
+
+  if (( update_timed_out || update_bridge_failed || qemu_status != 0 || control_bridge_status != 0 || control_event_valid != 1 )); then
+    if ! qemu_persistent_storage_rollback_update; then
+      fail "update trial failed and its candidate could not be cleaned up; the original VM remains preserved"
+    fi
+    if (( update_timed_out )); then
+      fail "update trial timed out; the original VM was restored"
+    fi
+    fail "update trial did not pass guest health checks; the original VM was restored"
+  fi
+
+  if ! qemu_persistent_storage_commit_update "$update_transaction"; then
+    if ! qemu_persistent_storage_rollback_update; then
+      fail "healthy update activation was interrupted; both generations were retained for recovery"
+    fi
+    fail "could not atomically activate the healthy update; the original VM was restored"
+  fi
+  echo "[qemu-gpu] Update complete; rollback is retained through the first normal launch." >&2
+  exit 0
+fi
 
 source_disk="$guest_dir/rootfs.ext4"
 if [[ ! -e $source_disk && ! -L $source_disk ]]; then
@@ -746,6 +1014,11 @@ if [[ ! -e $source_disk && ! -L $source_disk ]]; then
     "$source_disk_bytes" \
     "$resources_dir/runtime/bin/zstd" || fail "could not materialize the bundled root disk"
   source_disk=$QEMU_IMMUTABLE_SOURCE_DISK
+fi
+if [[ $storage_mode != ephemeral ]]; then
+  qemu_persistent_storage_stage_boot_kit \
+    "$bundle_identity" "$guest_dir/vmlinuz-linux" "$guest_dir/initramfs-linux.img" || \
+    fail "could not stage the signed boot assets"
 fi
 if qemu_persistent_storage_select \
   "$storage_mode" \
@@ -761,9 +1034,20 @@ else
   if (( storage_status == QEMU_PERSISTENT_STORAGE_INCOMPATIBLE_STATUS )); then
     exit "$storage_status"
   fi
+  if (( storage_status == QEMU_PERSISTENT_STORAGE_UPDATE_REQUIRED_STATUS )); then
+    exit "$storage_status"
+  fi
   fail "could not prepare the selected root disk"
 fi
 working_disk=$QEMU_SELECTED_DISK
+launch_kernel="$guest_dir/vmlinuz-linux"
+launch_initramfs="$guest_dir/initramfs-linux.img"
+if [[ $QEMU_SELECTED_STORAGE_MODE == persistent && \
+      -n $QEMU_PERSISTENT_STORAGE_ACTIVE_KERNEL && \
+      -n $QEMU_PERSISTENT_STORAGE_ACTIVE_INITRAMFS ]]; then
+  launch_kernel=$QEMU_PERSISTENT_STORAGE_ACTIVE_KERNEL
+  launch_initramfs=$QEMU_PERSISTENT_STORAGE_ACTIVE_INITRAMFS
+fi
 
 if ((reset_only)); then
   qemu_persistent_storage_release_lock
@@ -791,8 +1075,8 @@ qemu_args=(
   -serial none
   -monitor none
   -qmp "unix:$qmp_socket,server=on,wait=off"
-  -kernel "$guest_dir/vmlinuz-linux"
-  -initrd "$guest_dir/initramfs-linux.img"
+  -kernel "$launch_kernel"
+  -initrd "$launch_initramfs"
   -append "$kernel_command_line omarchy.qemu_virgl=1"
   -drive "if=none,id=omarchy-root,file=$working_disk,format=raw,media=disk,cache=writeback"
   -device 'virtio-blk-pci,drive=omarchy-root,serial=omarchy-root'
@@ -816,6 +1100,19 @@ qemu_args=(
   -device 'virtserialport,bus=omarchy-serial.0,nr=2,chardev=omarchy-clipboard-bridge,name=dev.tryomarchy.clipboard'
 )
 
+# A committed generation keeps its predecessor until the graphical boot itself
+# reaches the signed guest health service. The update trial already proved the
+# offline migration, while this second gate proves the normal target boot before
+# a later clean exit is allowed to discard the rollback.
+if [[ $QEMU_SELECTED_STORAGE_MODE == persistent && \
+      $QEMU_PERSISTENT_STORAGE_UPDATE_STATE == committed ]]; then
+  normal_health_required=1
+  qemu_args+=(
+    -chardev "socket,id=omarchy-control,path=$control_bridge_socket,server=on,wait=off"
+    -device "virtserialport,bus=omarchy-serial.0,nr=3,chardev=omarchy-control,name=$control_port"
+  )
+fi
+
 # SDL2 has one legacy process-wide override that would collapse input and
 # output onto the same named device. The patched QEMU backend uses the two
 # direction-specific Omarchy variables instead; unset means live System Default.
@@ -835,6 +1132,11 @@ if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
     "$native_bridge" "$audio_bridge_socket" "$audio_route_dir" >&2
   printf '\n[qemu-gpu] clipboard bridge command: %q --bridge-native-clipboard QEMU_PID %q' \
     "$native_bridge" "$clipboard_bridge_socket" >&2
+  if (( normal_health_required )); then
+    printf '\n[qemu-gpu] health bridge command: %q --bridge-native-control QEMU_PID %q %q health - %q %q' \
+      "$native_bridge" "$control_bridge_socket" "$control_event" \
+      "$boot_abi" "$guest_state_schema" >&2
+  fi
   printf '\n' >&2
   exit 0
 fi
@@ -854,14 +1156,29 @@ printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid"
 chmod 600 "$work_dir/.qemu.pid"
 
 for ((attempt = 0; attempt < 100; attempt++)); do
-  [[ -S $qmp_socket && -S $audio_bridge_socket && -S $clipboard_bridge_socket ]] && break
+  if [[ -S $qmp_socket && -S $audio_bridge_socket && -S $clipboard_bridge_socket ]] && \
+     { (( ! normal_health_required )) || [[ -S $control_bridge_socket ]]; }; then
+    break
+  fi
   kill -0 "$qemu_pid" 2>/dev/null || fail "QEMU exited before creating its private QMP socket"
   sleep 0.05
 done
 [[ -S $qmp_socket ]] || fail "QEMU did not create its private QMP socket"
 [[ -S $audio_bridge_socket ]] || fail "QEMU did not create its private audio bridge socket"
 [[ -S $clipboard_bridge_socket ]] || fail "QEMU did not create its private clipboard bridge socket"
+if (( normal_health_required )); then
+  [[ -S $control_bridge_socket ]] || fail "QEMU did not create its private health bridge socket"
+fi
 echo "[qemu-gpu] Ready." >&2
+
+# FD 9 belongs only to QEMU. A normal health report has no transaction nonce
+# and never asks the guest to power off.
+if (( normal_health_required )); then
+  "$native_bridge" --bridge-native-control \
+    "$qemu_pid" "$control_bridge_socket" "$control_event" health - \
+    "$boot_abi" "$guest_state_schema" 9>&- &
+  control_bridge_pid=$!
+fi
 
 # FD 9 deliberately remains open only in QEMU. Letting the sibling audio
 # bridge inherit it could keep a persistent workspace locked after QEMU exits.
@@ -915,6 +1232,20 @@ while true; do
       fi
     fi
   fi
+  if (( normal_health_required )) && [[ $control_bridge_pid =~ ^[0-9]+$ ]]; then
+    control_bridge_state=$(ps -p "$control_bridge_pid" -o state= 2>/dev/null || true)
+    if [[ -z $control_bridge_state || $control_bridge_state == *Z* ]]; then
+      if wait "$control_bridge_pid"; then
+        control_bridge_status=0
+      else
+        control_bridge_status=$?
+      fi
+      control_bridge_pid=""
+      if (( control_bridge_status != 0 )); then
+        echo "[qemu-gpu] Normal guest health was not confirmed; the rollback will be retained." >&2
+      fi
+    fi
+  fi
   sleep 0.1
 done
 
@@ -941,4 +1272,36 @@ if [[ $clipboard_bridge_pid =~ ^[0-9]+$ ]]; then
   terminate_child "$clipboard_bridge_pid" 20
 fi
 clipboard_bridge_pid=""
+if (( normal_health_required )); then
+  if [[ $control_bridge_pid =~ ^[0-9]+$ ]]; then
+    for ((attempt = 0; attempt < 40; attempt++)); do
+      control_bridge_state=$(ps -p "$control_bridge_pid" -o state= 2>/dev/null || true)
+      [[ -n $control_bridge_state && $control_bridge_state != *Z* ]] || break
+      sleep 0.05
+    done
+    control_bridge_state=$(ps -p "$control_bridge_pid" -o state= 2>/dev/null || true)
+    if [[ -n $control_bridge_state && $control_bridge_state != *Z* ]]; then
+      terminate_child "$control_bridge_pid" 20
+      control_bridge_status=143
+    elif wait "$control_bridge_pid"; then
+      control_bridge_status=0
+    else
+      control_bridge_status=$?
+    fi
+    control_bridge_pid=""
+  fi
+  if [[ $control_bridge_status == 0 ]] && control_event_is_valid; then
+    normal_health_valid=1
+  fi
+fi
+if (( qemu_status == 0 )) && \
+   [[ $QEMU_SELECTED_STORAGE_MODE == persistent && \
+      $QEMU_PERSISTENT_STORAGE_UPDATE_STATE == committed ]] && \
+   (( normal_health_valid )); then
+  if ! qemu_persistent_storage_finalize_update; then
+    echo "[qemu-gpu] The healthy VM remains active; retained rollback cleanup will be retried later." >&2
+  fi
+elif (( qemu_status == 0 && normal_health_required && ! normal_health_valid )); then
+  echo "[qemu-gpu] The VM exited cleanly without a validated normal health report; the rollback was retained." >&2
+fi
 exit "$qemu_status"

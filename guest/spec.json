@@ -130,6 +130,14 @@
       "fallback": "full-copy",
       "expandedSizeMiB": 24576
     },
+    "update": {
+      "bootABI": "arm64-qemu-direct-v1",
+      "compressedImage": "update.ext4.zst",
+      "controlPort": "dev.tryomarchy.control",
+      "guestStateSchema": 1,
+      "image": "update.ext4",
+      "protocolVersion": 1
+    },
     "clipboard": {
       "device": "virtserialport",
       "port": "dev.tryomarchy.clipboard",

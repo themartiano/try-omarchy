@@ -6,6 +6,7 @@ enum QEMUGPUStorageOption: String, Equatable {
     case ephemeral = "--ephemeral"
     case resetStorage = "--reset-storage"
     case resetStorageOnly = "--reset-storage-only"
+    case updateStorageOnly = "--update-storage-only"
 }
 
 enum QEMUGPUStorageSpaceEstimate {
@@ -261,6 +262,195 @@ enum QEMUGPUStorageSpaceEstimate {
         value.utf8.count == 64 && value.utf8.allSatisfy {
             ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
         }
+    }
+}
+
+enum QEMUGPUWorkspaceUpdateRequirement: Equatable {
+    case notRequired
+    case required
+    case indeterminate
+}
+
+protocol QEMUGPUWorkspaceUpdateRequirementProviding {
+    func requirement(
+        environment: [String: String],
+        targetBundleIdentity: String?
+    ) -> QEMUGPUWorkspaceUpdateRequirement
+}
+
+/// Performs the small, read-only part of workspace compatibility detection that
+/// is safe to show in the start menu. The launcher remains authoritative: an
+/// unknown or malformed future format is deliberately reported as indeterminate
+/// instead of being guessed to need either an update or a destructive reset.
+struct QEMUGPUWorkspaceUpdatePreflight: QEMUGPUWorkspaceUpdateRequirementProviding {
+    private let fileManager: FileManager
+
+    init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+    }
+
+    func requirement(
+        environment: [String: String],
+        targetBundleIdentity: String?
+    ) -> QEMUGPUWorkspaceUpdateRequirement {
+        guard let targetBundleIdentity, Self.isIdentity(targetBundleIdentity),
+              let storageRoot = QEMUGPUStorageSpaceEstimate.storageRootURL(
+                environment: environment,
+                fileManager: fileManager
+              ) else {
+            return .indeterminate
+        }
+
+        // VM/v1 supports persistent-disk metadata schemas 1 and 2. Keep the
+        // layout dispatch isolated here so VM/v2 can gain its own decoder
+        // without weakening validation of an existing workspace.
+        return requirementForV1(
+            storageRoot: storageRoot,
+            targetBundleIdentity: targetBundleIdentity
+        )
+    }
+
+    private func requirementForV1(
+        storageRoot: URL,
+        targetBundleIdentity: String
+    ) -> QEMUGPUWorkspaceUpdateRequirement {
+        let disks = storageRoot.appendingPathComponent("disks", isDirectory: true)
+        let workspace = disks
+            .appendingPathComponent("current", isDirectory: true)
+        var workspaceInformation = stat()
+        guard Darwin.lstat(workspace.path, &workspaceInformation) == 0 else {
+            return errno == ENOENT
+                ? requirementForLegacyV1(
+                    disks: disks,
+                    targetBundleIdentity: targetBundleIdentity
+                )
+                : .indeterminate
+        }
+        guard workspaceInformation.st_mode & S_IFMT == S_IFDIR,
+              let metadata = metadataForV1Workspace(workspace)
+        else { return .indeterminate }
+
+        // Schema 1 predates the single-workspace compatibility contract. Even
+        // when its identity happens to match, the authoritative storage layer
+        // must migrate it before launch; surface that as Update immediately.
+        return metadata.schemaVersion == 2
+            && metadata.bundleIdentity == targetBundleIdentity
+            ? .notRequired
+            : .required
+    }
+
+    /// Older app releases keyed their sole workspace by bundle identity. Find
+    /// exactly one fully valid legacy workspace so the initial button can say
+    /// Update before the launcher atomically relocates it to `disks/current`.
+    /// Ambiguous or malformed stores remain deferred to the authoritative
+    /// storage implementation.
+    private func requirementForLegacyV1(
+        disks: URL,
+        targetBundleIdentity: String
+    ) -> QEMUGPUWorkspaceUpdateRequirement {
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: disks,
+            includingPropertiesForKeys: nil,
+            options: []
+        ) else {
+            var information = stat()
+            return Darwin.lstat(disks.path, &information) != 0 && errno == ENOENT
+                ? .notRequired
+                : .indeterminate
+        }
+        let candidates = entries.filter { Self.isIdentity($0.lastPathComponent) }
+        guard !candidates.isEmpty else { return .notRequired }
+        let valid = candidates.compactMap { candidate -> V1Metadata? in
+            guard let metadata = metadataForV1Workspace(candidate),
+                  metadata.bundleIdentity == candidate.lastPathComponent else { return nil }
+            return metadata
+        }
+        guard valid.count == 1, valid.count == candidates.count,
+              let metadata = valid.first else { return .indeterminate }
+        return metadata.schemaVersion == 2
+            && metadata.bundleIdentity == targetBundleIdentity
+            ? .notRequired
+            : .required
+    }
+
+    private func metadataForV1Workspace(_ workspace: URL) -> V1Metadata? {
+        guard hasAttributes(workspace, type: .typeDirectory, permissions: 0o700),
+              let entries = try? fileManager.contentsOfDirectory(
+                at: workspace,
+                includingPropertiesForKeys: nil,
+                options: []
+              ),
+              Set(entries.map(\.lastPathComponent)) == ["metadata.json", "rootfs.ext4"]
+        else { return nil }
+
+        let metadataURL = workspace.appendingPathComponent("metadata.json", isDirectory: false)
+        let diskURL = workspace.appendingPathComponent("rootfs.ext4", isDirectory: false)
+        guard hasAttributes(metadataURL, type: .typeRegular, permissions: 0o600),
+              hasAttributes(diskURL, type: .typeRegular, permissions: 0o600),
+              let metadata = decodeV1Metadata(at: metadataURL),
+              let diskSize = try? diskURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              Int64(diskSize) >= metadata.sourceBytes
+        else { return nil }
+        return metadata
+    }
+
+    private func decodeV1Metadata(at url: URL) -> V1Metadata? {
+        guard let data = try? Data(contentsOf: url),
+              data.count <= 16_384,
+              var serialized = String(data: data, encoding: .utf8),
+              let raw = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = raw as? [String: Any],
+              Set(dictionary.keys) == ["bundleIdentity", "kind", "schemaVersion", "sourceRootfs"],
+              dictionary["kind"] as? String == "omarchy-qemu-persistent-disk",
+              let identity = dictionary["bundleIdentity"] as? String,
+              Self.isIdentity(identity),
+              let schema = dictionary["schemaVersion"] as? NSNumber,
+              [1, 2].contains(schema.intValue),
+              let source = dictionary["sourceRootfs"] as? [String: Any],
+              Set(source.keys) == ["bytes", "sha256"],
+              let sourceBytes = source["bytes"] as? NSNumber,
+              sourceBytes.int64Value > 0,
+              let sourceSHA = source["sha256"] as? String,
+              Self.isIdentity(sourceSHA)
+        else { return nil }
+
+        while serialized.last == "\n" {
+            serialized.removeLast()
+        }
+        let canonical = "{\"bundleIdentity\":\"\(identity)\",\"kind\":\"omarchy-qemu-persistent-disk\",\"schemaVersion\":\(schema.intValue),\"sourceRootfs\":{\"bytes\":\(sourceBytes.int64Value),\"sha256\":\"\(sourceSHA)\"}}"
+        guard serialized == canonical else { return nil }
+        return V1Metadata(
+            bundleIdentity: identity,
+            schemaVersion: schema.intValue,
+            sourceBytes: sourceBytes.int64Value
+        )
+    }
+
+    private func hasAttributes(
+        _ url: URL,
+        type: FileAttributeType,
+        permissions: Int
+    ) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey]),
+              values.isSymbolicLink != true,
+              let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == type,
+              (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
+              (attributes[.posixPermissions] as? NSNumber)?.intValue == permissions
+        else { return false }
+        return true
+    }
+
+    private static func isIdentity(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy {
+            ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+        }
+    }
+
+    private struct V1Metadata {
+        let bundleIdentity: String
+        let schemaVersion: Int
+        let sourceBytes: Int64
     }
 }
 

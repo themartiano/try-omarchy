@@ -167,12 +167,13 @@ for guest_resource in \
   packages.lock.txt \
   provenance.json \
   rootfs.ext4.zst \
+  update.ext4.zst \
   vmlinuz-linux; do
   [[ -f $guest_dir/$guest_resource && ! -L $guest_dir/$guest_resource ]] || {
     echo "build-app: factory guest resource is missing or unsafe: $guest_resource" >&2
     exit 1
   }
-  if [[ $guest_resource == rootfs.ext4.zst ]]; then
+  if [[ $guest_resource == rootfs.ext4.zst || $guest_resource == update.ext4.zst ]]; then
     cp -c "$guest_dir/$guest_resource" "$contents/Resources/guest/$guest_resource"
   else
     cp "$guest_dir/$guest_resource" "$contents/Resources/guest/$guest_resource"
@@ -217,7 +218,9 @@ codesign "${app_sign_options[@]}" \
 launch_record=$(OMARCHY_QEMU_GPU_INSPECT_ONLY=1 \
   "$contents/Resources/scripts/run-qemu-gpu.sh")
 IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes \
-  compressed_disk_bytes working_disk_bytes kernel_command_line <<<"$launch_record"
+  compressed_disk_bytes working_disk_bytes kernel_command_line \
+  update_disk_sha update_disk_bytes compressed_update_disk_bytes \
+  guest_state_schema boot_abi control_port protocol_version <<<"$launch_record"
 launch_configuration="$contents/Resources/guest/launch.plist"
 /usr/bin/plutil -create xml1 "$launch_configuration"
 /usr/bin/plutil -insert bundleIdentity -string "$bundle_identity" "$launch_configuration"
@@ -226,6 +229,13 @@ launch_configuration="$contents/Resources/guest/launch.plist"
 /usr/bin/plutil -insert compressedDiskBytes -integer "$compressed_disk_bytes" "$launch_configuration"
 /usr/bin/plutil -insert workingDiskBytes -integer "$working_disk_bytes" "$launch_configuration"
 /usr/bin/plutil -insert kernelCommandLine -string "$kernel_command_line" "$launch_configuration"
+/usr/bin/plutil -insert updateDiskSHA256 -string "$update_disk_sha" "$launch_configuration"
+/usr/bin/plutil -insert updateDiskBytes -integer "$update_disk_bytes" "$launch_configuration"
+/usr/bin/plutil -insert compressedUpdateDiskBytes -integer "$compressed_update_disk_bytes" "$launch_configuration"
+/usr/bin/plutil -insert guestStateSchema -integer "$guest_state_schema" "$launch_configuration"
+/usr/bin/plutil -insert bootABI -string "$boot_abi" "$launch_configuration"
+/usr/bin/plutil -insert controlPort -string "$control_port" "$launch_configuration"
+/usr/bin/plutil -insert protocolVersion -integer "$protocol_version" "$launch_configuration"
 
 codesign "${app_sign_options[@]}" \
   --entitlements "$macos_dir/omarchy-vm-helper.entitlements" \

@@ -1,0 +1,16 @@
+[Unit]
+Description=Report Try Omarchy guest health to the macOS launcher
+After=NetworkManager.service systemd-user-sessions.service
+ConditionPathExists=/dev/virtio-ports/dev.tryomarchy.control
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/try-omarchy/health-report --report
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

@@ -91,6 +91,7 @@ fi
 root=$(mktemp -d "$work/rootfs.XXXXXX")
 resolution_db=$(mktemp -d "$work/pacman-db.XXXXXX")
 pinned_repo=""
+update_output=""
 chmod 0755 "$resolution_db"
 cleanup() {
   if (( keep_rootfs )); then
@@ -101,6 +102,9 @@ cleanup() {
   rm -rf "$resolution_db"
   if [[ -n $pinned_repo ]]; then
     rm -rf "$pinned_repo"
+  fi
+  if [[ -n $update_output ]]; then
+    rm -rf "$update_output"
   fi
 }
 trap cleanup EXIT
@@ -232,12 +236,25 @@ done
   --spec "$spec" \
   --pacman-config "$pacman_config"
 "$guest_dir/scripts/register-local-repository.sh" --root "$root" --spec "$spec"
-arch-chroot "$root" /usr/local/lib/try-omarchy/finalize-rootfs
+arch-chroot "$root" /usr/bin/env TRY_OMARCHY_DEFER_INITRAMFS=1 \
+  /usr/local/lib/try-omarchy/finalize-rootfs
 arch-chroot "$root" pacman -Q | LC_ALL=C sort >"$root/usr/share/try-omarchy/packages.lock.txt"
+arch-chroot "$root" pacman -Qqe | LC_ALL=C sort >"$root/usr/share/try-omarchy/packages.explicit.txt"
+update_output=$(mktemp -d "$work/update-artifacts.XXXXXX")
+"$guest_dir/scripts/build-update-image.sh" \
+  --root "$root" \
+  --package-cache "$package_cache" \
+  --package-lock "$package_lock_file" \
+  --output "$update_output" \
+  --spec "$spec"
+# build-update-image writes the final release.env. Generate the external
+# direct-boot initramfs only after that signed update identity exists.
+arch-chroot "$root" mkinitcpio -P
 
 # arch-chroot bind-mounts the host resolver file at this path. Replace it only
 # after every chroot invocation has returned and the temporary mount is gone.
 ln -sfn ../run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"
 
-"$guest_dir/scripts/pack-image.sh" --root "$root" --output "$output" --spec "$spec"
+"$guest_dir/scripts/pack-image.sh" \
+  --root "$root" --output "$output" --spec "$spec" --update-dir "$update_output"
 echo "Guest build complete: $output/guest-manifest.json"
