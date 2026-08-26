@@ -130,6 +130,14 @@
       "fallback": "full-copy",
       "expandedSizeMiB": 24576
     },
+    "clipboard": {
+      "device": "virtserialport",
+      "port": "dev.tryomarchy.clipboard",
+      "formats": [
+        "text/plain;charset=utf-8",
+        "image/png"
+      ]
+    },
     "devices": [
       "virtio-blk-pci",
       "virtio-gpu-gl-pci",

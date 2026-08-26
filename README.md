@@ -13,6 +13,7 @@ Try Omarchy is not official or affiliated with Omarchy.
 - Hardware-accelerated ARM64 virtualization and VirGL graphics
 - Resizable native window with automatic guest resolution and HiDPI scale updates
 - Mac audio input/output selection inside Omarchy, with live routing and system-default fallback
+- Two-way clipboard sharing for text and PNG images between macOS and Omarchy
 
 > **Current limitation:** Video decoding is CPU-only, so playback can be slow, especially at high resolutions. An improved video path is in development.
 
@@ -23,6 +24,13 @@ Try Omarchy is not official or affiliated with Omarchy.
 3. Launch **Try Omarchy** from Applications.
 
 Every launch begins at the start menu. Accessibility enables Mac Command-to-guest-Super shortcuts; microphone access is optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
+
+## Clipboard sharing
+
+Copy and paste work in both directions as soon as you sign in to Omarchy: text
+and PNG images copied on the Mac appear in the Omarchy clipboard, and content
+copied in Omarchy lands on the Mac pasteboard. Nothing is transferred until
+something is copied.
 
 ## Requirements
 

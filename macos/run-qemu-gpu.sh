@@ -336,6 +336,7 @@ runtime = exact_keys(
     spec.get("runtime"),
     {
         "audio",
+        "clipboard",
         "compressedDisk",
         "devices",
         "disk",
@@ -369,6 +370,11 @@ expected_devices = [
     "intel-hda",
     "hda-micro",
 ]
+clipboard = {
+    "device": "virtserialport",
+    "port": "dev.tryomarchy.clipboard",
+    "formats": ["text/plain;charset=utf-8", "image/png"],
+}
 graphics = {
     "device": "virtio-gpu-gl-pci",
     "display": "cocoa",
@@ -407,6 +413,7 @@ if (
     or runtime.get("network") != network
     or runtime.get("audio") != audio
     or runtime.get("storage") != storage
+    or runtime.get("clipboard") != clipboard
     or runtime.get("devices") != expected_devices
     or runtime.get("minimumMemoryMiB") != 2048
     or runtime.get("recommendedMemoryMiB") != 4096
@@ -601,6 +608,7 @@ owner_marker=""
 owner_token=""
 qemu_pid=""
 audio_bridge_pid=""
+clipboard_bridge_pid=""
 
 terminate_child() {
   local pid=$1
@@ -630,6 +638,9 @@ cleanup() {
   fi
   if [[ $audio_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$audio_bridge_pid" 20
+  fi
+  if [[ $clipboard_bridge_pid =~ ^[0-9]+$ ]]; then
+    terminate_child "$clipboard_bridge_pid" 20
   fi
   qemu_persistent_storage_release_lock
   if [[ -n $work_dir && -n $owner_marker && -n $owner_token ]]; then
@@ -721,6 +732,7 @@ chmod 600 "$owner_marker"
 # for cleanup, but expose the runtime sockets through that standardized alias.
 qmp_socket="/tmp/${work_dir##*/}/qmp.sock"
 audio_bridge_socket="/tmp/${work_dir##*/}/audio.sock"
+clipboard_bridge_socket="/tmp/${work_dir##*/}/clipboard.sock"
 audio_route_dir="/tmp/${work_dir##*/}/audio-routes"
 mkdir -m 700 "$work_dir/audio-routes"
 
@@ -800,6 +812,8 @@ qemu_args=(
   -device 'virtconsole,bus=omarchy-serial.0,nr=0,chardev=omarchy-hvc0'
   -chardev "socket,id=omarchy-audio-bridge,path=$audio_bridge_socket,server=on,wait=off"
   -device 'virtserialport,bus=omarchy-serial.0,nr=1,chardev=omarchy-audio-bridge,name=dev.tryomarchy.audio'
+  -chardev "socket,id=omarchy-clipboard-bridge,path=$clipboard_bridge_socket,server=on,wait=off"
+  -device 'virtserialport,bus=omarchy-serial.0,nr=2,chardev=omarchy-clipboard-bridge,name=dev.tryomarchy.clipboard'
 )
 
 # SDL2 has one legacy process-wide override that would collapse input and
@@ -819,6 +833,8 @@ if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
   printf ' %q' "$qemu_bin" "${qemu_args[@]}" >&2
   printf '\n[qemu-gpu] audio bridge command: %q --bridge-native-audio QEMU_PID %q %q' \
     "$native_bridge" "$audio_bridge_socket" "$audio_route_dir" >&2
+  printf '\n[qemu-gpu] clipboard bridge command: %q --bridge-native-clipboard QEMU_PID %q' \
+    "$native_bridge" "$clipboard_bridge_socket" >&2
   printf '\n' >&2
   exit 0
 fi
@@ -838,12 +854,13 @@ printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid"
 chmod 600 "$work_dir/.qemu.pid"
 
 for ((attempt = 0; attempt < 100; attempt++)); do
-  [[ -S $qmp_socket && -S $audio_bridge_socket ]] && break
+  [[ -S $qmp_socket && -S $audio_bridge_socket && -S $clipboard_bridge_socket ]] && break
   kill -0 "$qemu_pid" 2>/dev/null || fail "QEMU exited before creating its private QMP socket"
   sleep 0.05
 done
 [[ -S $qmp_socket ]] || fail "QEMU did not create its private QMP socket"
 [[ -S $audio_bridge_socket ]] || fail "QEMU did not create its private audio bridge socket"
+[[ -S $clipboard_bridge_socket ]] || fail "QEMU did not create its private clipboard bridge socket"
 echo "[qemu-gpu] Ready." >&2
 
 # FD 9 deliberately remains open only in QEMU. Letting the sibling audio
@@ -851,6 +868,14 @@ echo "[qemu-gpu] Ready." >&2
 "$native_bridge" --bridge-native-audio \
   "$qemu_pid" "$audio_bridge_socket" "$audio_route_dir" 9>&- &
 audio_bridge_pid=$!
+
+start_clipboard_bridge() {
+  "$native_bridge" --bridge-native-clipboard \
+    "$qemu_pid" "$clipboard_bridge_socket" 9>&- &
+  clipboard_bridge_pid=$!
+}
+start_clipboard_bridge
+clipboard_bridge_restarts=0
 
 # Bash 3.2 has no `wait -n`. The native-audio bridge is required for the guest
 # transport, so watch it alongside QEMU and fail if it exits unexpectedly.
@@ -867,6 +892,28 @@ while true; do
     fi
     audio_bridge_pid=""
     fail "native audio bridge exited while QEMU was running (status $audio_bridge_status)"
+  fi
+
+  # Clipboard sharing is a convenience, not a transport the guest depends on.
+  # Restart it a few times rather than stopping the whole virtual machine.
+  if [[ $clipboard_bridge_pid =~ ^[0-9]+$ ]]; then
+    clipboard_bridge_state=$(ps -p "$clipboard_bridge_pid" -o state= 2>/dev/null || true)
+    if [[ -z $clipboard_bridge_state || $clipboard_bridge_state == *Z* ]]; then
+      if wait "$clipboard_bridge_pid"; then
+        clipboard_bridge_status=0
+      else
+        clipboard_bridge_status=$?
+      fi
+      clipboard_bridge_pid=""
+      if (( clipboard_bridge_restarts < 5 )); then
+        clipboard_bridge_restarts=$((clipboard_bridge_restarts + 1))
+        echo "[qemu-gpu] clipboard bridge exited (status $clipboard_bridge_status); restarting ($clipboard_bridge_restarts/5)" >&2
+        sleep 1
+        start_clipboard_bridge
+      else
+        echo "[qemu-gpu] clipboard sharing is unavailable for the rest of this session" >&2
+      fi
+    fi
   fi
   sleep 0.1
 done
@@ -890,4 +937,8 @@ else
   wait "$audio_bridge_pid" 2>/dev/null || true
 fi
 audio_bridge_pid=""
+if [[ $clipboard_bridge_pid =~ ^[0-9]+$ ]]; then
+  terminate_child "$clipboard_bridge_pid" 20
+fi
+clipboard_bridge_pid=""
 exit "$qemu_status"

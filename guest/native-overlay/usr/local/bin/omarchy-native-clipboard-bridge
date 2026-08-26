@@ -1,0 +1,287 @@
+#!/usr/bin/python3
+"""Share the Wayland clipboard with the macOS pasteboard over a virtio port.
+
+Both directions travel as one JSON object per line on the
+dev.tryomarchy.clipboard virtserialport:
+
+    {"type": "clipboard", "format": "<mime>", "data": "<base64>"}
+
+The host answers {"type": "sync"} with its current pasteboard. Text and PNG
+images are supported. wl-clipboard's data-control protocol lets this agent
+observe and replace the Hyprland selection without holding keyboard focus.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+from pathlib import Path
+import select
+import shutil
+import subprocess
+import sys
+import time
+from typing import Any
+
+
+PORT = Path("/dev/virtio-ports/dev.tryomarchy.clipboard")
+TEXT_FORMAT = "text/plain;charset=utf-8"
+PNG_FORMAT = "image/png"
+FORMATS = (TEXT_FORMAT, PNG_FORMAT)
+# Payload bytes before base64. Large enough for screenshots and pasted
+# documents, small enough that a runaway selection cannot exhaust memory.
+MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
+MAX_LINE_BYTES = MAX_PAYLOAD_BYTES * 4 // 3 + 4096
+TEXT_TYPES = ("text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "TEXT", "STRING")
+
+
+def log(message: str) -> None:
+    print(f"omarchy-native-clipboard-bridge: {message}", file=sys.stderr, flush=True)
+
+
+def fingerprint(mime: str, payload: bytes) -> str:
+    digest = hashlib.sha256()
+    digest.update(mime.encode())
+    digest.update(b"\0")
+    digest.update(payload)
+    return digest.hexdigest()
+
+
+def encode_message(mime: str, payload: bytes) -> bytes:
+    message = {
+        "type": "clipboard",
+        "format": mime,
+        "data": base64.b64encode(payload).decode("ascii"),
+    }
+    return json.dumps(message, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+
+
+def decode_message(line: bytes) -> tuple[str, bytes] | None:
+    """Return (mime, payload) for a host clipboard line, or None to ignore."""
+    message = json.loads(line)
+    if not isinstance(message, dict) or message.get("type") != "clipboard":
+        raise ValueError("host sent an invalid clipboard message")
+    if set(message) != {"type", "format", "data"}:
+        raise ValueError("host clipboard message has an unexpected schema")
+    mime = message["format"]
+    data = message["data"]
+    if mime not in FORMATS or not isinstance(data, str):
+        return None
+    try:
+        payload = base64.b64decode(data, validate=True)
+    except ValueError as error:
+        raise ValueError("host clipboard payload is not base64") from error
+    if not payload or len(payload) > MAX_PAYLOAD_BYTES:
+        return None
+    if mime == TEXT_FORMAT:
+        try:
+            payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    return mime, payload
+
+
+class ClipboardSync:
+    """Echo-safe two-way state shared by the tests and the live agent."""
+
+    def __init__(self, send: Any, copy: Any) -> None:
+        self.send = send
+        self.copy = copy
+        self.last_from_host: str | None = None
+        self.last_from_guest: str | None = None
+
+    def guest_changed(self, mime: str, payload: bytes) -> bool:
+        """Forward a new guest selection to the host. Returns True if sent."""
+        if mime not in FORMATS or not payload or len(payload) > MAX_PAYLOAD_BYTES:
+            return False
+        key = fingerprint(mime, payload)
+        # wl-copy re-announces whatever the host just wrote; only that echo
+        # is dropped. A repeat of earlier guest content is a real change.
+        if key == self.last_from_host:
+            return False
+        self.last_from_guest = key
+        self.send(encode_message(mime, payload))
+        return True
+
+    def host_changed(self, mime: str, payload: bytes) -> bool:
+        """Apply a host pasteboard update to the guest. Returns True if applied."""
+        key = fingerprint(mime, payload)
+        if key == self.last_from_guest:
+            return False
+        self.last_from_host = key
+        self.copy(mime, payload)
+        return True
+
+
+def wl_paste_selection() -> tuple[str, bytes] | None:
+    """Read the current Wayland selection as (mime, payload)."""
+    listing = subprocess.run(
+        ["wl-paste", "--list-types"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    if listing.returncode != 0:
+        return None
+    offered = listing.stdout.split()
+    if any(kind in offered for kind in TEXT_TYPES):
+        requested = next(kind for kind in TEXT_TYPES if kind in offered)
+        mime = TEXT_FORMAT
+    elif PNG_FORMAT in offered:
+        requested = PNG_FORMAT
+        mime = PNG_FORMAT
+    else:
+        return None
+    content = subprocess.run(
+        ["wl-paste", "--no-newline", "--type", requested],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=15,
+        check=False,
+    )
+    if content.returncode != 0 or not content.stdout:
+        return None
+    payload = content.stdout
+    if mime == TEXT_FORMAT:
+        try:
+            payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    return mime, payload
+
+
+def emit_selection() -> int:
+    """`wl-paste --watch` callback: print the selection as one text line."""
+    selection = wl_paste_selection()
+    if selection is None:
+        return 0
+    mime, payload = selection
+    sys.stdout.write(f"{mime}\t{base64.b64encode(payload).decode('ascii')}\n")
+    sys.stdout.flush()
+    return 0
+
+
+def wl_copy(mime: str, payload: bytes) -> None:
+    # wl-copy forks a background owner that serves the selection until the
+    # next change, so the agent does not need to keep the process around.
+    subprocess.run(
+        ["wl-copy", "--type", mime],
+        input=payload,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=15,
+        check=False,
+    )
+
+
+def open_port() -> int:
+    while True:
+        try:
+            return os.open(PORT, os.O_RDWR | os.O_CLOEXEC | os.O_NOCTTY)
+        except FileNotFoundError:
+            time.sleep(1)
+
+
+def parse_watch_line(line: bytes) -> tuple[str, bytes] | None:
+    mime, separator, encoded = line.partition(b"\t")
+    if not separator:
+        return None
+    try:
+        payload = base64.b64decode(encoded, validate=True)
+    except ValueError:
+        return None
+    decoded_mime = mime.decode("ascii", "replace")
+    if decoded_mime not in FORMATS or not payload:
+        return None
+    return decoded_mime, payload
+
+
+def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "--emit":
+        return emit_selection()
+
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        log("no Wayland display; waiting for the graphical session")
+        return 1
+    for tool in ("wl-paste", "wl-copy"):
+        if shutil.which(tool) is None:
+            log(f"{tool} is unavailable")
+            return 1
+
+    descriptor = open_port()
+
+    def send(payload: bytes) -> None:
+        offset = 0
+        while offset < len(payload):
+            offset += os.write(descriptor, payload[offset:])
+
+    sync = ClipboardSync(send, wl_copy)
+    watcher = subprocess.Popen(
+        ["wl-paste", "--watch", os.path.realpath(sys.argv[0]), "--emit"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    assert watcher.stdout is not None
+    watch_fd = watcher.stdout.fileno()
+    os.set_blocking(watch_fd, False)
+
+    port_buffer = bytearray()
+    watch_buffer = bytearray()
+    send(json.dumps({"type": "sync"}, separators=(",", ":")).encode() + b"\n")
+    try:
+        while True:
+            ready, _, _ = select.select([descriptor, watch_fd], [], [], 1.0)
+            if watcher.poll() is not None:
+                raise RuntimeError("wl-paste watcher exited")
+            if descriptor in ready:
+                chunk = os.read(descriptor, 65536)
+                if not chunk:
+                    return 0
+                port_buffer.extend(chunk)
+                if len(port_buffer) > MAX_LINE_BYTES:
+                    raise RuntimeError("host clipboard message exceeds the size limit")
+                while b"\n" in port_buffer:
+                    line, _, remainder = port_buffer.partition(b"\n")
+                    port_buffer = bytearray(remainder)
+                    decoded = decode_message(line)
+                    if decoded is not None:
+                        sync.host_changed(*decoded)
+            if watch_fd in ready:
+                try:
+                    chunk = os.read(watch_fd, 65536)
+                except BlockingIOError:
+                    chunk = b""
+                if chunk:
+                    watch_buffer.extend(chunk)
+                    if len(watch_buffer) > MAX_LINE_BYTES:
+                        log("guest selection exceeds the size limit; skipping")
+                        watch_buffer = bytearray()
+                    while b"\n" in watch_buffer:
+                        line, _, remainder = watch_buffer.partition(b"\n")
+                        watch_buffer = bytearray(remainder)
+                        parsed = parse_watch_line(line)
+                        if parsed is not None:
+                            sync.guest_changed(*parsed)
+    finally:
+        if watcher.poll() is None:
+            watcher.terminate()
+            try:
+                watcher.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                watcher.kill()
+        os.close(descriptor)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as error:
+        log(str(error))
+        raise SystemExit(1)

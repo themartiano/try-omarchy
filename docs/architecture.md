@@ -33,6 +33,13 @@ inside Linux. Graphics travel from Linux through virtio-gpu and VirGL to the
 native Cocoa window. Storage, networking, audio, and input use their matching
 QEMU virtual devices and host backends.
 
+One small host-integration channel sits beside those devices. A virtio-serial
+port (`dev.tryomarchy.clipboard`) carries newline-delimited JSON between a
+Swift bridge on the Mac, which watches the `NSPasteboard` change count, and a
+Python agent in the Omarchy session, which uses wl-clipboard's data-control
+protocol. Text and PNG payloads flow both ways; each side remembers the
+fingerprint of what it last wrote so an update is never echoed back.
+
 ## The ARM64 image
 
 The guest image is built by this project; it is not an official prebuilt image

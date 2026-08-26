@@ -70,6 +70,14 @@ def main() -> None:
     check("factory-overlay" in configure and "native-overlay" in configure, "rootfs receives only native factory overlays")
     check("omarchy-provision-owner.service" in configure, "first boot uses upstream owner provisioning")
     check("omarchy-native-audio-bridge" in configure, "guest installs native host-audio integration")
+    check(
+        "graphical-session.target.wants/omarchy-native-clipboard-bridge.service" in configure,
+        "guest starts clipboard sharing with the graphical session",
+    )
+    check(
+        spec["runtime"]["clipboard"]["port"] == "dev.tryomarchy.clipboard",
+        "clipboard contract names the virtio port",
+    )
     zram_override = read(
         GUEST
         / "factory-overlay/etc/systemd/zram-generator.conf.d/99-try-omarchy.conf"
@@ -99,6 +107,23 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         py_compile.compile(str(audio_bridge), cfile=str(Path(temporary) / "audio.pyc"), doraise=True)
     check(True, "native audio bridge compiles")
+
+    clipboard_bridge = GUEST / "native-overlay/usr/local/bin/omarchy-native-clipboard-bridge"
+    check(clipboard_bridge.stat().st_mode & stat.S_IXUSR != 0, "native clipboard bridge is executable")
+    with tempfile.TemporaryDirectory() as temporary:
+        py_compile.compile(str(clipboard_bridge), cfile=str(Path(temporary) / "clipboard.pyc"), doraise=True)
+    check(True, "native clipboard bridge compiles")
+    clipboard_unit = read(GUEST / "native-overlay/usr/lib/systemd/user/omarchy-native-clipboard-bridge.service")
+    check(
+        "PartOf=graphical-session.target" in clipboard_unit
+        and "ConditionPathExists=/dev/virtio-ports/dev.tryomarchy.clipboard" in clipboard_unit,
+        "clipboard bridge follows the graphical session and its virtio port",
+    )
+    clipboard_rule = read(GUEST / "native-overlay/etc/udev/rules.d/92-omarchy-native-clipboard.rules")
+    check(
+        'ATTR{name}=="dev.tryomarchy.clipboard"' in clipboard_rule and 'GROUP="users"' in clipboard_rule,
+        "clipboard port is readable by the provisioned users group",
+    )
 
     audio_input_helper = GUEST / "native-overlay/usr/bin/omarchy-audio-input-set-default"
     check(audio_input_helper.stat().st_mode & stat.S_IXUSR != 0, "native audio input helper is executable")

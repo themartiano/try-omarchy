@@ -1,0 +1,1 @@
+SUBSYSTEM=="virtio-ports", ATTR{name}=="dev.tryomarchy.clipboard", GROUP="users", MODE="0660"

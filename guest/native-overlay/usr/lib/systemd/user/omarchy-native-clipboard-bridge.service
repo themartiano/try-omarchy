@@ -1,0 +1,13 @@
+[Unit]
+Description=Share the macOS clipboard with Omarchy
+PartOf=graphical-session.target
+After=graphical-session.target
+ConditionPathExists=/dev/virtio-ports/dev.tryomarchy.clipboard
+
+[Service]
+ExecStart=/usr/local/bin/omarchy-native-clipboard-bridge
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

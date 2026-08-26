@@ -33,7 +33,8 @@ make release \
 1. Confirm `main` is clean and all pinned inputs have reviewable provenance.
 2. Run all tests and perform a first-boot provisioning test on a clean Mac user.
 3. Verify networking, display scaling, keyboard/mouse, microphone permission,
-   audio-device changes, persistence, reset, and ephemeral mode.
+   audio-device changes, clipboard sharing in both directions, persistence,
+   reset, and ephemeral mode.
 4. Verify the app and DMG signatures with Apple's tools and confirm notarization.
 5. Audit `THIRD_PARTY_NOTICES.md`, the bundle's license material, the guest
    package lock, and QEMU corresponding-source obligations.
