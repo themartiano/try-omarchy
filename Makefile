@@ -5,11 +5,14 @@ override DIST := $(ROOT)/dist
 override GUEST_DIST := $(DIST)/guest
 override APP := $(DIST)/Try Omarchy.app
 override DMG := $(DIST)/Try Omarchy.dmg
+override BUILD_CACHE := $(ROOT)/scripts/build-cache.py
+override BUILD_STATE := $(ROOT)/.build/state
 RELEASE_SIGN_IDENTITY ?= Developer ID Application: Eduardo Martinez (RZC79MPD34)
 RELEASE_NOTARY_PROFILE ?= try-omarchy
+FORCE ?= 0
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor test guest runtime app build run run-ephemeral reset package release clean clean-all clean-guest
+.PHONY: help doctor test guest runtime app build run run-ephemeral reset package release release-preflight clean clean-all clean-guest
 
 help:
 	@printf '%s\n' \
@@ -17,15 +20,16 @@ help:
 	  '' \
 	  '  make doctor         Check the local toolchain' \
 	  '  make test           Run native and guest contract tests' \
-	  '  make build          Build guest, runtime, and app' \
+	  '  make build          Build only changed guest, runtime, and app inputs' \
+	  '  make build FORCE=1  Rebuild every component' \
 	  '  make run            Build the app from existing artifacts and open it' \
 	  '  make package        Create an ad-hoc DMG for local testing' \
 	  '  make release        Create a signed and notarized distribution DMG' \
 	  '' \
 	  'Component builds:' \
-	  '  make guest          Build dist/guest in Docker' \
-	  '  make runtime        Build macos/.build/qemu-gpu-runtime' \
-	  '  make app            Build dist/Try Omarchy.app from both artifacts' \
+	  '  make guest          Ensure dist/guest is current (Docker)' \
+	  '  make runtime        Ensure macos/.build/qemu-gpu-runtime is current' \
+	  '  make app            Ensure both artifacts and the app are current' \
 	  '' \
 	  'Storage:' \
 	  '  make run-ephemeral  Run without retaining VM changes' \
@@ -42,21 +46,28 @@ doctor:
 	@printf 'Toolchain ready: %s (%s)\n' "$$(sw_vers -productVersion)" "$$(uname -m)"
 
 test:
+	@PYTHONDONTWRITEBYTECODE=1 python3 "$(ROOT)/tests/test-build-cache.py"
 	@$(ROOT)/guest/test
 	@mkdir -p $(ROOT)/macos/.build/module-cache/swift $(ROOT)/macos/.build/module-cache/clang
 	@cd $(ROOT)/macos && SWIFT_MODULECACHE_PATH=$(ROOT)/macos/.build/module-cache/swift CLANG_MODULE_CACHE_PATH=$(ROOT)/macos/.build/module-cache/clang swift test --disable-sandbox
 	@$(ROOT)/macos/Tests/qemu-persistent-storage.test.sh
 
 guest:
-	@$(ROOT)/guest/build-container.sh --output $(GUEST_DIST)
+	@OMARCHY_FORCE_BUILD="$(FORCE)" "$(BUILD_CACHE)" \
+	  --root "$(ROOT)" --state-dir "$(BUILD_STATE)" guest -- \
+	  "$(ROOT)/guest/build-container.sh" --output "$(GUEST_DIST)"
 
 runtime:
-	@$(ROOT)/macos/build-qemu-gpu-runtime.sh
+	@OMARCHY_FORCE_BUILD="$(FORCE)" "$(BUILD_CACHE)" \
+	  --root "$(ROOT)" --state-dir "$(BUILD_STATE)" runtime -- \
+	  "$(ROOT)/macos/build-qemu-gpu-runtime.sh"
 
-app:
-	@$(ROOT)/macos/build-app.sh --guest-dir $(GUEST_DIST)
+app: guest runtime
+	@OMARCHY_FORCE_BUILD="$(FORCE)" "$(BUILD_CACHE)" \
+	  --root "$(ROOT)" --state-dir "$(BUILD_STATE)" app -- \
+	  "$(ROOT)/macos/build-app.sh" --guest-dir "$(GUEST_DIST)"
 
-build: doctor guest runtime app
+build: doctor app
 
 run: app
 	@$(ROOT)/macos/open-qemu-gpu.sh
@@ -67,12 +78,15 @@ run-ephemeral: app
 reset: app
 	@$(ROOT)/macos/open-qemu-gpu.sh --reset-storage
 
-package:
+package: guest runtime
 	@$(ROOT)/macos/build-app.sh --dmg --guest-dir $(GUEST_DIST)
 
-release:
+release-preflight:
 	@[[ "$(RELEASE_SIGN_IDENTITY)" == "Developer ID Application:"* ]] || { echo 'error: RELEASE_SIGN_IDENTITY must be a Developer ID Application identity' >&2; exit 1; }
 	@[[ -n "$(strip $(RELEASE_NOTARY_PROFILE))" ]] || { echo 'error: RELEASE_NOTARY_PROFILE must name a notarytool keychain profile' >&2; exit 1; }
+
+release: release-preflight
+	@$(MAKE) --no-print-directory guest runtime
 	@$(ROOT)/macos/build-app.sh \
 	  --dmg \
 	  --guest-dir "$(GUEST_DIST)" \

@@ -19,8 +19,10 @@ Outputs are written to:
 
 `make package` creates an ad-hoc local build. `make release` uses the maintainer's
 Developer ID Application identity and the `try-omarchy` notarytool keychain
-profile to sign, notarize, and staple the app and DMG. Another maintainer can
-override both defaults:
+profile to sign, notarize, and staple the app and DMG. Both commands first
+ensure the content-hashed guest and runtime artifacts are current; packaging
+and signing themselves always run freshly. Another maintainer can override both
+defaults:
 
 ```sh
 make release \

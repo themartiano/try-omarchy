@@ -1,4 +1,6 @@
 .DS_Store
+__pycache__/
+.pytest_cache/
 *.pem
 .env*
 

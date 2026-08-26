@@ -60,7 +60,18 @@ For a first full build and launch:
 make build run
 ```
 
-The first build downloads pinned sources, assembles a multi-gigabyte guest, and compiles QEMU, so it can take a while. `make build` includes the basic toolchain check. Later native app rebuilds reuse `dist/guest/` and `macos/.build/qemu-gpu-runtime`, so they only need:
+The first build downloads pinned sources, assembles a multi-gigabyte guest, and
+compiles QEMU, so it can take a while. `make build` includes the basic toolchain
+check. Later builds hash the effective inputs and validate the existing outputs,
+then rebuild only the guest, runtime, or app components that changed. To bypass
+that cache deliberately, run `make build FORCE=1` (or add `FORCE=1` to an
+individual component command).
+
+Artifacts created before their `.build/state/` record exists are rebuilt once;
+the cache never adopts an output whose successful inputs it did not observe.
+
+Launching also ensures that the guest, runtime, and native app are current, so
+the normal follow-up command is:
 
 ```sh
 make run

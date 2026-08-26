@@ -24,5 +24,10 @@ Generated files in `dist/` and build caches in `macos/.build/` and
 artifacts and caches. `make clean-all` additionally destroys persistent local
 VM data and should only be used when a complete reset is intended.
 
+Component builds use content-hashed state under `.build/state/`. A state file is
+published only after the build succeeds and its output passes validation. Use
+`FORCE=1` when reviewing reproducibility or when an intentionally unchanged
+input must be rebuilt; do not work around the cache by editing generated state.
+
 By contributing, you agree that your contribution is licensed under the MIT
 License in this repository.
