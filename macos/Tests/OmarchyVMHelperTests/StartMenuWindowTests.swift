@@ -181,7 +181,7 @@ struct StartMenuWindowTests {
         #expect(abs(accessibilityTitleFrame.minX - folderTitleFrame.minX) < 0.5)
         #expect(abs(accessibilityActionFrame.maxX - folderChooseActionFrame.maxX) < 0.5)
         #expect(abs(accessibilityActionFrame.maxX - folderToggleActionFrame.maxX) < 0.5)
-        #expect(folderRowFrame.height >= 92)
+        #expect(folderRowFrame.height >= 100)
         #expect(folderRowFrame.maxY - folderStatusFrame.maxY >= 6)
     }
 

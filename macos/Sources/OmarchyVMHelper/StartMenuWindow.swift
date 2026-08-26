@@ -407,7 +407,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             granted: sharedFolder.isEnabled && sharedFolder.problem == nil,
             statusLabels: ("●  On", "○  Off"),
             actions: sharedFolderActions,
-            minimumHeight: 92
+            minimumHeight: 100
         )
 
         let permissionRows = NSStackView(
