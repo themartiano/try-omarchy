@@ -11,6 +11,12 @@ private final class PointingHandButton: NSButton {
     }
 }
 
+private final class PermissionActionButton: NSButton {
+    override var alignmentRectInsets: NSEdgeInsets {
+        NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+    }
+}
+
 private final class LinkCursorTextField: NSTextField {
     override func resetCursorRects() {
         super.resetCursorRects()
@@ -696,7 +702,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         var trailingViews: [NSView] = [status]
         for (index, actionDescription) in actions.enumerated() {
             let (actionTitle, action) = actionDescription
-            let button = NSButton(title: actionTitle, target: self, action: action)
+            let button = PermissionActionButton(title: actionTitle, target: self, action: action)
             button.controlSize = .regular
             button.isEnabled = !microphoneRequestInFlight && !state.isBusy
             let identifier = actions.count == 1
