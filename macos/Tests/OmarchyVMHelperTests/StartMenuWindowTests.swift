@@ -18,6 +18,9 @@ struct StartMenuWindowTests {
             storageLocationURL: nil,
             storageSpaceEstimate: { nil },
             resetStorage: {},
+            sharedFolderStatus: { .disabled },
+            chooseSharedFolder: { _ in nil },
+            setSharedFolderEnabled: { _ in },
             launch: {}
         )
         menu.show()
