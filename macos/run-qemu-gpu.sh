@@ -641,6 +641,15 @@ if [[ -n $shared_folder ]]; then
     fail "shared folder is missing or is a symbolic link: $shared_folder"
   }
   shared_folder=$(cd "$shared_folder" && pwd -P) || fail "cannot resolve the shared folder"
+  # A symlink in the middle of the path can resolve to a name that the first
+  # check never saw, so validate the canonical path again before it goes into
+  # QEMU's comma-delimited -fsdev option.
+  [[ $shared_folder == /* && -d $shared_folder && ! -L $shared_folder ]] || {
+    fail "shared folder resolves outside a plain directory: $shared_folder"
+  }
+  [[ $shared_folder != *$'\n'* && $shared_folder != *$'\r'* && $shared_folder != *,* ]] || {
+    fail "shared folder resolves to a path with an unsupported character: $shared_folder"
+  }
   [[ $(stat -f '%u' "$shared_folder") == $(id -u) ]] || {
     fail "shared folder must be owned by this user: $shared_folder"
   }

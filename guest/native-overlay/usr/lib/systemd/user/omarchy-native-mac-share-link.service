@@ -1,6 +1,7 @@
 [Unit]
 Description=Link the shared Mac folder into the home directory
-ConditionPathIsMountPoint=/mnt/mac
+# Runs whether or not /mnt/mac is mounted: without a mount it removes links
+# left by an earlier share and restores a displaced xdg folder.
 
 [Service]
 Type=oneshot

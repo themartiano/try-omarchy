@@ -41,7 +41,9 @@ into its home under the same name (`~/Work` on the Mac becomes `~/Work` in
 Omarchy) with full read and write access, so choose a folder you intend Linux
 software to modify. The whole home folder, `~/Library`, and system directories
 cannot be shared. **Turn Off** keeps the choice but stops exporting it on the
-next launch. The share belongs to the first Omarchy account created during
+next launch; Omarchy then removes the link and gives back any standard folder
+such as `~/Documents` that the link had taken over. The share belongs to the
+first Omarchy account created during
 provisioning; additional guest accounts see it read-only.
 
 ## Requirements

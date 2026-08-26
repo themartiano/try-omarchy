@@ -6,7 +6,9 @@
 # user's files as the Omarchy owner account (uid/gid 1000), which is why no
 # uid remapping happens here. At login, --link places ~/<name> in the user's
 # home, where <name> is the Mac folder's own name carried on the kernel
-# command line, so a shared ~/Work shows up as ~/Work.
+# command line, so a shared ~/Work shows up as ~/Work. When nothing is shared,
+# --link removes links left behind by an earlier share and restores any xdg
+# folder (Documents, Downloads, ...) that such a link had displaced.
 
 set -euo pipefail
 
@@ -36,8 +38,30 @@ find_share_device() {
   return 1
 }
 
+# The launcher puts the folder name on the kernel command line only when a
+# share is enabled, so its absence means there is no device to wait for.
+share_enabled() {
+  local argument
+  for argument in $(<"$kernel_cmdline"); do
+    [[ $argument == "$name_parameter="* ]] && return 0
+  done
+  return 1
+}
+
+share_mounted() {
+  case ${OMARCHY_MAC_SHARE_ASSUME_MOUNTED:-} in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  mountpoint -q "$mount_point"
+}
+
 mount_share() {
   local attempt
+  if ! share_enabled; then
+    log "sharing is off; nothing to mount"
+    return 0
+  fi
   modprobe 9pnet_virtio 2>/dev/null || true
   modprobe 9p 2>/dev/null || true
   for ((attempt = 0; attempt < 10; attempt++)); do
@@ -85,23 +109,62 @@ shared_folder_name() {
   echo "$decoded"
 }
 
+# Folders that xdg-user-dirs manages for this user, one absolute path per
+# line. Falls back to the stock names when the session has no config yet.
+xdg_user_dirs() {
+  local home=$1
+  local config=${XDG_CONFIG_HOME:-$home/.config}/user-dirs.dirs
+  local line value
+  if [[ -r $config ]]; then
+    while IFS= read -r line; do
+      [[ $line =~ ^XDG_[A-Z_]+_DIR=\"?([^\"]*)\"?$ ]] || continue
+      value=${BASH_REMATCH[1]}
+      value=${value//\$HOME/$home}
+      [[ $value == /* ]] && echo "$value"
+    done <"$config"
+    return 0
+  fi
+  local name
+  for name in Desktop Documents Downloads Music Pictures Public Templates Videos; do
+    echo "$home/$name"
+  done
+}
+
+# Remove a link to the share. A link that replaced an empty xdg folder gives
+# that folder back so file pickers and downloads keep working.
+remove_share_link() {
+  local link=$1
+  local home=$2
+  local xdg_dir
+  rm -f "$link"
+  while IFS= read -r xdg_dir; do
+    [[ $xdg_dir == "$link" ]] || continue
+    mkdir -p "$link" && log "restored $link after removing the shared folder link"
+    break
+  done < <(xdg_user_dirs "$home")
+}
+
 link_share() {
   local home=${HOME:-}
   local name
-  local target
+  local target=""
   local existing
   [[ -n $home && -d $home ]] || { log "no home directory to link into"; return 0; }
-  if [[ ${OMARCHY_MAC_SHARE_ASSUME_MOUNTED:-0} != 1 ]] && ! mountpoint -q "$mount_point"; then
+  if share_mounted; then
+    name=$(shared_folder_name)
+    target="$home/$name"
+  fi
+  # Drop links from an earlier share so only the current one remains. This
+  # runs even without a mount, otherwise turning sharing off would leave
+  # ~/<old name> pointing at an empty, root-owned mount point.
+  for existing in "$home"/* "$home"/.[!.]*; do
+    [[ -L $existing && $(readlink "$existing") == "$mount_point" && $existing != "$target" ]] || continue
+    remove_share_link "$existing" "$home"
+  done
+  if [[ -z $target ]]; then
     log "no Mac folder is mounted; nothing to link"
     return 0
   fi
-  name=$(shared_folder_name)
-  target="$home/$name"
-  # Drop links from an earlier share name so only the current one remains.
-  for existing in "$home"/* "$home"/.[!.]*; do
-    [[ -L $existing && $(readlink "$existing") == "$mount_point" && $existing != "$target" ]] || continue
-    rm -f "$existing"
-  done
   if [[ -L $target ]]; then
     [[ $(readlink "$target") == "$mount_point" ]] && return 0
     log "$target is a link elsewhere; using ~/$fallback_name instead"
@@ -138,8 +201,9 @@ case ${1:-} in
   --link) link_share ;;
   --find-device) find_share_device ;;
   --name) shared_folder_name ;;
+  --enabled) share_enabled ;;
   *)
-    echo "Usage: omarchy-native-mac-share --mount | --unmount | --link | --find-device | --name" >&2
+    echo "Usage: omarchy-native-mac-share --mount | --unmount | --link | --find-device | --name | --enabled" >&2
     exit 64
     ;;
 esac

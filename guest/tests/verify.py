@@ -11,6 +11,7 @@ import py_compile
 import stat
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -216,11 +217,60 @@ def main() -> None:
             subprocess.run([str(mac_share), "--name"], text=True, env=environment, capture_output=True, check=True).stdout == "Mac\n",
             "Mac share link name falls back to Mac without a launcher parameter",
         )
+
+        # Sharing turned off: the link service still runs, drops every link to
+        # the mount point, and gives back an xdg folder that a link displaced.
+        (home / "Documents" / "keep.txt").unlink()
+        (home / "Documents").rmdir()
+        (home / "Documents").symlink_to("/mnt/mac")
+        (home / ".config").mkdir()
+        (home / ".config" / "user-dirs.dirs").write_text(
+            'XDG_DESKTOP_DIR="$HOME/Desktop"\nXDG_DOCUMENTS_DIR="$HOME/Documents"\n'
+        )
+        environment["OMARCHY_MAC_SHARE_ASSUME_MOUNTED"] = "0"
+        subprocess.run([str(mac_share), "--link"], env=environment, check=True, capture_output=True)
+        check(
+            not (home / "Mac").is_symlink()
+            and not (home / "Mac").exists()
+            and (home / "Documents").is_dir()
+            and not (home / "Documents").is_symlink(),
+            "Mac share link cleanup runs without a mount and restores a displaced xdg folder",
+        )
+        environment["OMARCHY_MAC_SHARE_ASSUME_MOUNTED"] = "1"
+
+        # Sharing turned off: --mount returns at once instead of polling for
+        # a device that will never appear.
+        environment["OMARCHY_MAC_SHARE_TAG"] = "mac"
+        started = time.monotonic()
+        skipped = subprocess.run(
+            [str(mac_share), "--mount"], text=True, env=environment, capture_output=True, check=False
+        )
+        check(
+            skipped.returncode == 0
+            and "sharing is off" in skipped.stderr
+            and time.monotonic() - started < 2,
+            "Mac share mount returns immediately when the launcher shares nothing",
+        )
+        check(
+            subprocess.run([str(mac_share), "--enabled"], env=environment, check=False).returncode == 1,
+            "Mac share reports sharing off without a launcher parameter",
+        )
+        cmdline.write_text("root=/dev/vda rw omarchy.shared_folder_name=RG9jdW1lbnRz\n")
+        check(
+            subprocess.run([str(mac_share), "--enabled"], env=environment, check=False).returncode == 0,
+            "Mac share reports sharing on with a launcher parameter",
+        )
     share_unit = read(GUEST / "native-overlay/usr/lib/systemd/system/omarchy-native-mac-share.service")
     check(
         "ExecStart=/usr/local/bin/omarchy-native-mac-share --mount" in share_unit
         and "Before=sddm.service" in share_unit,
         "Mac share mounts before the display manager",
+    )
+    link_unit = read(GUEST / "native-overlay/usr/lib/systemd/user/omarchy-native-mac-share-link.service")
+    check(
+        "ExecStart=/usr/local/bin/omarchy-native-mac-share --link" in link_unit
+        and "ConditionPathIsMountPoint" not in link_unit,
+        "Mac share link service runs at login even when nothing is mounted",
     )
 
     audio_input_helper = GUEST / "native-overlay/usr/bin/omarchy-audio-input-set-default"
