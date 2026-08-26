@@ -14,6 +14,7 @@ Try Omarchy is not official or affiliated with Omarchy.
 - Resizable native window with automatic guest resolution and HiDPI scale updates
 - Mac audio input/output selection inside Omarchy, with live routing and system-default fallback
 - Two-way clipboard sharing for text and PNG images between macOS and Omarchy
+- One optional shared Mac folder, available inside Omarchy under the same name (`~/Work` stays `~/Work`)
 
 > **Current limitation:** Video decoding is CPU-only, so playback can be slow, especially at high resolutions. An improved video path is in development.
 
@@ -31,6 +32,19 @@ Copy and paste work in both directions as soon as you sign in to Omarchy: text
 and PNG images copied on the Mac appear in the Omarchy clipboard, and content
 copied in Omarchy lands on the Mac pasteboard. Nothing is transferred until
 something is copied.
+
+## Sharing a folder with the Mac
+
+Folder sharing is off until you pick a folder. Use **Choose…** next to
+**Shared folder** on the start menu to select one Mac folder; Omarchy links it
+into its home under the same name (`~/Work` on the Mac becomes `~/Work` in
+Omarchy) with full read and write access, so choose a folder you intend Linux
+software to modify. The whole home folder, `~/Library`, and system directories
+cannot be shared. **Turn Off** keeps the choice but stops exporting it on the
+next launch; Omarchy then removes the link and gives back any standard folder
+such as `~/Documents` that the link had taken over. The share belongs to the
+first Omarchy account created during
+provisioning; additional guest accounts see it read-only.
 
 ## Requirements
 

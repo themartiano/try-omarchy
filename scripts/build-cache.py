@@ -60,7 +60,7 @@ def regular_files(
         for name in sorted(directory_names):
             path = current / name
             relative = path.relative_to(root)
-            if relative.parts[0] in excluded_directories:
+            if relative.parts[0] in excluded_directories or name == "__pycache__":
                 continue
             if path.is_symlink():
                 result.append(path)
@@ -69,7 +69,10 @@ def regular_files(
         directory_names[:] = kept_directories
         for name in sorted(file_names):
             path = current / name
-            if path.relative_to(root).parts[0] not in excluded_directories:
+            if (
+                path.relative_to(root).parts[0] not in excluded_directories
+                and path.suffix not in {".pyc", ".pyo"}
+            ):
                 result.append(path)
     return sorted(result)
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=Mount the Mac folder shared by Try Omarchy
+After=local-fs.target systemd-modules-load.service
+Before=sddm.service display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/omarchy-native-mac-share --mount
+ExecStop=/usr/local/bin/omarchy-native-mac-share --unmount
+
+[Install]
+WantedBy=multi-user.target

@@ -149,6 +149,9 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let storageSpaceEstimate: () -> String?
     private let resetStorage: () -> Void
     private let update: () -> Void
+    private let sharedFolderStatus: () -> SharedFolderMenuState
+    private let chooseSharedFolder: (String) -> String?
+    private let setSharedFolderEnabled: (Bool) -> Void
     private let launch: () -> Void
     private let canResetStorage: Bool
     private let storageLocation: String?
@@ -170,6 +173,9 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         resetStorage: @escaping () -> Void,
         primaryAction: VMStartMenuPrimaryAction = .launch,
         update: @escaping () -> Void = {},
+        sharedFolderStatus: @escaping () -> SharedFolderMenuState = { .disabled },
+        chooseSharedFolder: @escaping (String) -> String? = { _ in nil },
+        setSharedFolderEnabled: @escaping (Bool) -> Void = { _ in },
         launch: @escaping () -> Void
     ) {
         self.accessibilityStatus = accessibilityStatus
@@ -182,11 +188,14 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         self.storageSpaceEstimate = storageSpaceEstimate
         self.resetStorage = resetStorage
         self.update = update
+        self.sharedFolderStatus = sharedFolderStatus
+        self.chooseSharedFolder = chooseSharedFolder
+        self.setSharedFolderEnabled = setSharedFolderEnabled
         self.launch = launch
         state = VMStartMenuState(primaryAction: primaryAction)
 
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 510),
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 590),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -353,7 +362,37 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 : #selector(beginMicrophoneRequest)
         )
 
-        let permissionRows = NSStackView(views: [accessibilityRow, separator(), microphoneRow])
+        let sharedFolder = sharedFolderStatus()
+        let sharedFolderDetail: String
+        var sharedFolderActions: [(String, Selector)] = [("Choose…", #selector(beginSharedFolderSelection))]
+        if let problem = sharedFolder.problem {
+            sharedFolderDetail = problem
+        } else if let displayPath = sharedFolder.displayPath, sharedFolder.isEnabled {
+            sharedFolderDetail = "Omarchy can read and write “\(displayPath)” as ~/\(SharedFolderPolicy.guestLinkName(sharedFolder.path ?? displayPath))."
+        } else if let displayPath = sharedFolder.displayPath {
+            sharedFolderDetail = "Off. “\(displayPath)” stays private to this Mac until turned on."
+        } else {
+            sharedFolderDetail = "Optional. Pick a Mac folder to use inside Omarchy under the same name."
+        }
+        if sharedFolder.path != nil {
+            sharedFolderActions.append(
+                sharedFolder.isEnabled
+                    ? ("Turn Off", #selector(disableSharedFolder))
+                    : ("Turn On", #selector(enableSharedFolder))
+            )
+        }
+        let sharedFolderRow = permissionRow(
+            symbolName: "folder",
+            title: "Shared folder",
+            detail: sharedFolderDetail,
+            granted: sharedFolder.isEnabled && sharedFolder.problem == nil,
+            statusLabels: ("●  On", "○  Off"),
+            actions: sharedFolderActions
+        )
+
+        let permissionRows = NSStackView(
+            views: [accessibilityRow, separator(), microphoneRow, separator(), sharedFolderRow]
+        )
         permissionRows.orientation = .vertical
         permissionRows.alignment = .width
         permissionRows.spacing = 0
@@ -549,6 +588,24 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         actionTitle: String?,
         action: Selector
     ) -> NSView {
+        permissionRow(
+            symbolName: symbolName,
+            title: title,
+            detail: detail,
+            granted: granted,
+            statusLabels: ("●  Yes", "○  No"),
+            actions: actionTitle.map { [($0, action)] } ?? []
+        )
+    }
+
+    private func permissionRow(
+        symbolName: String,
+        title: String,
+        detail: String,
+        granted: Bool,
+        statusLabels: (granted: String, denied: String),
+        actions: [(String, Selector)]
+    ) -> NSView {
         let symbol = NSImageView()
         symbol.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
         symbol.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 19, weight: .medium)
@@ -572,7 +629,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         labels.alignment = .leading
         labels.spacing = 3
 
-        let statusText = granted ? "●  Yes" : "○  No"
+        let statusText = granted ? statusLabels.granted : statusLabels.denied
         let statusFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
         let status = NSTextField(labelWithString: statusText)
         status.font = statusFont
@@ -597,7 +654,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         status.setContentHuggingPriority(.required, for: .horizontal)
 
         var trailingViews: [NSView] = [status]
-        if let actionTitle {
+        for (actionTitle, action) in actions {
             let button = NSButton(title: actionTitle, target: self, action: action)
             button.controlSize = .small
             button.isEnabled = !microphoneRequestInFlight && !state.isBusy
@@ -689,6 +746,46 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
 
     @objc private func resetOmarchy() {
         confirmReset()
+    }
+
+    @objc private func beginSharedFolderSelection() {
+        guard !state.isBusy else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Choose a folder to share with Omarchy"
+        panel.message = "Omarchy will be able to read and change everything inside this folder, linked as ~/<folder name>."
+        panel.prompt = "Share"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = true
+        if let current = sharedFolderStatus().path {
+            panel.directoryURL = URL(fileURLWithPath: current, isDirectory: true)
+        } else {
+            panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let problem = chooseSharedFolder(url.path) {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "That folder can’t be shared"
+            alert.informativeText = problem
+            alert.addButton(withTitle: "OK")
+            alert.beginSheetModal(for: window)
+        }
+        render()
+    }
+
+    @objc private func enableSharedFolder() {
+        guard !state.isBusy else { return }
+        setSharedFolderEnabled(true)
+        render()
+    }
+
+    @objc private func disableSharedFolder() {
+        guard !state.isBusy else { return }
+        setSharedFolderEnabled(false)
+        render()
     }
 
     private func confirmReset() {

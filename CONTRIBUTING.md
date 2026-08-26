@@ -29,5 +29,27 @@ published only after the build succeeds and its output passes validation. Use
 `FORCE=1` when reviewing reproducibility or when an intentionally unchanged
 input must be rebuilt; do not work around the cache by editing generated state.
 
+## Updating Omarchy
+
+Pin an official upstream release, refresh the complete ARM64 transaction lock,
+and verify the source contract with one command:
+
+```sh
+make update-omarchy OMARCHY_RELEASE=4.0.1
+```
+
+The command keeps a complete shallow source checkout under `.build/upstream/`,
+verifies that its clean `HEAD` is the requested release tag, and derives the
+commit, Git tree, normalized source digest, source timestamp, source-reported
+version, and official release version. It then refreshes the package lock and
+runs the guest contract against that exact checkout.
+
+Before committing an update, review the upstream diff—especially changes to
+`install/omarchy-base.packages`—against the intentionally trimmed
+`guest/packages.txt`. Add runtime dependencies the native guest now needs, then
+run `make guest` and `make test`. The upstream source can report a development
+version even for an official tag, so never hand-edit the `version` or `release`
+fields to make them agree; they record different upstream identities.
+
 By contributing, you agree that your contribution is licensed under the MIT
 License in this repository.

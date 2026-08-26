@@ -97,8 +97,10 @@ class UpdateRootTests(unittest.TestCase):
         regular_exact = set(prepare.EXACT_OWNED_PATHS)
         symlinks = {
             "/etc/fonts/conf.d/50-omarchy.conf": "/usr/share/fontconfig/conf.avail/50-omarchy.conf",
+            "/etc/systemd/system/multi-user.target.wants/omarchy-native-mac-share.service": "/usr/lib/systemd/system/omarchy-native-mac-share.service",
             "/etc/systemd/system/multi-user.target.wants/try-omarchy-health.service": "/usr/lib/systemd/system/try-omarchy-health.service",
             "/etc/systemd/user/default.target.wants/omarchy-native-audio-bridge.service": "/usr/lib/systemd/user/omarchy-native-audio-bridge.service",
+            "/etc/systemd/user/default.target.wants/omarchy-native-mac-share-link.service": "/usr/lib/systemd/user/omarchy-native-mac-share-link.service",
             "/etc/systemd/user/graphical-session.target.wants/omarchy-native-clipboard-bridge.service": "/usr/lib/systemd/user/omarchy-native-clipboard-bridge.service",
             "/etc/systemd/user/graphical-session.target.wants/try-omarchy-graphical-health.service": "/usr/lib/systemd/user/try-omarchy-graphical-health.service",
         }
@@ -285,6 +287,9 @@ class UpdateRootTests(unittest.TestCase):
                 "/usr/share/uwsm/env.d/10-omarchy",
                 "/usr/share/try-omarchy/repo/try-omarchy.db",
                 "/usr/share/try-omarchy/build-spec.json",
+                "/usr/local/bin/omarchy-native-mac-share",
+                "/etc/systemd/system/multi-user.target.wants/omarchy-native-mac-share.service",
+                "/etc/systemd/user/default.target.wants/omarchy-native-mac-share-link.service",
             ):
                 self.assertIn(representative, payload_paths)
             self.assertFalse(any(path.startswith("/home/") for path in payload_paths))
@@ -536,10 +541,13 @@ class HealthReportTests(unittest.TestCase):
                 "usr/local/bin/omarchy-native-audio-bridge",
                 "usr/local/bin/omarchy-native-clipboard-bridge",
                 "usr/local/bin/omarchy-native-display-sync",
+                "usr/local/bin/omarchy-native-mac-share",
                 "usr/local/lib/try-omarchy/owned-payload",
+                "usr/lib/systemd/system/omarchy-native-mac-share.service",
                 "usr/lib/systemd/system/try-omarchy-health.service",
                 "usr/lib/systemd/user/omarchy-native-audio-bridge.service",
                 "usr/lib/systemd/user/omarchy-native-clipboard-bridge.service",
+                "usr/lib/systemd/user/omarchy-native-mac-share-link.service",
                 "usr/lib/systemd/user/try-omarchy-graphical-health.service",
             ]
             for relative in required:
@@ -605,10 +613,13 @@ class HealthReportTests(unittest.TestCase):
                 "usr/local/bin/omarchy-native-audio-bridge",
                 "usr/local/bin/omarchy-native-clipboard-bridge",
                 "usr/local/bin/omarchy-native-display-sync",
+                "usr/local/bin/omarchy-native-mac-share",
                 "usr/local/lib/try-omarchy/owned-payload",
+                "usr/lib/systemd/system/omarchy-native-mac-share.service",
                 "usr/lib/systemd/system/try-omarchy-health.service",
                 "usr/lib/systemd/user/omarchy-native-audio-bridge.service",
                 "usr/lib/systemd/user/omarchy-native-clipboard-bridge.service",
+                "usr/lib/systemd/user/omarchy-native-mac-share-link.service",
                 "usr/lib/systemd/user/try-omarchy-graphical-health.service",
             ]
             for relative in required:

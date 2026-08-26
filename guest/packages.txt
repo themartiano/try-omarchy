@@ -47,6 +47,7 @@ pipewire-alsa
 pipewire-pulse
 polkit
 python
+qt6-imageformats
 qt6-wayland
 quickshell
 ripgrep

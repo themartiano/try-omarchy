@@ -72,23 +72,26 @@ import sys
 
 spec = json.loads(pathlib.Path(sys.argv[1]).read_text())
 print(spec["upstream"]["version"])
+print(spec["upstream"]["release"])
 print(spec["upstream"]["repository"])
 print(spec["upstream"]["commit"])
 print(spec["image"]["sourceDateEpoch"])
 PY
 )
-(( ${#metadata[@]} == 4 )) || fail "could not read package identity from spec"
-version=${metadata[0]}
-repository=${metadata[1]}
-commit=${metadata[2]}
-source_date_epoch=${metadata[3]}
-[[ $version =~ ^[A-Za-z0-9._+]+$ ]] || fail "unsafe package version: $version"
+(( ${#metadata[@]} == 5 )) || fail "could not read package identity from spec"
+source_version=${metadata[0]}
+release=${metadata[1]}
+repository=${metadata[2]}
+commit=${metadata[3]}
+source_date_epoch=${metadata[4]}
+[[ $source_version =~ ^[A-Za-z0-9._+]+$ ]] || fail "unsafe source version: $source_version"
+[[ $release =~ ^[A-Za-z0-9._+]+$ ]] || fail "unsafe release version: $release"
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || fail "invalid upstream commit"
 [[ $source_date_epoch =~ ^[0-9]+$ ]] || fail "invalid source date epoch"
-[[ $(<"$root/usr/share/omarchy/version") == "$version" ]] || fail "staged version differs from spec"
+[[ $(<"$root/usr/share/omarchy/version") == "$source_version" ]] || fail "staged version differs from spec"
 
 package_name=try-omarchy-runtime
-package_version="$version-1"
+package_version="$release-1"
 stage=$(mktemp -d "$work/omarchy-runtime-package.XXXXXX")
 cleanup() {
   rm -rf "$stage"
@@ -131,7 +134,7 @@ packager = Try Omarchy reproducible guest builder
 size = $installed_size
 arch = any
 license = MIT
-provides = omarchy=$version
+provides = omarchy=$release
 EOF
 
 archive="$stage/$package_name-$package_version-any.pkg.tar.zst"

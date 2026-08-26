@@ -117,6 +117,8 @@ cat >"$fixture_macos/.build/qemu-gpu-runtime/bin/qemu-system-aarch64" <<'SH'
 # OMARCHY_SDL_AUDIO_CONTROL_DIRECTORY
 # OMARCHY_SDL_INPUT_DEVICE_NAME
 # OMARCHY_SDL_OUTPUT_DEVICE_NAME
+# guest_owner_uid
+# guest_owner_gid
 case " $* " in
   *' -accel help '*) printf '%s\n' hvf ;;
   *' -machine help '*) printf '%s\n' 'virt                 ARM Virtual Machine' ;;
@@ -125,7 +127,7 @@ case " $* " in
   *' -device help '*)
     for device in \
       hda-micro intel-hda virtconsole virtserialport virtio-balloon-pci \
-      virtio-blk-pci virtio-gpu-gl-pci virtio-keyboard-pci virtio-net-pci \
+      virtio-9p-pci virtio-blk-pci virtio-gpu-gl-pci virtio-keyboard-pci virtio-net-pci \
       virtio-rng-pci virtio-serial-pci virtio-tablet-pci; do
       printf 'name "%s"\n' "$device"
     done

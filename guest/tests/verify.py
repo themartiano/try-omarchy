@@ -8,9 +8,11 @@ import hashlib
 import json
 import os
 import py_compile
+import re
 import stat
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -44,6 +46,11 @@ def main() -> None:
     check(spec["image"]["architecture"] == "aarch64", "guest is ARM64-only")
     check(spec["guest"].get("profile") == "factory", "guest is an unprovisioned factory image")
     check(spec["guest"].get("username") is None, "factory image has no baked-in user")
+    check(
+        re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-.][A-Za-z0-9.]+)?", spec["upstream"].get("release", ""))
+        is not None,
+        "upstream release is explicit",
+    )
     check(spec["runtime"]["virtualMachineMonitor"] == "qemu-system-aarch64", "runtime uses native ARM QEMU")
     check(spec["runtime"]["hypervisor"] == "hvf", "runtime uses Apple Hypervisor.framework")
     check(spec["runtime"]["storage"]["expandedSizeMiB"] == 24576, "working disk expands to 24 GiB")
@@ -109,6 +116,23 @@ def main() -> None:
         spec["runtime"]["clipboard"]["port"] == "dev.tryomarchy.clipboard",
         "clipboard contract names the virtio port",
     )
+    check(
+        '"$root/usr/local/bin/omarchy-native-mac-share"' in configure
+        and "default.target.wants/omarchy-native-mac-share-link.service" in configure,
+        "guest links the shared Mac folder into each home at login",
+    )
+    shared_folder = spec["runtime"]["sharedFolder"]
+    check(
+        shared_folder["device"] == "virtio-9p-pci"
+        and shared_folder["securityModel"] == "none"
+        and shared_folder["guestOwnerUid"] == 1000
+        and shared_folder["guestOwnerGid"] == 1000
+        and shared_folder["mountTag"] == "mac"
+        and shared_folder["guestMountPoint"] == "/mnt/mac"
+        and shared_folder["guestLinkNameParameter"] == "omarchy.shared_folder_name"
+        and "virtio-9p-pci" in spec["runtime"]["devices"],
+        "shared folder contract maps Mac files to the first Omarchy user over virtio-9p",
+    )
     zram_override = read(
         GUEST
         / "factory-overlay/etc/systemd/zram-generator.conf.d/99-try-omarchy.conf"
@@ -152,6 +176,8 @@ def main() -> None:
                 "/etc/skel",
                 "/usr/share/omarchy",
                 "/usr/share/try-omarchy/repo",
+                "omarchy-native-mac-share.service",
+                "omarchy-native-mac-share-link.service",
                 "factory-overlay",
                 "native-overlay",
                 "SOURCE_TREE_MAPPINGS",
@@ -220,6 +246,7 @@ def main() -> None:
     finalizer = read(GUEST / "scripts/finalize-rootfs.sh")
     check("factory" in finalizer and "aarch64" in finalizer, "finalizer enforces the native factory contract")
     check("systemd-growfs-root.service" in finalizer, "factory disk grows on first boot")
+    check("systemctl enable omarchy-native-mac-share.service" in finalizer, "shared Mac folder mounts at boot")
 
     manifest_writer = read(GUEST / "scripts/write-guest-manifest.py")
     check('"kind": "try-omarchy-guest-artifacts"' in manifest_writer, "new artifacts use the native manifest identity")
@@ -266,6 +293,127 @@ def main() -> None:
     check(
         'ATTR{name}=="dev.tryomarchy.clipboard"' in clipboard_rule and 'GROUP="users"' in clipboard_rule,
         "clipboard port is readable by the provisioned users group",
+    )
+    mac_share = GUEST / "native-overlay/usr/local/bin/omarchy-native-mac-share"
+    check(mac_share.stat().st_mode & stat.S_IXUSR != 0, "native Mac share mounter is executable")
+    with tempfile.TemporaryDirectory() as temporary:
+        temporary_path = Path(temporary)
+        virtio_root = temporary_path / "9pnet_virtio"
+        other = virtio_root / "virtio2"
+        other.mkdir(parents=True)
+        (other / "mount_tag").write_bytes(b"other\0")
+        share = virtio_root / "virtio3"
+        share.mkdir()
+        (share / "mount_tag").write_bytes(b"mac\0")
+        environment = os.environ.copy()
+        environment["OMARCHY_MAC_SHARE_VIRTIO_ROOT"] = str(virtio_root)
+        found = subprocess.run(
+            [str(mac_share), "--find-device"],
+            text=True,
+            env=environment,
+            capture_output=True,
+            check=True,
+        )
+        check(found.stdout.strip() == "virtio3", "Mac share mounter finds the virtio-9p device by mount tag")
+        environment["OMARCHY_MAC_SHARE_TAG"] = "absent"
+        missing = subprocess.run(
+            [str(mac_share), "--find-device"],
+            text=True,
+            env=environment,
+            capture_output=True,
+            check=False,
+        )
+        check(missing.returncode == 1 and missing.stdout == "", "Mac share mounter reports an absent share")
+
+        cmdline = temporary_path / "cmdline"
+        # "Wörk Files" as URL-safe base64 without padding, as the launcher emits it.
+        cmdline.write_text("root=/dev/vda rw omarchy.qemu_virgl=1 omarchy.shared_folder_name=V8O2cmsgRmlsZXM\n")
+        home = temporary_path / "home"
+        (home / "Documents").mkdir(parents=True)
+        (home / "OldName").symlink_to("/mnt/mac")
+        environment["OMARCHY_MAC_SHARE_CMDLINE"] = str(cmdline)
+        environment["OMARCHY_MAC_SHARE_ASSUME_MOUNTED"] = "1"
+        environment["HOME"] = str(home)
+        name = subprocess.run([str(mac_share), "--name"], text=True, env=environment, capture_output=True, check=True)
+        check(name.stdout == "Wörk Files\n", "Mac share link name decodes from the kernel command line")
+        subprocess.run([str(mac_share), "--link"], env=environment, check=True, capture_output=True)
+        check(
+            os.readlink(home / "Wörk Files") == "/mnt/mac" and not (home / "OldName").exists(),
+            "Mac share link uses the Mac folder name and drops stale links",
+        )
+        cmdline.write_text("root=/dev/vda rw omarchy.shared_folder_name=RG9jdW1lbnRz\n")
+        subprocess.run([str(mac_share), "--link"], env=environment, check=True, capture_output=True)
+        check(
+            os.readlink(home / "Documents") == "/mnt/mac" and not (home / "Wörk Files").exists(),
+            "Mac share link replaces an empty xdg folder of the same name",
+        )
+        (home / "Documents").unlink()
+        (home / "Documents").mkdir()
+        (home / "Documents" / "keep.txt").write_text("keep")
+        subprocess.run([str(mac_share), "--link"], env=environment, check=True, capture_output=True)
+        check(
+            (home / "Documents" / "keep.txt").exists() and os.readlink(home / "Mac") == "/mnt/mac",
+            "Mac share link keeps a populated folder and falls back to ~/Mac",
+        )
+        cmdline.write_text("root=/dev/vda rw\n")
+        check(
+            subprocess.run([str(mac_share), "--name"], text=True, env=environment, capture_output=True, check=True).stdout == "Mac\n",
+            "Mac share link name falls back to Mac without a launcher parameter",
+        )
+
+        # Sharing turned off: the link service still runs, drops every link to
+        # the mount point, and gives back an xdg folder that a link displaced.
+        (home / "Documents" / "keep.txt").unlink()
+        (home / "Documents").rmdir()
+        (home / "Documents").symlink_to("/mnt/mac")
+        (home / ".config").mkdir()
+        (home / ".config" / "user-dirs.dirs").write_text(
+            'XDG_DESKTOP_DIR="$HOME/Desktop"\nXDG_DOCUMENTS_DIR="$HOME/Documents"\n'
+        )
+        environment["OMARCHY_MAC_SHARE_ASSUME_MOUNTED"] = "0"
+        subprocess.run([str(mac_share), "--link"], env=environment, check=True, capture_output=True)
+        check(
+            not (home / "Mac").is_symlink()
+            and not (home / "Mac").exists()
+            and (home / "Documents").is_dir()
+            and not (home / "Documents").is_symlink(),
+            "Mac share link cleanup runs without a mount and restores a displaced xdg folder",
+        )
+        environment["OMARCHY_MAC_SHARE_ASSUME_MOUNTED"] = "1"
+
+        # Sharing turned off: --mount returns at once instead of polling for
+        # a device that will never appear.
+        environment["OMARCHY_MAC_SHARE_TAG"] = "mac"
+        started = time.monotonic()
+        skipped = subprocess.run(
+            [str(mac_share), "--mount"], text=True, env=environment, capture_output=True, check=False
+        )
+        check(
+            skipped.returncode == 0
+            and "sharing is off" in skipped.stderr
+            and time.monotonic() - started < 2,
+            "Mac share mount returns immediately when the launcher shares nothing",
+        )
+        check(
+            subprocess.run([str(mac_share), "--enabled"], env=environment, check=False).returncode == 1,
+            "Mac share reports sharing off without a launcher parameter",
+        )
+        cmdline.write_text("root=/dev/vda rw omarchy.shared_folder_name=RG9jdW1lbnRz\n")
+        check(
+            subprocess.run([str(mac_share), "--enabled"], env=environment, check=False).returncode == 0,
+            "Mac share reports sharing on with a launcher parameter",
+        )
+    share_unit = read(GUEST / "native-overlay/usr/lib/systemd/system/omarchy-native-mac-share.service")
+    check(
+        "ExecStart=/usr/local/bin/omarchy-native-mac-share --mount" in share_unit
+        and "Before=sddm.service" in share_unit,
+        "Mac share mounts before the display manager",
+    )
+    link_unit = read(GUEST / "native-overlay/usr/lib/systemd/user/omarchy-native-mac-share-link.service")
+    check(
+        "ExecStart=/usr/local/bin/omarchy-native-mac-share --link" in link_unit
+        and "ConditionPathIsMountPoint" not in link_unit,
+        "Mac share link service runs at login even when nothing is mounted",
     )
 
     audio_input_helper = GUEST / "native-overlay/usr/bin/omarchy-audio-input-set-default"
@@ -367,6 +515,7 @@ HOTPLUG=1
     shell_files = [
         GUEST / "test",
         display_sync,
+        mac_share,
         *GUEST.glob("*.sh"),
         *GUEST.glob("scripts/*.sh"),
         *GUEST.glob("migrations/*.sh"),
@@ -392,6 +541,14 @@ HOTPLUG=1
             capture_output=True,
         ).stdout.strip()
         check(actual_commit == expected_commit, "optional Omarchy source checkout matches the pinned commit")
+        release_tag = f"v{spec['upstream']['release']}^{{commit}}"
+        tagged_commit = subprocess.run(
+            ["git", "-C", str(source), "rev-parse", release_tag],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+        check(tagged_commit == expected_commit, "optional Omarchy source checkout matches the release tag")
         for relative in spec["authenticity"]["requiredPaths"]:
             check((source / relative).exists(), f"pinned source contains {relative}")
 

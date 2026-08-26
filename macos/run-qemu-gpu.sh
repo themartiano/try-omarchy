@@ -130,6 +130,7 @@ for device in \
   virtconsole \
   virtserialport \
   virtio-balloon-pci \
+  virtio-9p-pci \
   virtio-blk-pci \
   virtio-gpu-gl-pci \
   virtio-keyboard-pci \
@@ -138,6 +139,11 @@ for device in \
   virtio-serial-pci \
   virtio-tablet-pci; do
   require_qemu_device "$device"
+done
+for marker in guest_owner_uid guest_owner_gid; do
+  LC_ALL=C grep -aFq "$marker" "$qemu_bin" || {
+    fail "staged QEMU lacks the shared-folder owner mapping; run make runtime"
+  }
 done
 
 qemu_entitlements=$(codesign -d --entitlements - "$qemu_bin" 2>&1) || {
@@ -366,6 +372,7 @@ runtime = exact_keys(
         "minimumMemoryMiB",
         "network",
         "recommendedMemoryMiB",
+        "sharedFolder",
         "storage",
         "update",
         "virtualMachineMonitor",
@@ -385,11 +392,22 @@ expected_devices = [
     "virtio-balloon-pci",
     "intel-hda",
     "hda-micro",
+    "virtio-9p-pci",
 ]
 clipboard = {
     "device": "virtserialport",
     "port": "dev.tryomarchy.clipboard",
     "formats": ["text/plain;charset=utf-8", "image/png"],
+}
+shared_folder = {
+    "device": "virtio-9p-pci",
+    "fsdriver": "local",
+    "securityModel": "none",
+    "mountTag": "mac",
+    "guestOwnerUid": 1000,
+    "guestOwnerGid": 1000,
+    "guestMountPoint": "/mnt/mac",
+    "guestLinkNameParameter": "omarchy.shared_folder_name",
 }
 graphics = {
     "device": "virtio-gpu-gl-pci",
@@ -454,6 +472,7 @@ if (
     or runtime.get("audio") != audio
     or runtime.get("storage") != storage
     or runtime.get("clipboard") != clipboard
+    or runtime.get("sharedFolder") != shared_folder
     or runtime.get("devices") != expected_devices
     or runtime.get("minimumMemoryMiB") != 2048
     or runtime.get("recommendedMemoryMiB") != 4096
@@ -463,13 +482,14 @@ if (
 
 upstream = exact_keys(
     spec.get("upstream"),
-    {"channel", "commit", "license", "repository", "tree", "treeSha256", "version"},
+    {"channel", "commit", "license", "release", "repository", "tree", "treeSha256", "version"},
     "build spec upstream",
 )
 if (
     upstream.get("repository") != "https://github.com/basecamp/omarchy"
     or upstream.get("channel") != "quattro"
     or upstream.get("license") != "MIT"
+    or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-.][A-Za-z0-9.]+)?", str(upstream.get("release", "")))
     or not isinstance(upstream.get("version"), str)
     or not re.fullmatch(r"[0-9a-f]{40}", str(upstream.get("commit", "")))
     or not re.fullmatch(r"[0-9a-f]{40}", str(upstream.get("tree", "")))
@@ -518,6 +538,7 @@ for required in ("root=/dev/vda", "rw", "rootwait", "console=tty0", "console=hvc
         fail(f"kernel command line must contain exactly one {required}")
 launcher_owned_arguments = {
     "omarchy.qemu_virgl",
+    "omarchy.shared_folder_name",
     "systemd.unit",
     "tryomarchy.transaction",
     "tryomarchy.update",
@@ -672,6 +693,59 @@ if (( host_cpu_count < vcpu_count )); then
   vcpu_count=$host_cpu_count
 fi
 (( vcpu_count >= 4 )) || fail "the ARM guest requires at least four host CPUs"
+
+# The launcher publishes one optional Mac folder for the guest. The Swift app
+# canonicalizes and validates the selection first; re-check here so a stray
+# environment value can never export an unsafe tree. Empty means disabled.
+shared_folder=${OMARCHY_QEMU_GPU_SHARED_FOLDER:-}
+shared_folder_mount_tag=mac
+shared_folder_guest_owner_uid=1000
+shared_folder_guest_owner_gid=1000
+shared_folder_kernel_argument=""
+if [[ -n $shared_folder ]]; then
+  [[ $shared_folder == /* ]] || fail "shared folder must be an absolute path"
+  [[ $shared_folder != *$'\n'* && $shared_folder != *$'\r'* && $shared_folder != *,* ]] || {
+    fail "shared folder path contains an unsupported character"
+  }
+  [[ -d $shared_folder && ! -L $shared_folder ]] || {
+    fail "shared folder is missing or is a symbolic link: $shared_folder"
+  }
+  shared_folder=$(cd "$shared_folder" && pwd -P) || fail "cannot resolve the shared folder"
+  # A symlink in the middle of the path can resolve to a name that the first
+  # check never saw, so validate the canonical path again before it goes into
+  # QEMU's comma-delimited -fsdev option.
+  [[ $shared_folder == /* && -d $shared_folder && ! -L $shared_folder ]] || {
+    fail "shared folder resolves outside a plain directory: $shared_folder"
+  }
+  [[ $shared_folder != *$'\n'* && $shared_folder != *$'\r'* && $shared_folder != *,* ]] || {
+    fail "shared folder resolves to a path with an unsupported character: $shared_folder"
+  }
+  [[ $(stat -f '%u' "$shared_folder") == $(id -u) ]] || {
+    fail "shared folder must be owned by this user: $shared_folder"
+  }
+  home_dir=$(cd "$HOME" 2>/dev/null && pwd -P || true)
+  case "$shared_folder" in
+    /|/Users|/private|/private/tmp|/tmp|/System|/Library|/Applications|/Volumes)
+      fail "refusing to share a system directory: $shared_folder"
+      ;;
+  esac
+  if [[ -n $home_dir ]]; then
+    [[ $shared_folder != "$home_dir" ]] || fail "refusing to share the whole home folder"
+    [[ $shared_folder != "$home_dir/Library" && $shared_folder != "$home_dir/Library/"* ]] || {
+      fail "refusing to share the Library folder"
+    }
+  fi
+  # The guest links ~/<name> to the mount so a shared ~/Work appears as ~/Work.
+  # The name travels on the kernel command line as URL-safe base64, which keeps
+  # spaces and non-ASCII names intact inside one space-delimited parameter.
+  shared_folder_name=${shared_folder##*/}
+  [[ -n $shared_folder_name && $shared_folder_name != . && $shared_folder_name != .. ]] || {
+    fail "shared folder has no usable name: $shared_folder"
+  }
+  shared_folder_name_encoded=$(printf '%s' "$shared_folder_name" | base64 | tr '+/' '-_' | tr -d '=\n')
+  [[ $shared_folder_name_encoded =~ ^[A-Za-z0-9_-]+$ ]] || fail "cannot encode the shared folder name"
+  shared_folder_kernel_argument=" omarchy.shared_folder_name=$shared_folder_name_encoded"
+fi
 
 work_dir=""
 owner_marker=""
@@ -1077,7 +1151,7 @@ qemu_args=(
   -qmp "unix:$qmp_socket,server=on,wait=off"
   -kernel "$launch_kernel"
   -initrd "$launch_initramfs"
-  -append "$kernel_command_line omarchy.qemu_virgl=1"
+  -append "$kernel_command_line omarchy.qemu_virgl=1$shared_folder_kernel_argument"
   -drive "if=none,id=omarchy-root,file=$working_disk,format=raw,media=disk,cache=writeback"
   -device 'virtio-blk-pci,drive=omarchy-root,serial=omarchy-root'
   -device "$gpu_device"
@@ -1113,6 +1187,17 @@ if [[ $QEMU_SELECTED_STORAGE_MODE == persistent && \
   )
 fi
 
+if [[ -n $shared_folder ]]; then
+  # security_model=none performs every host operation as this Mac user and
+  # ignores guest chown requests, so the Mac keeps real modes and ownership.
+  # The patched local driver reports this user's files as the Omarchy owner
+  # account so the guest kernel grants matching read/write access.
+  qemu_args+=(
+    -fsdev "local,id=omarchy-share,path=$shared_folder,security_model=none,multidevs=remap,guest_owner_uid=$shared_folder_guest_owner_uid,guest_owner_gid=$shared_folder_guest_owner_gid"
+    -device "virtio-9p-pci,fsdev=omarchy-share,mount_tag=$shared_folder_mount_tag,romfile="
+  )
+fi
+
 # SDL2 has one legacy process-wide override that would collapse input and
 # output onto the same named device. The patched QEMU backend uses the two
 # direction-specific Omarchy variables instead; unset means live System Default.
@@ -1137,6 +1222,11 @@ if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
       "$native_bridge" "$control_bridge_socket" "$control_event" \
       "$boot_abi" "$guest_state_schema" >&2
   fi
+  if [[ -n $shared_folder ]]; then
+    printf '\n[qemu-gpu] shared folder: %q' "$shared_folder" >&2
+  else
+    printf '\n[qemu-gpu] shared folder: disabled' >&2
+  fi
   printf '\n' >&2
   exit 0
 fi
@@ -1149,6 +1239,9 @@ if [[ $QEMU_SELECTED_STORAGE_MODE == persistent ]]; then
   echo "[qemu-gpu] User data: $QEMU_PERSISTENT_STORAGE_DIRECTORY" >&2
 else
   echo "[qemu-gpu] Starting a disposable ARM64 VirGL guest with $vcpu_count vCPUs and 4 GiB RAM." >&2
+fi
+if [[ -n $shared_folder ]]; then
+  echo "[qemu-gpu] Shared folder: $shared_folder (guest ~/$shared_folder_name)" >&2
 fi
 "$qemu_bin" "${qemu_args[@]}" &
 qemu_pid=$!

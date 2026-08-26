@@ -42,6 +42,16 @@ fingerprint of what it last wrote so the immediate echo is dropped. The marker
 is cleared as soon as the other side moves on to new content, and expires after
 a couple of seconds regardless, so a genuine repeat of the same content still flows.
 
+When a folder is chosen on the start menu, QEMU exports it over virtio-9p with
+`security_model=none`, so every host file operation runs as the Mac user and
+the Mac keeps real modes and ownership. A small QEMU patch adds
+`guest_owner_uid`/`guest_owner_gid` fsdev options that report the Mac user's
+files as the first Omarchy account (uid/gid 1000), which makes the guest
+kernel's permission checks agree with what the host will actually allow. The
+guest mounts the tag at `/mnt/mac` before the display manager starts, and a
+user unit links `~/<folder name>` to it at login; the name travels on the
+kernel command line as `omarchy.shared_folder_name=<base64url>`.
+
 ## The ARM64 image
 
 The guest image is built by this project; it is not an official prebuilt image
@@ -58,7 +68,7 @@ creates the account on first boot.
 - The Swift code is a separate macOS launcher and helper.
 - A few QEMU C and Objective-C files are patched before QEMU is compiled. These
   patches cover the Cocoa app identity, display behavior, graphics integration,
-  and host audio-device routing.
+  host audio-device routing, and shared-folder ownership mapping.
 - The pinned Omarchy runtime trees are copied from upstream. Guest overlays add
   the QEMU and ARM64 integration around them.
 

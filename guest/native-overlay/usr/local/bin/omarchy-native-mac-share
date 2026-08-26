@@ -1,0 +1,209 @@
+#!/bin/bash
+
+# Mount the Mac folder that Try Omarchy exports over virtio-9p. The host
+# publishes the share with mount tag "mac" only when the user enabled one, so
+# a missing tag simply means nothing to do. QEMU already reports the Mac
+# user's files as the Omarchy owner account (uid/gid 1000), which is why no
+# uid remapping happens here. At login, --link places ~/<name> in the user's
+# home, where <name> is the Mac folder's own name carried on the kernel
+# command line, so a shared ~/Work shows up as ~/Work. When nothing is shared,
+# --link removes links left behind by an earlier share and restores any xdg
+# folder (Documents, Downloads, ...) that such a link had displaced.
+
+set -euo pipefail
+
+mount_tag=${OMARCHY_MAC_SHARE_TAG:-mac}
+mount_point=${OMARCHY_MAC_SHARE_MOUNT_POINT:-/mnt/mac}
+virtio_root=${OMARCHY_MAC_SHARE_VIRTIO_ROOT:-/sys/bus/virtio/drivers/9pnet_virtio}
+kernel_cmdline=${OMARCHY_MAC_SHARE_CMDLINE:-/proc/cmdline}
+name_parameter=omarchy.shared_folder_name
+fallback_name=Mac
+
+log() {
+  echo "omarchy-native-mac-share: $*" >&2
+}
+
+find_share_device() {
+  local device
+  shopt -s nullglob
+  for device in "$virtio_root"/virtio*; do
+    [[ -r $device/mount_tag ]] || continue
+    if [[ $(tr -d '\0' <"$device/mount_tag") == "$mount_tag" ]]; then
+      echo "${device##*/}"
+      shopt -u nullglob
+      return 0
+    fi
+  done
+  shopt -u nullglob
+  return 1
+}
+
+# The launcher puts the folder name on the kernel command line only when a
+# share is enabled, so its absence means there is no device to wait for.
+share_enabled() {
+  local argument
+  for argument in $(<"$kernel_cmdline"); do
+    [[ $argument == "$name_parameter="* ]] && return 0
+  done
+  return 1
+}
+
+share_mounted() {
+  case ${OMARCHY_MAC_SHARE_ASSUME_MOUNTED:-} in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  mountpoint -q "$mount_point"
+}
+
+mount_share() {
+  local attempt
+  if ! share_enabled; then
+    log "sharing is off; nothing to mount"
+    return 0
+  fi
+  modprobe 9pnet_virtio 2>/dev/null || true
+  modprobe 9p 2>/dev/null || true
+  for ((attempt = 0; attempt < 10; attempt++)); do
+    if find_share_device >/dev/null; then
+      break
+    fi
+    sleep 0.5
+  done
+  if ! find_share_device >/dev/null; then
+    log "no Mac folder is shared with this session"
+    return 0
+  fi
+  install -d -m 0755 "$mount_point"
+  if mountpoint -q "$mount_point"; then
+    log "$mount_point is already mounted"
+    return 0
+  fi
+  # cache=mmap keeps reads and directory listings coherent with changes made
+  # on the Mac while still allowing mmap-based readers. msize raises the 9p
+  # transfer unit for large copies.
+  mount -t 9p -o "trans=virtio,version=9p2000.L,msize=1048576,cache=mmap" \
+    "$mount_tag" "$mount_point"
+  log "mounted the shared Mac folder at $mount_point"
+}
+
+shared_folder_name() {
+  local argument
+  local encoded=""
+  local decoded
+  for argument in $(<"$kernel_cmdline"); do
+    [[ $argument == "$name_parameter="* ]] || continue
+    encoded=${argument#*=}
+  done
+  if [[ -z $encoded || ! $encoded =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "$fallback_name"
+    return 0
+  fi
+  local padded=$encoded
+  while (( ${#padded} % 4 )); do padded+="="; done
+  decoded=$(printf '%s' "$padded" | tr -- '-_' '+/' | base64 -d 2>/dev/null | tr -d '\0') || decoded=""
+  if [[ -z $decoded || $decoded == */* || $decoded == . || $decoded == .. || $decoded == *$'\n'* ]]; then
+    echo "$fallback_name"
+    return 0
+  fi
+  echo "$decoded"
+}
+
+# Folders that xdg-user-dirs manages for this user, one absolute path per
+# line. Falls back to the stock names when the session has no config yet.
+xdg_user_dirs() {
+  local home=$1
+  local config=${XDG_CONFIG_HOME:-$home/.config}/user-dirs.dirs
+  local line value
+  if [[ -r $config ]]; then
+    while IFS= read -r line; do
+      [[ $line =~ ^XDG_[A-Z_]+_DIR=\"?([^\"]*)\"?$ ]] || continue
+      value=${BASH_REMATCH[1]}
+      value=${value//\$HOME/$home}
+      [[ $value == /* ]] && echo "$value"
+    done <"$config"
+    return 0
+  fi
+  local name
+  for name in Desktop Documents Downloads Music Pictures Public Templates Videos; do
+    echo "$home/$name"
+  done
+}
+
+# Remove a link to the share. A link that replaced an empty xdg folder gives
+# that folder back so file pickers and downloads keep working.
+remove_share_link() {
+  local link=$1
+  local home=$2
+  local xdg_dir
+  rm -f "$link"
+  while IFS= read -r xdg_dir; do
+    [[ $xdg_dir == "$link" ]] || continue
+    mkdir -p "$link" && log "restored $link after removing the shared folder link"
+    break
+  done < <(xdg_user_dirs "$home")
+}
+
+link_share() {
+  local home=${HOME:-}
+  local name
+  local target=""
+  local existing
+  [[ -n $home && -d $home ]] || { log "no home directory to link into"; return 0; }
+  if share_mounted; then
+    name=$(shared_folder_name)
+    target="$home/$name"
+  fi
+  # Drop links from an earlier share so only the current one remains. This
+  # runs even without a mount, otherwise turning sharing off would leave
+  # ~/<old name> pointing at an empty, root-owned mount point.
+  for existing in "$home"/* "$home"/.[!.]*; do
+    [[ -L $existing && $(readlink "$existing") == "$mount_point" && $existing != "$target" ]] || continue
+    remove_share_link "$existing" "$home"
+  done
+  if [[ -z $target ]]; then
+    log "no Mac folder is mounted; nothing to link"
+    return 0
+  fi
+  if [[ -L $target ]]; then
+    [[ $(readlink "$target") == "$mount_point" ]] && return 0
+    log "$target is a link elsewhere; using ~/$fallback_name instead"
+    target="$home/$fallback_name"
+  elif [[ -d $target ]]; then
+    # xdg-user-dirs pre-creates folders such as Documents. Replace only an
+    # empty one; keep real content and fall back to the generic name.
+    if ! rmdir "$target" 2>/dev/null; then
+      log "$target already has content; using ~/$fallback_name instead"
+      target="$home/$fallback_name"
+    fi
+  elif [[ -e $target ]]; then
+    log "$target exists; using ~/$fallback_name instead"
+    target="$home/$fallback_name"
+  fi
+  if [[ -e $target || -L $target ]]; then
+    [[ -L $target && $(readlink "$target") == "$mount_point" ]] && return 0
+    log "cannot place the shared folder link at $target"
+    return 0
+  fi
+  ln -s "$mount_point" "$target"
+  log "linked $target to the shared Mac folder"
+}
+
+unmount_share() {
+  if mountpoint -q "$mount_point"; then
+    umount "$mount_point" || umount -l "$mount_point" || true
+  fi
+}
+
+case ${1:-} in
+  --mount) mount_share ;;
+  --unmount) unmount_share ;;
+  --link) link_share ;;
+  --find-device) find_share_device ;;
+  --name) shared_folder_name ;;
+  --enabled) share_enabled ;;
+  *)
+    echo "Usage: omarchy-native-mac-share --mount | --unmount | --link | --find-device | --name | --enabled" >&2
+    exit 64
+    ;;
+esac

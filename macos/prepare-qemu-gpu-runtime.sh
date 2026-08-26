@@ -573,6 +573,12 @@ verify_runtime_tree() {
       die "source-built QEMU is missing the duplex hda-micro codec"
     [[ $device_help == *'name "virtio-net-pci"'* ]] || \
       die "source-built QEMU is missing the virtio-net-pci device"
+    [[ $device_help == *'name "virtio-9p-pci"'* ]] || \
+      die "source-built QEMU is missing the virtio-9p-pci shared-folder device"
+    for marker in guest_owner_uid guest_owner_gid; do
+      LC_ALL=C grep -aFq "$marker" "$qemu" || \
+        die "source-built QEMU is missing the $marker shared-folder option"
+    done
   fi
 }
 

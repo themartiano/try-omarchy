@@ -71,6 +71,7 @@
     "flac": "1.5.0-1",
     "fontconfig": "2:2.18.3-2",
     "foot": "1.27.0-1",
+    "freeglut": "3.8.0-1",
     "freetype2": "2.14.3-1",
     "fribidi": "1.0.16-2",
     "fuse-common": "3.18.2-1",
@@ -157,6 +158,7 @@
     "iso-codes": "4.20.1-1",
     "jack2": "1.9.22-2",
     "jansson": "2.15.1-1",
+    "jasper": "4.2.9-1",
     "jbigkit": "2.1-8",
     "jemalloc": "1:5.3.1-3",
     "jq": "1.8.2-1",
@@ -260,6 +262,7 @@
     "libmakepkg-dropins": "20-2",
     "libmd": "1.2.0-1",
     "libmm-glib": "1.24.2-1",
+    "libmng": "2.0.3-4",
     "libmnl": "1.0.5-2",
     "libmodplug": "0.8.9.0-7",
     "libmysofa": "1.3.5-1",
@@ -471,6 +474,7 @@
     "qoi": "r350.4461cc3-1",
     "qt6-base": "6.11.2-2",
     "qt6-declarative": "6.11.2-1",
+    "qt6-imageformats": "6.11.2-1",
     "qt6-svg": "6.11.2-1",
     "qt6-translations": "6.11.2-1",
     "qt6-wayland": "6.11.2-1",
@@ -590,6 +594,6 @@
     "zram-generator": "1.2.1-1",
     "zstd": "1.5.7-3"
   },
-  "requestedFileSha256": "795c6a7db23399f01feb6860fb784bc81dedf7c268c5d4e4a3f728d8fcd7c9b6",
+  "requestedFileSha256": "d4e35a4991fb8e86f00db88518d7ebb5382a59c45ca549edd207beb9eda11d8f",
   "schemaVersion": 1
 }

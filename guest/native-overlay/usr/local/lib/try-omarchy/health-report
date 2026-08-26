@@ -358,10 +358,13 @@ def main() -> None:
         "/usr/local/bin/omarchy-native-audio-bridge",
         "/usr/local/bin/omarchy-native-clipboard-bridge",
         "/usr/local/bin/omarchy-native-display-sync",
+        "/usr/local/bin/omarchy-native-mac-share",
         "/usr/local/lib/try-omarchy/owned-payload",
+        "/usr/lib/systemd/system/omarchy-native-mac-share.service",
         "/usr/lib/systemd/system/try-omarchy-health.service",
         "/usr/lib/systemd/user/omarchy-native-audio-bridge.service",
         "/usr/lib/systemd/user/omarchy-native-clipboard-bridge.service",
+        "/usr/lib/systemd/user/omarchy-native-mac-share-link.service",
         "/usr/lib/systemd/user/try-omarchy-graphical-health.service",
     ]
     guest_root = Path(os.environ.get("TRY_OMARCHY_HEALTH_ROOT", "/"))
