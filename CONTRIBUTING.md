@@ -19,7 +19,10 @@ The guest and QEMU supply chains are deliberately pinned. Do not update a URL,
 commit, package lock, archive, or checksum independently of its associated
 validation code.
 
-Generated files in `dist/` and build caches in `macos/.build/` are not committed.
+Generated files in `dist/` and build caches in `macos/.build/` and
+`guest/.work/` are not committed. Use `make clean` to remove project build
+artifacts and caches. `make clean-all` additionally destroys persistent local
+VM data and should only be used when a complete reset is intended.
 
 By contributing, you agree that your contribution is licensed under the MIT
 License in this repository.

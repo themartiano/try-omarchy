@@ -1,15 +1,15 @@
 SHELL := /bin/bash
 
-ROOT := $(CURDIR)
-DIST := $(ROOT)/dist
-GUEST_DIST := $(DIST)/guest
-APP := $(DIST)/Try Omarchy.app
-DMG := $(DIST)/Try Omarchy.dmg
+override ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
+override DIST := $(ROOT)/dist
+override GUEST_DIST := $(DIST)/guest
+override APP := $(DIST)/Try Omarchy.app
+override DMG := $(DIST)/Try Omarchy.dmg
 RELEASE_SIGN_IDENTITY ?= Developer ID Application: Eduardo Martinez (RZC79MPD34)
 RELEASE_NOTARY_PROFILE ?= try-omarchy
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor test guest runtime app build run run-ephemeral reset package release clean clean-guest
+.PHONY: help doctor test guest runtime app build run run-ephemeral reset package release clean clean-all clean-guest
 
 help:
 	@printf '%s\n' \
@@ -30,8 +30,8 @@ help:
 	  'Storage:' \
 	  '  make run-ephemeral  Run without retaining VM changes' \
 	  '  make reset          Open the confirmed factory-reset flow' \
-	  '  make clean          Remove app, DMG, and native build cache' \
-	  '  make clean-guest    Also remove the generated guest image'
+	  '  make clean          Remove all project builds and build caches' \
+	  '  make clean-all      Also remove VM data and stale temporary files'
 
 doctor:
 	@[[ "$$(uname -s)" == Darwin ]] || { echo 'error: macOS is required' >&2; exit 1; }
@@ -80,7 +80,75 @@ release:
 	  --notarize-profile "$(RELEASE_NOTARY_PROFILE)"
 
 clean:
-	@rm -rf -- "$(APP)" "$(DMG)" "$(ROOT)/macos/.build"
+	@echo 'Removing repository build output and caches...'
+	@rm -rf -- \
+	  "$(DIST)" \
+	  "$(ROOT)/.build" \
+	  "$(ROOT)/guest/.work" \
+	  "$(ROOT)/macos/.build" \
+	  "$(ROOT)/macos/.swiftpm"
+	@find "$(ROOT)" -type d \( -name __pycache__ -o -name .pytest_cache \) \
+	  -prune -exec rm -rf -- {} +
+	@set -e; if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then \
+	  while IFS= read -r container; do \
+	    [[ -z "$$container" ]] || docker container rm "$$container" >/dev/null; \
+	  done < <(docker container ls -aq --filter ancestor=try-omarchy-guest-builder); \
+	  while IFS= read -r volume; do \
+	    [[ -z "$$volume" ]] || docker volume rm "$$volume" >/dev/null; \
+	  done < <(docker volume ls -q --filter label=dev.tryomarchy.role=guest-work); \
+	  docker image rm -f try-omarchy-guest-builder >/dev/null 2>&1 || true; \
+	  echo 'Removed Try Omarchy Docker builder image and guest-work volumes.'; \
+	else \
+	  echo 'Docker is unavailable; skipped project Docker cache cleanup.' >&2; \
+	fi
+
+clean-all:
+	@[[ "$$(uname -s)" == Darwin ]] || { echo 'error: make clean-all requires macOS' >&2; exit 1; }
+	@pgrep -f 'omarchy-[q]emu|omarchy-[d]mg|Try Omarchy[.]app/Contents/' >/dev/null 2>&1; status=$$?; \
+	if (( status == 0 )); then \
+	  echo 'error: Try Omarchy or one of its build tools is running; close it before make clean-all' >&2; \
+	  exit 1; \
+	elif (( status != 1 )); then \
+	  echo 'error: could not safely inspect running processes' >&2; \
+	  exit 1; \
+	fi
+	@confirmation=''; \
+	if ! { \
+	  printf '%s\n%s' \
+	    'This permanently deletes all Try Omarchy builds, caches, VM disks, and app state.' \
+	    'Type clean-all to continue: ' >/dev/tty && \
+	  IFS= read -r confirmation </dev/tty; \
+	}; then \
+	  echo 'error: make clean-all requires an interactive terminal' >&2; \
+	  exit 1; \
+	fi; \
+	[[ "$$confirmation" == clean-all ]] || { echo 'Cleanup cancelled.' >&2; exit 1; }
+	@$(MAKE) --no-print-directory clean
+	@user_home=$$(python3 -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)'); \
+	  [[ "$$user_home" == /* && "$$user_home" != / ]] || { echo 'error: could not resolve a safe user home' >&2; exit 1; }; \
+	  app_support="$$user_home/Library/Application Support/Try Omarchy"; \
+	  cache="$$user_home/Library/Caches/dev.tryomarchy.native"; \
+	  preferences="$$user_home/Library/Preferences/dev.tryomarchy.native.plist"; \
+	  saved_state="$$user_home/Library/Saved Application State/dev.tryomarchy.native.savedState"; \
+	  echo "Removing persistent VM disks and app state from $$app_support..."; \
+	  rm -rf -- "$$app_support" "$$cache" "$$preferences" "$$saved_state"
+	@user_id=$$(id -u); \
+	  find /private/tmp -maxdepth 1 -user "$$user_id" \
+	    \( -name 'omarchy-qemu-source-build.*' \
+	       -o -name 'omarchy-qemu-gpu-runtime.*' \
+	       -o -name 'omarchy-qemu-gpu.??????' \
+	       -o -name 'omarchy-qemu-storage-test.??????' \
+	       -o -name 'omarchy-dmg.*' \) \
+	    -exec rm -rf -- {} +; \
+	  user_tmp=$$(getconf DARWIN_USER_TEMP_DIR); \
+	  [[ "$$user_tmp" == /* && "$$user_tmp" != / && "$$user_tmp" != /private/tmp/ ]] || { echo 'error: could not resolve a safe user temporary directory' >&2; exit 1; }; \
+	  find "$$user_tmp" -maxdepth 1 -user "$$user_id" \
+	    \( -name 'omarchy-qemu-request-*' \
+	       -o -name 'omarchy-qemu-path-*' \
+	       -o -name 'omarchy-audio-route-tests.*' \
+	       -o -name 'try-omarchy-space-estimate-*' \) \
+	    -exec rm -rf -- {} +
+	@echo 'Try Omarchy deep cleanup complete.'
 
 clean-guest: clean
-	@rm -rf -- "$(GUEST_DIST)"
+	@echo 'make clean-guest is now an alias for make clean.'

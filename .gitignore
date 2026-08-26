@@ -18,3 +18,5 @@
 
 /dist/
 /.build/
+/guest/.work/
+/macos/.swiftpm/

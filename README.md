@@ -74,6 +74,30 @@ make test
 
 Run `make help` for component builds, persistent-storage reset, ephemeral mode, and cleanup commands.
 
+To reclaim development build space, run:
+
+```sh
+make clean
+```
+
+This removes all repository build output, the native and guest build caches,
+and Try Omarchy's project-scoped Docker builder image and work volumes. It does
+not touch a developer's persistent VM.
+
+For a complete local reset, first quit Try Omarchy and then run:
+
+```sh
+make clean-all
+```
+
+The deep cleanup also permanently deletes the current user's Try Omarchy VM
+disks and app state, plus stale Try Omarchy build and test directories in the
+macOS temporary directories. It only selects Docker resources and temporary
+paths owned by this project; it does not run a global Docker or system prune.
+To prevent accidental data loss, the command requires an interactive terminal
+and only proceeds after the developer types `clean-all` at the confirmation
+prompt.
+
 ## Packaging and releases
 
 All generated output has one predictable home:
