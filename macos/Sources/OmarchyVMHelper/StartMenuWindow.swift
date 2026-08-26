@@ -691,6 +691,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         status.alignment = .right
         status.identifier = NSUserInterfaceItemIdentifier("permission-status-\(symbolName)")
         status.setContentHuggingPriority(.required, for: .horizontal)
+        status.translatesAutoresizingMaskIntoConstraints = false
 
         var trailingViews: [NSView] = [status]
         for (index, actionDescription) in actions.enumerated() {
@@ -702,17 +703,37 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 ? "permission-action-\(symbolName)"
                 : "permission-action-\(symbolName)-\(index)"
             button.identifier = NSUserInterfaceItemIdentifier(identifier)
+            button.translatesAutoresizingMaskIntoConstraints = false
             button.heightAnchor.constraint(greaterThanOrEqualToConstant: 28).isActive = true
             trailingViews.append(button)
         }
-        let trailing = NSStackView(views: trailingViews)
-        trailing.orientation = .vertical
-        trailing.alignment = .trailing
-        trailing.spacing = 7
+
+        let trailing = NSView()
         trailing.translatesAutoresizingMaskIntoConstraints = false
-        if trailingViews.count > 2 {
-            trailing.setCustomSpacing(2, after: trailingViews[1])
+        for trailingView in trailingViews {
+            trailing.addSubview(trailingView)
         }
+        var trailingConstraints = [
+            status.topAnchor.constraint(equalTo: trailing.topAnchor),
+            status.leadingAnchor.constraint(greaterThanOrEqualTo: trailing.leadingAnchor),
+            status.trailingAnchor.constraint(equalTo: trailing.trailingAnchor),
+        ]
+        var previousTrailingView: NSView = status
+        for (index, actionView) in trailingViews.dropFirst().enumerated() {
+            trailingConstraints.append(contentsOf: [
+                actionView.leadingAnchor.constraint(equalTo: trailing.leadingAnchor),
+                actionView.trailingAnchor.constraint(equalTo: trailing.trailingAnchor),
+                actionView.topAnchor.constraint(
+                    equalTo: previousTrailingView.bottomAnchor,
+                    constant: index == 0 ? 7 : 2
+                ),
+            ])
+            previousTrailingView = actionView
+        }
+        trailingConstraints.append(
+            previousTrailingView.bottomAnchor.constraint(equalTo: trailing.bottomAnchor)
+        )
+        NSLayoutConstraint.activate(trailingConstraints)
 
         labels.translatesAutoresizingMaskIntoConstraints = false
 
@@ -733,13 +754,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             trailing.centerYAnchor.constraint(equalTo: row.centerYAnchor),
             trailing.widthAnchor.constraint(equalToConstant: 124),
         ])
-        for actionView in trailingViews.dropFirst() {
-            actionView.widthAnchor.constraint(equalTo: trailing.widthAnchor).isActive = true
-        }
         labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
         labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        trailing.setContentHuggingPriority(.required, for: .horizontal)
-        trailing.setContentCompressionResistancePriority(.required, for: .horizontal)
         return row
     }
 
