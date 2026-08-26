@@ -77,6 +77,36 @@ def main() -> None:
     for path in spec["inputs"].values():
         check((GUEST / path).is_file(), f"spec input exists: {path}")
 
+    pacman_conf = read(GUEST / spec["inputs"]["pacmanConfig"])
+    check(
+        "[core]" in pacman_conf and "[alarm]" in pacman_conf,
+        "factory pacman uses Arch Linux ARM repositories",
+    )
+    check(
+        "[multilib]" not in pacman_conf,
+        "factory pacman omits the x86_64 multilib repository",
+    )
+    check(
+        "stable-mirror.omarchy.org" not in pacman_conf
+        and "pkgs.omarchy.org/stable" not in pacman_conf,
+        "factory pacman omits Omarchy's x86_64 channel repositories",
+    )
+    check(
+        "[omarchy]" in pacman_conf
+        and "Server = https://pkgs.omarchy.org/$arch" in pacman_conf,
+        "factory pacman retains the ARM Omarchy keyring repository",
+    )
+    check(
+        "IgnorePkg = linux-aarch64" in pacman_conf,
+        "factory pacman holds the QEMU-booted kernel",
+    )
+    arm_mirrorlist = read(GUEST / "mirrorlist.aarch64")
+    check(
+        "mirror.archlinuxarm.org/$arch/$repo" in arm_mirrorlist
+        and "stable-mirror.omarchy.org" not in arm_mirrorlist,
+        "factory mirrorlist uses Arch Linux ARM",
+    )
+
     package_text = (GUEST / spec["inputs"]["packages"]).read_bytes()
     package_lock = json_file(GUEST / spec["inputs"]["packageLock"])
     check(package_lock.get("architecture") == "aarch64", "package lock is ARM64")
@@ -121,6 +151,29 @@ def main() -> None:
         and "default.target.wants/omarchy-native-mac-share-link.service" in configure,
         "guest links the shared Mac folder into each home at login",
     )
+    check(
+        "pre-refresh-pacman-restore-arm.sh" in configure
+        and "pre-refresh-pacman.d/restore-arm-pacman" in configure
+        and 'install -m 0644 "$arm_mirrorlist"' in configure
+        and "install -m 0644 /etc/pacman.d/mirrorlist" not in configure,
+        "ARM pacman restore uses Omarchy's pre-refresh hook and a pinned mirrorlist",
+    )
+    restore_hook = read(GUEST / "fragments/pre-refresh-pacman-restore-arm.sh")
+    check(
+        "install -m 0644 /usr/share/try-omarchy/pacman.conf /etc/pacman.conf"
+        in restore_hook
+        and "install -m 0644 /usr/share/try-omarchy/mirrorlist /etc/pacman.d/mirrorlist"
+        in restore_hook,
+        "pre-refresh hook restores the complete Try Omarchy pacman files",
+    )
+    local_repository = read(GUEST / "scripts/register-local-repository.sh")
+    check(
+        'install -m 0644 "$root/etc/pacman.conf" "$root/usr/share/try-omarchy/pacman.conf"'
+        in local_repository
+        and 'install -m 0644 "$root/etc/pacman.d/mirrorlist" "$root/usr/share/try-omarchy/mirrorlist"'
+        in local_repository,
+        "pacman recovery files snapshot the final local-repository configuration",
+    )
     shared_folder = spec["runtime"]["sharedFolder"]
     check(
         shared_folder["device"] == "virtio-9p-pci"
@@ -158,6 +211,20 @@ def main() -> None:
         and "update.ext4.zst" in pack_image,
         "guest build emits the signed offline update disk",
     )
+    build_cache = read(REPO / "scripts/build-cache.py")
+    check(
+        '"update.ext4"' in build_cache and '"update.ext4.zst"' in build_cache,
+        "build cache accepts both offline update artifacts",
+    )
+    build_update_image = read(GUEST / "scripts/build-update-image.sh")
+    prepare_update = read(GUEST / "scripts/prepare-update-root.py")
+    check(
+        "*.pkg.tar.zst" in build_update_image
+        and "*.pkg.tar.xz" in build_update_image
+        and "*.pkg.tar.zst" in prepare_update
+        and "*.pkg.tar.xz" in prepare_update,
+        "offline update accepts both Try Omarchy zstd and Arch Linux ARM xz packages",
+    )
     check(
         "TRY_OMARCHY_DEFER_INITRAMFS=1" in build
         and build.index("TRY_OMARCHY_DEFER_INITRAMFS=1")
@@ -165,7 +232,6 @@ def main() -> None:
         < build.rindex("mkinitcpio -P"),
         "owned payload follows finalization and final initramfs embeds its release",
     )
-    prepare_update = read(GUEST / "scripts/prepare-update-root.py")
     owned_payload_source = read(
         GUEST / "native-overlay/usr/local/lib/try-omarchy/owned-payload"
     )
@@ -518,6 +584,7 @@ HOTPLUG=1
         mac_share,
         *GUEST.glob("*.sh"),
         *GUEST.glob("scripts/*.sh"),
+        *GUEST.glob("fragments/*.sh"),
         *GUEST.glob("migrations/*.sh"),
         owned_payload,
         GUEST / "native-overlay/usr/local/lib/try-omarchy/update-runner",

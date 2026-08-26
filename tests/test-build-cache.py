@@ -55,6 +55,8 @@ FAKE_GUEST_BUILDER = textwrap.dedent(
         "provenance.json",
         "rootfs.ext4",
         "rootfs.ext4.zst",
+        "update.ext4",
+        "update.ext4.zst",
         "vmlinuz-linux",
     }
     spec = (root / "guest/spec.json").read_bytes()

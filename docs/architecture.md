@@ -71,6 +71,10 @@ creates the account on first boot.
   host audio-device routing, and shared-folder ownership mapping.
 - The pinned Omarchy runtime trees are copied from upstream. Guest overlays add
   the QEMU and ARM64 integration around them.
+- The final Arch Linux ARM pacman files live under `/usr/share/try-omarchy/`.
+  An Omarchy-supported `pre-refresh-pacman` hook restores them after a channel
+  refresh writes its x86_64 templates to `/etc`; the upstream templates remain
+  unchanged.
 
 Nothing is overwritten in place. The app bundle and packaged factory disk remain
 unchanged, and normal launches use one private writable disk under

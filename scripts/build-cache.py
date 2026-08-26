@@ -25,6 +25,8 @@ GUEST_ARTIFACTS = {
     "provenance.json",
     "rootfs.ext4",
     "rootfs.ext4.zst",
+    "update.ext4",
+    "update.ext4.zst",
     "vmlinuz-linux",
 }
 GUEST_FILES = GUEST_ARTIFACTS | {"guest-manifest.json", "SHA256SUMS"}

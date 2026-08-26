@@ -58,7 +58,7 @@ python3 "$script_dir/prepare-update-root.py" \
   --spec "$spec"
 
 shopt -s nullglob
-archives=("$staging/repo/"*.pkg.tar.zst)
+archives=("$staging/repo/"*.pkg.tar.zst "$staging/repo/"*.pkg.tar.xz)
 shopt -u nullglob
 ((${#archives[@]} > 0)) || fail "offline repository has no packages"
 repo-add --quiet "$repository_db/try-omarchy-update.db.tar.gz" "${archives[@]}"

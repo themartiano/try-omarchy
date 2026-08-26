@@ -131,8 +131,19 @@ ln -sfn /usr/share/zoneinfo/UTC "$root/etc/localtime"
 # Keep the reviewed Arch Linux ARM package and mirror configuration.
 pacman_input=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"].get("pacmanConfig", ""))' "$spec")
 [[ -n $pacman_input ]] || fail "native guest spec must provide pacmanConfig"
+arm_mirrorlist="$guest_dir/mirrorlist.aarch64"
+[[ -f $arm_mirrorlist ]] || fail "ARM mirrorlist not found: $arm_mirrorlist"
 install -m 0644 "$guest_dir/$pacman_input" "$root/etc/pacman.conf"
-install -m 0644 /etc/pacman.d/mirrorlist "$root/etc/pacman.d/mirrorlist"
+install -m 0644 "$arm_mirrorlist" "$root/etc/pacman.d/mirrorlist"
+
+# Omarchy's channel templates stay authentic. Its supported hook restores the
+# final Try Omarchy-owned ARM configuration after a template is copied to /etc
+# and before pacman refreshes its databases.
+refresh_hook="$guest_dir/fragments/pre-refresh-pacman-restore-arm.sh"
+[[ -f $refresh_hook ]] || fail "ARM pacman refresh hook not found: $refresh_hook"
+install -d -m 0755 "$root/etc/skel/.config/omarchy/hooks/pre-refresh-pacman.d"
+install -m 0755 "$refresh_hook" \
+  "$root/etc/skel/.config/omarchy/hooks/pre-refresh-pacman.d/restore-arm-pacman"
 
 provision_unit="$root/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
 [[ -f $provision_unit ]] || fail "pinned upstream owner-provisioning service is missing"

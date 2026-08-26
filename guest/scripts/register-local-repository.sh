@@ -129,4 +129,10 @@ EOF
 foreign=$(arch-chroot "$root" pacman -Qem || true)
 [[ -z $foreign ]] || fail "unrepresented foreign packages remain: $foreign"
 
+# This is the complete runtime configuration: the reviewed ARM repositories
+# plus the immutable local repository added above. The pre-refresh-pacman hook
+# restores this exact file after Omarchy writes an x86_64 channel template.
+install -m 0644 "$root/etc/pacman.conf" "$root/usr/share/try-omarchy/pacman.conf"
+install -m 0644 "$root/etc/pacman.d/mirrorlist" "$root/usr/share/try-omarchy/mirrorlist"
+
 echo "Registered ${#archives[@]} pinned package(s) in the immutable local repository"

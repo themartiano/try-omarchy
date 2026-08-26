@@ -199,7 +199,7 @@ class UpdateRootTests(unittest.TestCase):
             for directory in (cache, migrations, local_repo):
                 directory.mkdir(parents=True)
 
-            self.write_archive(cache / "base-1-1-aarch64.pkg.tar.zst", "base", "1-1")
+            self.write_archive(cache / "base-1-1-aarch64.pkg.tar.xz", "base", "1-1")
             self.write_archive(
                 cache / "linux-aarch64-7.2-2-aarch64.pkg.tar.zst",
                 "linux-aarch64",
@@ -269,6 +269,7 @@ class UpdateRootTests(unittest.TestCase):
             )
             metadata = json.loads((destination / "update.json").read_text())
             self.assertEqual(metadata["packageCount"], 3)
+            self.assertTrue((destination / "repo/base-1-1-aarch64.pkg.tar.xz").is_file())
             catalog = (destination / "migrations/catalog.tsv").read_text().split("\t")
             self.assertEqual(catalog[:3], ["0", "1", "bootstrap"])
             self.assertEqual(

@@ -137,8 +137,12 @@ def select_archives(
     package_lock: dict[str, str],
     bsdtar: str,
 ) -> dict[str, tuple[str, Path]]:
+    # Arch Linux ARM currently publishes .pkg.tar.xz while Try Omarchy's local
+    # packages use .pkg.tar.zst. Both are valid pacman package archives.
     candidates = sorted(package_cache.glob("*.pkg.tar.zst"))
+    candidates.extend(sorted(package_cache.glob("*.pkg.tar.xz")))
     local_archives = sorted(local_repository.glob("*.pkg.tar.zst"))
+    local_archives.extend(sorted(local_repository.glob("*.pkg.tar.xz")))
     candidates.extend(local_archives)
     if not candidates:
         raise ValueError("no package archives were found")
