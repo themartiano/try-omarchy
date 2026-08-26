@@ -41,7 +41,7 @@ Normal launches keep one persistent VM under `~/Library/Application Support/Try 
 - Python 3
 - A running Docker-compatible engine that supports privileged `linux/arm64`
   containers
-- `zstd`, `pkg-config`, GLib, Pixman, libslirp 4.9.2, and SDL2 2.32.10
+- `zstd`, `pkg-config`, GLib, Pixman, libslirp 4.9.3, and SDL2 2.32.70
 - Roughly 20 GB free for guest, runtime, caches, and assembled output
 
 Install the Homebrew dependencies with:
