@@ -7,6 +7,7 @@ import base64
 import importlib.util
 from importlib.machinery import SourceFileLoader
 import json
+import os
 from pathlib import Path
 import unittest
 
@@ -110,6 +111,25 @@ class ClipboardSyncTests(unittest.TestCase):
         self.assertTrue(sync.host_changed(bridge.TEXT_FORMAT, b"from mac"))
         self.assertFalse(sync.guest_changed(bridge.TEXT_FORMAT, b"from mac"))
 
+    def test_echo_markers_expire(self) -> None:
+        clock = [0.0]
+        recorder = Recorder()
+        sync = bridge.ClipboardSync(recorder.send, recorder.copy, clock=lambda: clock[0])
+
+        # Guest copies B, the Mac copies A, then the Mac copies B again well
+        # after the guest's write. The final B is new content, not an echo.
+        self.assertTrue(sync.guest_changed(bridge.TEXT_FORMAT, b"B"))
+        clock[0] += bridge.ECHO_WINDOW_SECONDS + 1
+        self.assertTrue(sync.host_changed(bridge.TEXT_FORMAT, b"A"))
+        self.assertTrue(sync.host_changed(bridge.TEXT_FORMAT, b"B"))
+        self.assertEqual([payload for _, payload in recorder.copied], [b"A", b"B"])
+
+        # Inside the window the mirrored write is still recognized as an echo.
+        clock[0] += 0.1
+        self.assertFalse(sync.guest_changed(bridge.TEXT_FORMAT, b"B"))
+        clock[0] += bridge.ECHO_WINDOW_SECONDS + 1
+        self.assertTrue(sync.guest_changed(bridge.TEXT_FORMAT, b"B"))
+
     def test_unsupported_or_oversized_guest_selections_are_dropped(self) -> None:
         recorder = Recorder()
         sync = bridge.ClipboardSync(recorder.send, recorder.copy)
@@ -117,6 +137,32 @@ class ClipboardSyncTests(unittest.TestCase):
         self.assertFalse(sync.guest_changed(bridge.TEXT_FORMAT, b""))
         self.assertFalse(sync.guest_changed(bridge.TEXT_FORMAT, b"x" * (bridge.MAX_PAYLOAD_BYTES + 1)))
         self.assertEqual(recorder.sent, [])
+
+
+class BoundedReadTests(unittest.TestCase):
+    def read_pipe(self, payload: bytes, limit: int) -> bytes | None:
+        reader, writer = os.pipe()
+        try:
+            with os.fdopen(writer, "wb") as sink:
+                sink.write(payload)
+            return bridge.read_bounded(reader, limit, 5)
+        finally:
+            os.close(reader)
+
+    def test_reads_selection_within_limit(self) -> None:
+        self.assertEqual(self.read_pipe(b"x" * 1000, 1000), b"x" * 1000)
+        self.assertEqual(self.read_pipe(b"", 1000), b"")
+
+    def test_rejects_oversized_selection_without_buffering_it(self) -> None:
+        self.assertIsNone(self.read_pipe(b"x" * 1001, 1000))
+
+    def test_gives_up_on_a_silent_writer(self) -> None:
+        reader, writer = os.pipe()
+        try:
+            self.assertIsNone(bridge.read_bounded(reader, 1000, 0.05))
+        finally:
+            os.close(reader)
+            os.close(writer)
 
 
 if __name__ == "__main__":

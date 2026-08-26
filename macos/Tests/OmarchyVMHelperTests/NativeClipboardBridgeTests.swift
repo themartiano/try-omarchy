@@ -69,4 +69,24 @@ struct NativeClipboardBridgeTests {
         #expect(host(fromMac))
         #expect(!guest(fromMac))
     }
+
+    @Test("echo markers expire so a genuine repeat of guest content is not lost")
+    func echoMarkersExpire() throws {
+        var state = ClipboardSyncState()
+        func host(_ message: ClipboardMessage, at time: TimeInterval) -> Bool { state.hostChanged(message, at: time) }
+        func guest(_ message: ClipboardMessage, at time: TimeInterval) -> Bool { state.guestChanged(message, at: time) }
+        let a = try #require(ClipboardMessage(format: .text, payload: Data("A".utf8)))
+        let b = try #require(ClipboardMessage(format: .text, payload: Data("B".utf8)))
+        let window = ClipboardSyncState.echoWindow
+
+        // Guest copies B, the Mac copies A, then the Mac copies B again well
+        // after the guest's write. The final B is new content, not an echo.
+        #expect(guest(b, at: 0))
+        #expect(host(a, at: window + 1))
+        #expect(host(b, at: window + 2))
+
+        // Inside the window the mirrored write is still recognized as an echo.
+        #expect(!guest(b, at: window + 2.1))
+        #expect(guest(b, at: window * 2 + 3))
+    }
 }

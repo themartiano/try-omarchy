@@ -98,25 +98,52 @@ struct ClipboardMessage: Equatable {
 /// Applying the guest's selection to the Mac pasteboard bumps the pasteboard
 /// change count, and writing the Mac pasteboard into the guest triggers the
 /// guest watcher; both are recognized by fingerprint and dropped.
+///
+/// An echo follows its write within milliseconds, so each marker is only
+/// honored for a short window. Without the expiry a marker would outlive
+/// the content it protects: guest copies B, Mac copies A, Mac copies B again,
+/// and the final B would be mistaken for the original echo and lost.
 struct ClipboardSyncState: Equatable {
-    private(set) var lastFromHost: String?
-    private(set) var lastFromGuest: String?
+    /// How long a write may be mirrored back before it counts as new content.
+    static let echoWindow: TimeInterval = 2
+
+    private struct Marker: Equatable {
+        let fingerprint: String
+        let at: TimeInterval
+    }
+
+    private var fromHost: Marker?
+    private var fromGuest: Marker?
+
+    var lastFromHost: String? { fromHost?.fingerprint }
+    var lastFromGuest: String? { fromGuest?.fingerprint }
+
+    private static func isEcho(_ marker: Marker?, _ key: String, at now: TimeInterval) -> Bool {
+        guard let marker, marker.fingerprint == key else { return false }
+        return now - marker.at <= echoWindow
+    }
 
     /// Returns true when the host update should be forwarded to the guest.
-    mutating func hostChanged(_ message: ClipboardMessage) -> Bool {
+    mutating func hostChanged(
+        _ message: ClipboardMessage,
+        at now: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> Bool {
         let key = message.fingerprint
         // Applying a guest selection bumps the pasteboard change count; only
         // that echo is dropped. A repeat of earlier Mac content is a change.
-        guard key != lastFromGuest else { return false }
-        lastFromHost = key
+        guard !Self.isEcho(fromGuest, key, at: now) else { return false }
+        fromHost = Marker(fingerprint: key, at: now)
         return true
     }
 
     /// Returns true when the guest update should be applied to the pasteboard.
-    mutating func guestChanged(_ message: ClipboardMessage) -> Bool {
+    mutating func guestChanged(
+        _ message: ClipboardMessage,
+        at now: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> Bool {
         let key = message.fingerprint
-        guard key != lastFromHost else { return false }
-        lastFromGuest = key
+        guard !Self.isEcho(fromHost, key, at: now) else { return false }
+        fromGuest = Marker(fingerprint: key, at: now)
         return true
     }
 }
@@ -197,18 +224,20 @@ final class NativeClipboardBridge {
     func run() throws {
         startPolling()
         var line = Data()
+        var chunk = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
-            var byte: UInt8 = 0
-            let count = Darwin.read(descriptor, &byte, 1)
-            if count == 1 {
-                if byte == 0x0A {
+            let count = chunk.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, $0.count) }
+            if count > 0 {
+                var start = 0
+                for index in 0..<count where chunk[index] == 0x0A {
+                    line.append(contentsOf: chunk[start..<index])
                     try handle(line)
                     line.removeAll(keepingCapacity: true)
-                } else if byte != 0x0D {
-                    guard line.count < ClipboardMessage.maximumLineBytes else {
-                        throw HelperError.io("guest clipboard message exceeds the size limit")
-                    }
-                    line.append(byte)
+                    start = index + 1
+                }
+                line.append(contentsOf: chunk[start..<count])
+                guard line.count <= ClipboardMessage.maximumLineBytes else {
+                    throw HelperError.io("guest clipboard message exceeds the size limit")
                 }
             } else if count == 0 {
                 return

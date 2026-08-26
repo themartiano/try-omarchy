@@ -34,6 +34,9 @@ FORMATS = (TEXT_FORMAT, PNG_FORMAT)
 # documents, small enough that a runaway selection cannot exhaust memory.
 MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
 MAX_LINE_BYTES = MAX_PAYLOAD_BYTES * 4 // 3 + 4096
+# An echo follows its write within milliseconds; a marker older than this
+# no longer protects anything and must not swallow a genuine repeat.
+ECHO_WINDOW_SECONDS = 2.0
 TEXT_TYPES = ("text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "TEXT", "STRING")
 
 
@@ -84,35 +87,73 @@ def decode_message(line: bytes) -> tuple[str, bytes] | None:
 
 
 class ClipboardSync:
-    """Echo-safe two-way state shared by the tests and the live agent."""
+    """Echo-safe two-way state shared by the tests and the live agent.
 
-    def __init__(self, send: Any, copy: Any) -> None:
+    Each direction remembers the fingerprint of its last write for a short
+    window. Without the expiry a marker would outlive the content it
+    protects: guest copies B, Mac copies A, Mac copies B again, and the final
+    B would be mistaken for the original echo and lost.
+    """
+
+    def __init__(self, send: Any, copy: Any, clock: Any = time.monotonic) -> None:
         self.send = send
         self.copy = copy
-        self.last_from_host: str | None = None
-        self.last_from_guest: str | None = None
+        self.clock = clock
+        self.last_from_host: tuple[str, float] | None = None
+        self.last_from_guest: tuple[str, float] | None = None
+
+    @staticmethod
+    def _is_echo(marker: tuple[str, float] | None, key: str, now: float) -> bool:
+        return marker is not None and marker[0] == key and now - marker[1] <= ECHO_WINDOW_SECONDS
 
     def guest_changed(self, mime: str, payload: bytes) -> bool:
         """Forward a new guest selection to the host. Returns True if sent."""
         if mime not in FORMATS or not payload or len(payload) > MAX_PAYLOAD_BYTES:
             return False
         key = fingerprint(mime, payload)
+        now = self.clock()
         # wl-copy re-announces whatever the host just wrote; only that echo
         # is dropped. A repeat of earlier guest content is a real change.
-        if key == self.last_from_host:
+        if self._is_echo(self.last_from_host, key, now):
             return False
-        self.last_from_guest = key
+        self.last_from_guest = (key, now)
         self.send(encode_message(mime, payload))
         return True
 
     def host_changed(self, mime: str, payload: bytes) -> bool:
         """Apply a host pasteboard update to the guest. Returns True if applied."""
         key = fingerprint(mime, payload)
-        if key == self.last_from_guest:
+        now = self.clock()
+        if self._is_echo(self.last_from_guest, key, now):
             return False
-        self.last_from_host = key
+        self.last_from_host = (key, now)
         self.copy(mime, payload)
         return True
+
+
+def read_bounded(descriptor: int, limit: int, timeout: float) -> bytes | None:
+    """Read a pipe until EOF in bounded chunks.
+
+    Returns None once more than `limit` bytes arrive or `timeout` seconds
+    pass, so an enormous selection is never held in memory in full.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        ready, _, _ = select.select([descriptor], [], [], remaining)
+        if not ready:
+            return None
+        chunk = os.read(descriptor, min(65536, limit + 1 - total))
+        if not chunk:
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > limit:
+            return None
+        chunks.append(chunk)
 
 
 def wl_paste_selection() -> tuple[str, bytes] | None:
@@ -137,17 +178,27 @@ def wl_paste_selection() -> tuple[str, bytes] | None:
         mime = PNG_FORMAT
     else:
         return None
-    content = subprocess.run(
+    # Stream the selection through a pipe and stop as soon as it passes the
+    # payload limit, before base64 or JSON ever see it.
+    with subprocess.Popen(
         ["wl-paste", "--no-newline", "--type", requested],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
-        timeout=15,
-        check=False,
-    )
-    if content.returncode != 0 or not content.stdout:
+    ) as content:
+        assert content.stdout is not None
+        payload = None
+        try:
+            payload = read_bounded(content.stdout.fileno(), MAX_PAYLOAD_BYTES, 15)
+        finally:
+            if payload is None:
+                content.kill()
+        content.wait()
+    if payload is None:
+        log("guest selection is too large or too slow; skipping")
         return None
-    payload = content.stdout
+    if content.returncode != 0 or not payload:
+        return None
     if mime == TEXT_FORMAT:
         try:
             payload.decode("utf-8")
@@ -243,7 +294,10 @@ def main() -> int:
             if descriptor in ready:
                 chunk = os.read(descriptor, 65536)
                 if not chunk:
-                    return 0
+                    # QEMU reports EOF when the Mac side of the port goes away.
+                    # Exit non-zero so systemd restarts this agent and it can
+                    # re-sync once the launcher brings the host bridge back.
+                    raise RuntimeError("host clipboard bridge disconnected")
                 port_buffer.extend(chunk)
                 if len(port_buffer) > MAX_LINE_BYTES:
                     raise RuntimeError("host clipboard message exceeds the size limit")
