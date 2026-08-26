@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import py_compile
+import re
 import stat
 import subprocess
 import tempfile
@@ -44,6 +45,11 @@ def main() -> None:
     check(spec["image"]["architecture"] == "aarch64", "guest is ARM64-only")
     check(spec["guest"].get("profile") == "factory", "guest is an unprovisioned factory image")
     check(spec["guest"].get("username") is None, "factory image has no baked-in user")
+    check(
+        re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-.][A-Za-z0-9.]+)?", spec["upstream"].get("release", ""))
+        is not None,
+        "upstream release is explicit",
+    )
     check(spec["runtime"]["virtualMachineMonitor"] == "qemu-system-aarch64", "runtime uses native ARM QEMU")
     check(spec["runtime"]["hypervisor"] == "hvf", "runtime uses Apple Hypervisor.framework")
     check(spec["runtime"]["storage"]["expandedSizeMiB"] == 24576, "working disk expands to 24 GiB")
@@ -252,6 +258,14 @@ HOTPLUG=1
             capture_output=True,
         ).stdout.strip()
         check(actual_commit == expected_commit, "optional Omarchy source checkout matches the pinned commit")
+        release_tag = f"v{spec['upstream']['release']}^{{commit}}"
+        tagged_commit = subprocess.run(
+            ["git", "-C", str(source), "rev-parse", release_tag],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+        check(tagged_commit == expected_commit, "optional Omarchy source checkout matches the release tag")
         for relative in spec["authenticity"]["requiredPaths"]:
             check((source / relative).exists(), f"pinned source contains {relative}")
 

@@ -128,9 +128,12 @@ class BuildCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "guest/tests").mkdir(parents=True)
+            (root / "guest/scripts/__pycache__").mkdir(parents=True)
             (root / "guest/build.sh").write_text("one\n")
             (root / "guest/README.md").write_text("first docs\n")
             (root / "guest/tests/example.py").write_text("first test\n")
+            bytecode = root / "guest/scripts/__pycache__/helper.pyc"
+            bytecode.write_bytes(b"first transient bytecode\n")
             command = [
                 str(root / "guest/build.sh"),
                 "--output",
@@ -140,6 +143,7 @@ class BuildCacheTests(unittest.TestCase):
             original = build_cache.fingerprint(root, "guest", command)
             (root / "guest/README.md").write_text("second docs\n")
             (root / "guest/tests/example.py").write_text("second test\n")
+            bytecode.write_bytes(b"second transient bytecode\n")
             self.assertEqual(original, build_cache.fingerprint(root, "guest", command))
 
             (root / "guest/build.sh").write_text("two\n")

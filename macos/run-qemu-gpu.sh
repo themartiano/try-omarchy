@@ -423,13 +423,14 @@ if (
 
 upstream = exact_keys(
     spec.get("upstream"),
-    {"channel", "commit", "license", "repository", "tree", "treeSha256", "version"},
+    {"channel", "commit", "license", "release", "repository", "tree", "treeSha256", "version"},
     "build spec upstream",
 )
 if (
     upstream.get("repository") != "https://github.com/basecamp/omarchy"
     or upstream.get("channel") != "quattro"
     or upstream.get("license") != "MIT"
+    or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-.][A-Za-z0-9.]+)?", str(upstream.get("release", "")))
     or not isinstance(upstream.get("version"), str)
     or not re.fullmatch(r"[0-9a-f]{40}", str(upstream.get("commit", "")))
     or not re.fullmatch(r"[0-9a-f]{40}", str(upstream.get("tree", "")))

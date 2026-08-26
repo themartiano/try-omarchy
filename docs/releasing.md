@@ -11,6 +11,15 @@ make build
 make release
 ```
 
+When the release updates Omarchy itself, first run:
+
+```sh
+make update-omarchy OMARCHY_RELEASE=x.y.z
+```
+
+Review both the upstream source change and the regenerated ARM64 package lock
+before continuing with the normal build and verification sequence.
+
 Outputs are written to:
 
 - `dist/Try Omarchy.app`
