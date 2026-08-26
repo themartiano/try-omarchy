@@ -16,6 +16,8 @@ FILES = {
     "initramfs-linux.img": ("guest-initramfs", "application/vnd.linux.initramfs"),
     "rootfs.ext4": ("guest-rootfs", "application/vnd.omarchy.ext4"),
     "rootfs.ext4.zst": ("guest-rootfs-compressed", "application/zstd"),
+    "update.ext4": ("guest-update-disk", "application/vnd.try-omarchy.update-ext4"),
+    "update.ext4.zst": ("guest-update-disk-compressed", "application/zstd"),
     "provenance.json": ("guest-metadata", "application/json"),
     "build-spec.json": ("guest-metadata", "application/json"),
     "packages.lock.txt": ("guest-metadata", "text/plain"),

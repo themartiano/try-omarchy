@@ -12,6 +12,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let preferenceStore: AudioRoutingPreferenceStore
     private let sharedFolderStore: SharedFolderPreferenceStore
     private let deviceProvider: HostAudioDeviceProviding
+    private let updateRequirementProvider: any QEMUGPUWorkspaceUpdateRequirementProviding
     private var startMenuWindow: StartMenuWindow?
 
     private var lifecycle = VMRunLifecycle()
@@ -28,7 +29,8 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         supervisor: QEMUGPUProcessSupervisor = QEMUGPUProcessSupervisor(),
         preferenceStore: AudioRoutingPreferenceStore = AudioRoutingPreferenceStore(),
         sharedFolderStore: SharedFolderPreferenceStore = SharedFolderPreferenceStore(),
-        deviceProvider: HostAudioDeviceProviding = CoreAudioHostAudioDeviceProvider()
+        deviceProvider: HostAudioDeviceProviding = CoreAudioHostAudioDeviceProvider(),
+        updateRequirementProvider: any QEMUGPUWorkspaceUpdateRequirementProviding = QEMUGPUWorkspaceUpdatePreflight()
     ) {
         self.launcherURL = launcherURL
         self.initialArguments = initialArguments
@@ -37,6 +39,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         self.preferenceStore = preferenceStore
         self.sharedFolderStore = sharedFolderStore
         self.deviceProvider = deviceProvider
+        self.updateRequirementProvider = updateRequirementProvider
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -54,6 +57,15 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         ]
         let initialResetRequested = initialArguments.first.map(resetOptions.contains) ?? false
         let canResetStorage = initialArguments.first != QEMUGPUStorageOption.ephemeral.rawValue
+        let updateRequirement = canResetStorage
+            ? updateRequirementProvider.requirement(
+                environment: baseEnvironment,
+                targetBundleIdentity: QEMUGPUStorageSpaceEstimate.bundledIdentity()
+            )
+            : .notRequired
+        let primaryAction: VMStartMenuPrimaryAction = updateRequirement == .required
+            ? .update
+            : .launch
         let startMenu = StartMenuWindow(
             accessibilityStatus: { AXIsProcessTrusted() },
             microphoneStatus: { MicrophonePreflight.authorizationState() },
@@ -82,6 +94,10 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             },
             resetStorage: { [weak self] in
                 self?.resetVirtualMachine()
+            },
+            primaryAction: primaryAction,
+            update: { [weak self] in
+                self?.updateVirtualMachine()
             },
             sharedFolderStatus: { [weak self] in
                 self?.sharedFolderMenuState() ?? SharedFolderMenuState.disabled
@@ -130,11 +146,12 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
 
     private func launchArguments() -> [String] {
         var arguments = initialArguments
-        let resetOptions = [
+        let nonLaunchOptions = [
             QEMUGPUStorageOption.resetStorage.rawValue,
             QEMUGPUStorageOption.resetStorageOnly.rawValue,
+            QEMUGPUStorageOption.updateStorageOnly.rawValue,
         ]
-        if let first = arguments.first, resetOptions.contains(first) {
+        if let first = arguments.first, nonLaunchOptions.contains(first) {
             arguments.removeFirst()
         }
         return arguments
@@ -143,6 +160,12 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private func resetArguments() -> [String] {
         var arguments = launchArguments()
         arguments.insert(QEMUGPUStorageOption.resetStorageOnly.rawValue, at: 0)
+        return arguments
+    }
+
+    private func updateArguments() -> [String] {
+        var arguments = launchArguments()
+        arguments.insert(QEMUGPUStorageOption.updateStorageOnly.rawValue, at: 0)
         return arguments
     }
 
@@ -175,6 +198,41 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         } else {
             startMenuWindow?.resetDidFinish(
                 errorMessage: "The VM disk could not be reset. Try again, or reinstall the latest Try Omarchy app."
+            )
+        }
+    }
+
+    private func updateVirtualMachine() {
+        do {
+            try supervisor.start(
+                executableURL: launcherURL,
+                arguments: updateArguments(),
+                environment: baseEnvironment
+            ) { [weak self] status in
+                self?.updateDidExit(status: status)
+            }
+            childRunning = true
+        } catch {
+            startMenuWindow?.updateDidFinish(errorMessage: error.localizedDescription)
+        }
+    }
+
+    private func updateDidExit(status: Int32) {
+        guard childRunning else { return }
+        childRunning = false
+        let wasStopping = lifecycle.isStopping
+        lifecycle.childExited()
+        if applicationTerminationPending {
+            NSApp.reply(toApplicationShouldTerminate: true)
+        } else if wasStopping {
+            finish(status: status)
+        } else if status == 0 {
+            // A successful update transitions the start-menu model to
+            // "Launching" and immediately invokes the normal launch callback.
+            startMenuWindow?.updateDidFinish(errorMessage: nil)
+        } else {
+            startMenuWindow?.updateDidFinish(
+                errorMessage: "The saved VM could not be updated for this version."
             )
         }
     }
@@ -292,6 +350,10 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         } else {
             if presentation.requiresWorkspaceReset {
                 startMenuWindow?.launchRequiresReset()
+                return
+            }
+            if presentation.requiresWorkspaceUpdate {
+                startMenuWindow?.launchRequiresUpdate()
                 return
             }
             if presentation.showsStartupFailure {

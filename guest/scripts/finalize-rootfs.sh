@@ -51,5 +51,9 @@ update-desktop-database /usr/share/applications || true
 
 # Never let the container host's hardware autodetection remove the virtual
 # devices required by QEMU on the Mac.
-mkinitcpio -P
+case ${TRY_OMARCHY_DEFER_INITRAMFS:-0} in
+  0) mkinitcpio -P ;;
+  1) ;;
+  *) echo "TRY_OMARCHY_DEFER_INITRAMFS must be 0 or 1" >&2; exit 1 ;;
+esac
 echo "Finalized unprovisioned Omarchy factory guest"

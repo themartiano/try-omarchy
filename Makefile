@@ -12,7 +12,7 @@ RELEASE_NOTARY_PROFILE ?= try-omarchy
 FORCE ?= 0
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor test guest runtime app build run run-ephemeral reset package release release-preflight clean clean-all clean-guest
+.PHONY: help doctor test guest runtime app build run run-ephemeral reset update-omarchy package release release-preflight clean clean-all clean-guest
 
 help:
 	@printf '%s\n' \
@@ -23,6 +23,8 @@ help:
 	  '  make build          Build only changed guest, runtime, and app inputs' \
 	  '  make build FORCE=1  Rebuild every component' \
 	  '  make run            Build the app from existing artifacts and open it' \
+	  '  make update-omarchy OMARCHY_RELEASE=x.y.z' \
+	  '                      Pin an upstream release and refresh the ARM64 lock' \
 	  '  make package        Create an ad-hoc DMG for local testing' \
 	  '  make release        Create a signed and notarized distribution DMG' \
 	  '' \
@@ -51,6 +53,7 @@ test:
 	@mkdir -p $(ROOT)/macos/.build/module-cache/swift $(ROOT)/macos/.build/module-cache/clang
 	@cd $(ROOT)/macos && SWIFT_MODULECACHE_PATH=$(ROOT)/macos/.build/module-cache/swift CLANG_MODULE_CACHE_PATH=$(ROOT)/macos/.build/module-cache/clang swift test --disable-sandbox
 	@$(ROOT)/macos/Tests/qemu-persistent-storage.test.sh
+	@$(ROOT)/macos/Tests/run-qemu-update-contract.test.sh
 
 guest:
 	@OMARCHY_FORCE_BUILD="$(FORCE)" "$(BUILD_CACHE)" \
@@ -77,6 +80,16 @@ run-ephemeral: app
 
 reset: app
 	@$(ROOT)/macos/open-qemu-gpu.sh --reset-storage
+
+update-omarchy:
+	@[[ -n "$(strip $(OMARCHY_RELEASE))" ]] || { echo 'error: OMARCHY_RELEASE=x.y.z is required' >&2; exit 1; }
+	@$(ROOT)/guest/scripts/update-upstream-pin.py \
+	  --release "$(OMARCHY_RELEASE)" \
+	  --spec "$(ROOT)/guest/spec.json" \
+	  --cache-dir "$(ROOT)/.build/upstream"
+	@$(ROOT)/guest/build-container.sh \
+	  --refresh-package-lock "$(ROOT)/guest/packages.lock.json"
+	@$(ROOT)/guest/test --source "$(ROOT)/.build/upstream/omarchy-v$(OMARCHY_RELEASE)"
 
 package: guest runtime
 	@$(ROOT)/macos/build-app.sh --dmg --guest-dir $(GUEST_DIST)

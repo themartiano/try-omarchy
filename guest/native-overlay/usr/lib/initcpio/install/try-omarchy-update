@@ -1,0 +1,22 @@
+#!/bin/bash
+
+build() {
+  add_runscript
+  add_binary /usr/bin/chroot
+  add_binary /usr/bin/env
+  add_binary /usr/bin/sha256sum
+  add_binary /usr/bin/sync
+  for binary in cat chmod cmp cp find grep ln mkdir mv readlink rm rmdir sed wc; do
+    add_binary "/usr/bin/$binary"
+  done
+  add_file /usr/local/lib/try-omarchy/owned-payload /try-omarchy-update/owned-payload 0755
+  add_file /usr/local/lib/try-omarchy/update-runner /try-omarchy-update/update-runner 0755
+  add_file /usr/share/try-omarchy/update/release.env /try-omarchy-update/release.env 0644
+}
+
+help() {
+  cat <<'EOF'
+Run a signed, offline Try Omarchy update from a read-only /dev/vdb artifact
+when tryomarchy.update=1 and a valid transaction nonce are on the command line.
+EOF
+}

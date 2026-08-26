@@ -6,7 +6,7 @@
     "filesystemLabel": "omarchy-factory",
     "filesystemUuid": "89054943-1f4e-4f14-b934-d6db3fba4254",
     "sizeMiB": 6144,
-    "sourceDateEpoch": 1786873661
+    "sourceDateEpoch": 1787652758
   },
   "guest": {
     "profile": "factory",
@@ -23,9 +23,10 @@
   },
   "upstream": {
     "repository": "https://github.com/basecamp/omarchy",
-    "commit": "7488eaded43de68ff9d2d7e4bf50cd48e112eb0f",
-    "tree": "f61a6c80b167db07376535a34e4bdb8a7dc581af",
-    "treeSha256": "2b8670686876008cfd1e675a107fddcc01edf3919b2566348308e0bc2857f692",
+    "commit": "13f18b2cb7286fb54f87daf571a031aa6af3d8f0",
+    "tree": "c458272b5d2b895185633255de88a3ce563c5028",
+    "treeSha256": "3613aca0bf1861d2beee24768d11d3e61e2c719af35c12145a23081f288a2abb",
+    "release": "4.0.1",
     "version": "4.0.0.alpha",
     "channel": "quattro",
     "license": "MIT"
@@ -129,6 +130,14 @@
       "initialization": "apfs-clone",
       "fallback": "full-copy",
       "expandedSizeMiB": 24576
+    },
+    "update": {
+      "bootABI": "arm64-qemu-direct-v1",
+      "compressedImage": "update.ext4.zst",
+      "controlPort": "dev.tryomarchy.control",
+      "guestStateSchema": 1,
+      "image": "update.ext4",
+      "protocolVersion": 1
     },
     "clipboard": {
       "device": "virtserialport",

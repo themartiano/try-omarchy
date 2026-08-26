@@ -1,0 +1,16 @@
+[Unit]
+Description=Prove the Try Omarchy graphical session is ready
+PartOf=graphical-session.target
+After=graphical-session.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/try-omarchy/health-report --mark-graphical-ready
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=30
+
+[Install]
+WantedBy=graphical-session.target

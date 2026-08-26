@@ -1,0 +1,1 @@
+SUBSYSTEM=="virtio-ports", ATTR{name}=="dev.tryomarchy.control", OWNER="root", GROUP="root", MODE="0600"

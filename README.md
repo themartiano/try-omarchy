@@ -55,7 +55,11 @@ entry's normal Unix permission bits deciding whether they can modify it.
 
 ## Data and updates
 
-Normal launches keep one persistent VM under `~/Library/Application Support/Try Omarchy/VM/v1`. Removing the app does not remove this data. The start menu can reset it, and requires confirmation before replacing a disk that is incompatible with a new factory guest build.
+Normal launches keep one persistent VM under `~/Library/Application Support/Try Omarchy/VM/v1`. Removing or replacing the app does not remove this data.
+
+When a newer release can migrate that VM, the start-menu button changes from **Launch Omarchy** to **Update Omarchy**. Updating runs against a protected clone, verifies the signed offline package and migration payload, boots the candidate through a health check, and only then activates it. The app launches Omarchy automatically afterward. An interrupted or failed update leaves the previous VM intact and can be retried.
+
+Factory reset remains a separate, confirmed action for malformed, ambiguous, or genuinely incompatible storage. It is not the normal release-upgrade path.
 
 ## Development requirements
 

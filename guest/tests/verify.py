@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import py_compile
+import re
 import stat
 import subprocess
 import tempfile
@@ -50,9 +51,33 @@ def main() -> None:
     check(spec["image"]["architecture"] == "aarch64", "guest is ARM64-only")
     check(spec["guest"].get("profile") == "factory", "guest is an unprovisioned factory image")
     check(spec["guest"].get("username") is None, "factory image has no baked-in user")
+    check(
+        re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-.][A-Za-z0-9.]+)?", spec["upstream"].get("release", ""))
+        is not None,
+        "upstream release is explicit",
+    )
     check(spec["runtime"]["virtualMachineMonitor"] == "qemu-system-aarch64", "runtime uses native ARM QEMU")
     check(spec["runtime"]["hypervisor"] == "hvf", "runtime uses Apple Hypervisor.framework")
     check(spec["runtime"]["storage"]["expandedSizeMiB"] == 24576, "working disk expands to 24 GiB")
+    update = spec["runtime"]["update"]
+    check(
+        set(update)
+        == {
+            "bootABI",
+            "compressedImage",
+            "controlPort",
+            "guestStateSchema",
+            "image",
+            "protocolVersion",
+        }
+        and update["bootABI"] == "arm64-qemu-direct-v1"
+        and update["controlPort"] == "dev.tryomarchy.control"
+        and isinstance(update["guestStateSchema"], int)
+        and update["guestStateSchema"] > 0
+        and isinstance(update["protocolVersion"], int)
+        and update["protocolVersion"] > 0,
+        "offline update protocol is explicit and versioned",
+    )
     check(set(spec["inputs"]) == {"packages", "packageLock", "pacmanConfig"}, "spec has a minimal input set")
     for path in spec["inputs"].values():
         check((GUEST / path).is_file(), f"spec input exists: {path}")
@@ -87,6 +112,10 @@ def main() -> None:
     check(
         "graphical-session.target.wants/omarchy-native-clipboard-bridge.service" in configure,
         "guest starts clipboard sharing with the graphical session",
+    )
+    check(
+        "graphical-session.target.wants/try-omarchy-graphical-health.service" in configure,
+        "guest gates normal health on the graphical session",
     )
     check(
         spec["runtime"]["clipboard"]["port"] == "dev.tryomarchy.clipboard",
@@ -126,6 +155,99 @@ def main() -> None:
     )
     check("cmp -s" not in configure, "rootfs configuration uses only declared build tools")
 
+    build = read(GUEST / "build.sh")
+    pack_image = read(GUEST / "scripts/pack-image.sh")
+    check(
+        "build-update-image.sh" in build
+        and '--update-dir "$update_output"' in build
+        and "update.ext4.zst" in pack_image,
+        "guest build emits the signed offline update disk",
+    )
+    check(
+        "TRY_OMARCHY_DEFER_INITRAMFS=1" in build
+        and build.index("TRY_OMARCHY_DEFER_INITRAMFS=1")
+        < build.index("build-update-image.sh")
+        < build.rindex("mkinitcpio -P"),
+        "owned payload follows finalization and final initramfs embeds its release",
+    )
+    prepare_update = read(GUEST / "scripts/prepare-update-root.py")
+    owned_payload_source = read(
+        GUEST / "native-overlay/usr/local/lib/try-omarchy/owned-payload"
+    )
+    check(
+        all(
+            representative in prepare_update
+            for representative in (
+                "/etc/skel",
+                "/usr/share/omarchy",
+                "/usr/share/try-omarchy/repo",
+                "omarchy-native-mac-share.service",
+                "omarchy-native-mac-share-link.service",
+                "factory-overlay",
+                "native-overlay",
+                "SOURCE_TREE_MAPPINGS",
+            )
+        )
+        and "/var/lib/try-omarchy/preserved" in owned_payload_source,
+        "owned manifest converges Omarchy, overlays, integrations, and release metadata",
+    )
+    check(
+        "migrations/0000-0001-bootstrap-update-v1.sh" not in configure
+        and "native-overlay/." in configure,
+        "factory image retains the universal owned-payload reconciler",
+    )
+    update_hook = read(
+        GUEST / "native-overlay/usr/lib/initcpio/hooks/try-omarchy-update"
+    )
+    check(
+        "remount,bind,ro" in update_hook
+        and "for protected in home root" in update_hook,
+        "offline update makes home and root read-only",
+    )
+    update_runner = read(
+        GUEST / "native-overlay/usr/local/lib/try-omarchy/update-runner"
+    )
+    check(
+        "--needed" not in update_runner
+        and "TRY_OMARCHY_OWNED_PAYLOAD_SHA256" in update_runner,
+        "offline transaction reinstalls exact packages and binds the owned manifest",
+    )
+    initramfs_config = read(
+        GUEST / "factory-overlay/etc/mkinitcpio.conf.d/90-try-omarchy.conf"
+    )
+    check(
+        "fsck try-omarchy-update" in initramfs_config,
+        "initramfs runs offline updates after mounting the candidate root",
+    )
+    health_unit = read(
+        GUEST
+        / "native-overlay/usr/lib/systemd/system/try-omarchy-health.service"
+    )
+    check(
+        "WantedBy=multi-user.target" in health_unit
+        and "ConditionPathExists=/dev/virtio-ports/dev.tryomarchy.control"
+        in health_unit
+        and "--report" in health_unit,
+        "trial health runs headlessly at multi-user target",
+    )
+    graphical_health_unit = read(
+        GUEST
+        / "native-overlay/usr/lib/systemd/user/try-omarchy-graphical-health.service"
+    )
+    check(
+        "PartOf=graphical-session.target" in graphical_health_unit
+        and "--mark-graphical-ready" in graphical_health_unit,
+        "normal health requires a responsive graphical-session probe",
+    )
+    owned_payload = (
+        GUEST
+        / "native-overlay/usr/local/lib/try-omarchy/owned-payload"
+    )
+    check(
+        owned_payload.is_file() and owned_payload.stat().st_mode & stat.S_IXUSR != 0,
+        "signed owned-payload helper exists and is executable",
+    )
+
     finalizer = read(GUEST / "scripts/finalize-rootfs.sh")
     check("factory" in finalizer and "aarch64" in finalizer, "finalizer enforces the native factory contract")
     check("systemd-growfs-root.service" in finalizer, "factory disk grows on first boot")
@@ -133,6 +255,27 @@ def main() -> None:
 
     manifest_writer = read(GUEST / "scripts/write-guest-manifest.py")
     check('"kind": "try-omarchy-guest-artifacts"' in manifest_writer, "new artifacts use the native manifest identity")
+    check(
+        '"update.ext4": ("guest-update-disk"' in manifest_writer
+        and '"update.ext4.zst": ("guest-update-disk-compressed"'
+        in manifest_writer,
+        "guest manifest identifies raw and compressed update artifacts",
+    )
+
+    python_files = [
+        GUEST / "scripts/prepare-update-root.py",
+        GUEST / "scripts/update_contract.py",
+        GUEST / "scripts/write-update-contract.py",
+        GUEST / "native-overlay/usr/local/lib/try-omarchy/health-report",
+    ]
+    with tempfile.TemporaryDirectory() as temporary:
+        for index, path in enumerate(python_files):
+            py_compile.compile(
+                str(path),
+                cfile=str(Path(temporary) / f"update-{index}.pyc"),
+                doraise=True,
+            )
+    check(True, "guest update Python tools compile")
 
     audio_bridge = GUEST / "native-overlay/usr/local/bin/omarchy-native-audio-bridge"
     check(audio_bridge.stat().st_mode & stat.S_IXUSR != 0, "native audio bridge is executable")
@@ -426,6 +569,11 @@ HOTPLUG=1
         mac_share,
         *GUEST.glob("*.sh"),
         *GUEST.glob("scripts/*.sh"),
+        *GUEST.glob("migrations/*.sh"),
+        owned_payload,
+        GUEST / "native-overlay/usr/local/lib/try-omarchy/update-runner",
+        GUEST / "native-overlay/usr/lib/initcpio/hooks/try-omarchy-update",
+        GUEST / "native-overlay/usr/lib/initcpio/install/try-omarchy-update",
     ]
     for path in sorted(shell_files):
         subprocess.run(["bash", "-n", str(path)], check=True)
@@ -444,6 +592,14 @@ HOTPLUG=1
             capture_output=True,
         ).stdout.strip()
         check(actual_commit == expected_commit, "optional Omarchy source checkout matches the pinned commit")
+        release_tag = f"v{spec['upstream']['release']}^{{commit}}"
+        tagged_commit = subprocess.run(
+            ["git", "-C", str(source), "rev-parse", release_tag],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+        check(tagged_commit == expected_commit, "optional Omarchy source checkout matches the release tag")
         for relative in spec["authenticity"]["requiredPaths"]:
             check((source / relative).exists(), f"pinned source contains {relative}")
 

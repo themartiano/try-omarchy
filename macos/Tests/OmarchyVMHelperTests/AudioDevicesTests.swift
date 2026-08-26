@@ -255,6 +255,7 @@ struct VMRunLifecycleTests {
         )
         #expect(decision.showsStartupFailure)
         #expect(!decision.requiresWorkspaceReset)
+        #expect(!decision.requiresWorkspaceUpdate)
     }
 
     @Test("an incompatible saved VM stays on the start menu for reset")
@@ -266,5 +267,18 @@ struct VMRunLifecycleTests {
         )
         #expect(!decision.showsStartupFailure)
         #expect(decision.requiresWorkspaceReset)
+        #expect(!decision.requiresWorkspaceUpdate)
+    }
+
+    @Test("an outdated saved VM stays on the start menu for a non-destructive update")
+    func outdatedWorkspaceOffersUpdate() {
+        let decision = VMExitPresentationDecision.make(
+            status: VMExitPresentationDecision.updateRequiredStatus,
+            reachedVirtualMachineStart: false,
+            wasStopping: false
+        )
+        #expect(!decision.showsStartupFailure)
+        #expect(!decision.requiresWorkspaceReset)
+        #expect(decision.requiresWorkspaceUpdate)
     }
 }

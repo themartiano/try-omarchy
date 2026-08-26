@@ -39,9 +39,14 @@ Normal app launches maintain one stable user VM disk under
 `~/Library/Application Support/Try Omarchy/VM/v1`. Storage integration tests
 and specialized development runs can opt into identity-keyed parallel disks by
 setting `OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=1`; release behavior leaves it
-unset. The disk's guest-build identity is immutable so an older root filesystem
-can never boot with incompatible bundled kernel modules. A changed guest build
-requires the user-facing, confirmed Reset Omarchy flow.
+unset. A changed guest build uses the **Update Omarchy** flow: the launcher
+updates and health-checks a cloned candidate, atomically activates it, then
+launches normally. The prior generation is retained through that first normal
+launch and is removed only after the normal guest reports healthy and QEMU exits
+cleanly. Normal health is accepted only after the UWSM session has proved a live
+Wayland socket and responsive Hyprland monitor. Confirmed **Reset Omarchy**
+remains separate and is reserved for
+storage that cannot be safely recognized or migrated.
 
 Ad-hoc local builds use one stable designated requirement for the app and its
 input-capturing processes, so rebuilding does not invalidate their Accessibility

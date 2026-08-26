@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: pack-image.sh --root ROOT --output DIR [--spec SPEC]"
+  echo "Usage: pack-image.sh --root ROOT --output DIR --update-dir DIR [--spec SPEC]"
 }
 
 fail() {
@@ -16,6 +16,7 @@ guest_dir=$(cd "$script_dir/.." && pwd)
 spec="$guest_dir/spec.json"
 root=""
 output=""
+update_dir=""
 
 while (($#)); do
   case "$1" in
@@ -31,6 +32,10 @@ while (($#)); do
       spec=${2:-}
       shift 2
       ;;
+    --update-dir)
+      update_dir=${2:-}
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -43,7 +48,9 @@ done
 
 [[ -n $root ]] || fail "--root is required"
 [[ -n $output ]] || fail "--output is required"
-[[ $root == /* && $output == /* ]] || fail "root and output paths must be absolute"
+[[ -n $update_dir ]] || fail "--update-dir is required"
+[[ $root == /* && $output == /* && $update_dir == /* ]] || fail "root and output paths must be absolute"
+[[ -d $update_dir && ! -L $update_dir ]] || fail "update artifact directory is missing or unsafe"
 kernel_source=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime"].get("kernelSource", "/boot/vmlinuz-linux"))' "$spec")
 initramfs_source=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime"].get("initramfsSource", "/boot/initramfs-linux.img"))' "$spec")
 [[ $kernel_source == /boot/* && $kernel_source != *..* ]] || fail "unsafe kernel source in spec"
@@ -80,6 +87,11 @@ install -m 0644 "$root$initramfs_source" "$output/initramfs-linux.img"
 install -m 0644 "$root/usr/share/try-omarchy/build-spec.json" "$output/build-spec.json"
 install -m 0644 "$root/usr/share/try-omarchy/provenance.json" "$output/provenance.json"
 install -m 0644 "$root/usr/share/licenses/omarchy/LICENSE" "$output/LICENSE.omarchy"
+for update_artifact in update.ext4 update.ext4.zst; do
+  [[ -f $update_dir/$update_artifact && ! -L $update_dir/$update_artifact ]] \
+    || fail "update artifact is missing or unsafe: $update_artifact"
+  install -m 0644 "$update_dir/$update_artifact" "$output/$update_artifact"
+done
 if [[ -f $root/usr/share/try-omarchy/packages.lock.txt ]]; then
   install -m 0644 "$root/usr/share/try-omarchy/packages.lock.txt" "$output/packages.lock.txt"
 fi
@@ -97,6 +109,8 @@ python3 "$guest_dir/scripts/write-guest-manifest.py" --directory "$output" --spe
     provenance.json \
     rootfs.ext4 \
     rootfs.ext4.zst \
+    update.ext4 \
+    update.ext4.zst \
     vmlinuz-linux >SHA256SUMS
   [[ ! -f packages.lock.txt ]] || sha256sum packages.lock.txt >>SHA256SUMS
 )

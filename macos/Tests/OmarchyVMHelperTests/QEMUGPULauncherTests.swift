@@ -24,6 +24,10 @@ struct QEMUGPULaunchRequestTests {
             storageOption: .resetStorageOnly,
             guestDirectoryPath: guest
         ))
+        #expect(QEMUGPULaunchRequest(arguments: ["--update-storage-only", guest]) == QEMUGPULaunchRequest(
+            storageOption: .updateStorageOnly,
+            guestDirectoryPath: guest
+        ))
         #expect(QEMUGPULaunchRequest(arguments: [guest]) == QEMUGPULaunchRequest(
             storageOption: nil,
             guestDirectoryPath: guest
@@ -71,6 +75,131 @@ struct QEMUGPULaunchRequestTests {
         }
     }
 
+}
+
+@Suite("QEMU workspace update preflight")
+struct QEMUGPUWorkspaceUpdatePreflightTests {
+    private let targetIdentity = String(repeating: "b", count: 64)
+    private let savedIdentity = String(repeating: "a", count: 64)
+    private let sourceSHA = String(repeating: "d", count: 64)
+
+    @Test("only current metadata can launch while legacy metadata updates first")
+    func supportedSchemasMatchAuthoritativeCompatibility() throws {
+        let fixture = try makeFixture()
+        defer { try? fixture.fileManager.removeItem(at: fixture.root) }
+        let preflight = QEMUGPUWorkspaceUpdatePreflight(fileManager: fixture.fileManager)
+
+        for schema in [1, 2] {
+            let state = fixture.root.appendingPathComponent("schema-\(schema)", isDirectory: true)
+            try makeWorkspace(in: state, identity: savedIdentity, schema: schema)
+            let environment = ["OMARCHY_QEMU_GPU_STATE_ROOT": state.path]
+
+            #expect(preflight.requirement(
+                environment: environment,
+                targetBundleIdentity: targetIdentity
+            ) == .required)
+            #expect(preflight.requirement(
+                environment: environment,
+                targetBundleIdentity: savedIdentity
+            ) == (schema == 2 ? .notRequired : .required))
+        }
+    }
+
+    @Test("a user without a saved workspace can launch without an update")
+    func missingWorkspaceNeedsNoUpdate() throws {
+        let fixture = try makeFixture()
+        defer { try? fixture.fileManager.removeItem(at: fixture.root) }
+        let emptyState = fixture.root.appendingPathComponent("empty", isDirectory: true)
+        let preflight = QEMUGPUWorkspaceUpdatePreflight(fileManager: fixture.fileManager)
+
+        #expect(preflight.requirement(
+            environment: ["OMARCHY_QEMU_GPU_STATE_ROOT": emptyState.path],
+            targetBundleIdentity: targetIdentity
+        ) == .notRequired)
+    }
+
+    @Test("one valid identity-keyed legacy workspace offers update immediately")
+    func legacyWorkspaceNeedsUpdateBeforeFirstLaunch() throws {
+        let fixture = try makeFixture()
+        defer { try? fixture.fileManager.removeItem(at: fixture.root) }
+        let state = fixture.root.appendingPathComponent("legacy", isDirectory: true)
+        try makeWorkspace(
+            in: state,
+            workspaceName: savedIdentity,
+            identity: savedIdentity,
+            schema: 1
+        )
+        let preflight = QEMUGPUWorkspaceUpdatePreflight(fileManager: fixture.fileManager)
+
+        // This is the disk layout shipped before the single `current`
+        // workspace. Detecting it here avoids a Launch -> status 79 -> Update
+        // round trip for existing users.
+        #expect(preflight.requirement(
+            environment: ["OMARCHY_QEMU_GPU_STATE_ROOT": state.path],
+            targetBundleIdentity: targetIdentity
+        ) == .required)
+        #expect(preflight.requirement(
+            environment: ["OMARCHY_QEMU_GPU_STATE_ROOT": state.path],
+            targetBundleIdentity: savedIdentity
+        ) == .required)
+    }
+
+    @Test("unknown metadata is deferred to the authoritative launcher")
+    func futureSchemaIsIndeterminate() throws {
+        let fixture = try makeFixture()
+        defer { try? fixture.fileManager.removeItem(at: fixture.root) }
+        let state = fixture.root.appendingPathComponent("future", isDirectory: true)
+        try makeWorkspace(in: state, identity: savedIdentity, schema: 3)
+        let preflight = QEMUGPUWorkspaceUpdatePreflight(fileManager: fixture.fileManager)
+
+        #expect(preflight.requirement(
+            environment: ["OMARCHY_QEMU_GPU_STATE_ROOT": state.path],
+            targetBundleIdentity: targetIdentity
+        ) == .indeterminate)
+        #expect(preflight.requirement(
+            environment: ["OMARCHY_QEMU_GPU_STATE_ROOT": state.path],
+            targetBundleIdentity: nil
+        ) == .indeterminate)
+    }
+
+    private struct Fixture {
+        let root: URL
+        let fileManager: FileManager
+    }
+
+    private func makeFixture() throws -> Fixture {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "try-omarchy-update-preflight-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: false)
+        return Fixture(root: root, fileManager: fileManager)
+    }
+
+    private func makeWorkspace(
+        in state: URL,
+        workspaceName: String = "current",
+        identity: String,
+        schema: Int
+    ) throws {
+        let fileManager = FileManager.default
+        let workspace = state.appendingPathComponent(
+            "disks/\(workspaceName)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: workspace, withIntermediateDirectories: true)
+        #expect(Darwin.chmod(workspace.path, 0o700) == 0)
+
+        let metadata = workspace.appendingPathComponent("metadata.json", isDirectory: false)
+        let serialized = "{\"bundleIdentity\":\"\(identity)\",\"kind\":\"omarchy-qemu-persistent-disk\",\"schemaVersion\":\(schema),\"sourceRootfs\":{\"bytes\":1,\"sha256\":\"\(sourceSHA)\"}}\n"
+        try Data(serialized.utf8).write(to: metadata)
+        #expect(Darwin.chmod(metadata.path, 0o600) == 0)
+
+        let disk = workspace.appendingPathComponent("rootfs.ext4", isDirectory: false)
+        try Data([0x5a]).write(to: disk)
+        #expect(Darwin.chmod(disk.path, 0o600) == 0)
+    }
 }
 
 @Suite("QEMU storage-space estimate")
