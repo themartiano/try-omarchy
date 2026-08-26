@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # This compiles the Swift product and runs the native, shell, and guest
+      # contract suites. The full build additionally requires privileged ARM64
+      # Docker, which is unavailable on GitHub-hosted macOS runners.
+      - name: Run test suite
+        run: make test
