@@ -9,6 +9,8 @@ override BUILD_CACHE := $(ROOT)/scripts/build-cache.py
 override BUILD_STATE := $(ROOT)/.build/state
 RELEASE_SIGN_IDENTITY ?= Developer ID Application: Eduardo Martinez (RZC79MPD34)
 RELEASE_NOTARY_PROFILE ?= try-omarchy
+DEVELOPMENT_SIGN_IDENTITY ?= -
+PACKAGE_SIGN_IDENTITY ?= $(RELEASE_SIGN_IDENTITY)
 FORCE ?= 0
 
 .DEFAULT_GOAL := help
@@ -23,9 +25,11 @@ help:
 	  '  make build          Build only changed guest, runtime, and app inputs' \
 	  '  make build FORCE=1  Rebuild every component' \
 	  '  make run            Build the app from existing artifacts and open it' \
+	  '  make run DEVELOPMENT_SIGN_IDENTITY="Apple Development: ..."' \
+	  '                      Keep macOS privacy grants across local rebuilds' \
 	  '  make update-omarchy OMARCHY_RELEASE=x.y.z' \
 	  '                      Pin an upstream release and refresh the ARM64 lock' \
-	  '  make package        Create an ad-hoc DMG for local testing' \
+	  '  make package        Create a DMG; signs automatically when available' \
 	  '  make release        Create a signed and notarized distribution DMG' \
 	  '' \
 	  'Component builds:' \
@@ -66,7 +70,9 @@ runtime:
 	  "$(ROOT)/macos/build-qemu-gpu-runtime.sh"
 
 app: guest runtime
-	@OMARCHY_FORCE_BUILD="$(FORCE)" "$(BUILD_CACHE)" \
+	@OMARCHY_FORCE_BUILD="$(FORCE)" \
+	  OMARCHY_CODESIGN_IDENTITY="$(DEVELOPMENT_SIGN_IDENTITY)" \
+	  "$(BUILD_CACHE)" \
 	  --root "$(ROOT)" --state-dir "$(BUILD_STATE)" app -- \
 	  "$(ROOT)/macos/build-app.sh" --guest-dir "$(GUEST_DIST)"
 
@@ -92,7 +98,20 @@ update-omarchy:
 	@$(ROOT)/guest/test --source "$(ROOT)/.build/upstream/omarchy-v$(OMARCHY_RELEASE)"
 
 package: guest runtime
-	@$(ROOT)/macos/build-app.sh --dmg --guest-dir $(GUEST_DIST)
+	@sign_identity='$(PACKAGE_SIGN_IDENTITY)'; \
+	if [[ -n "$$sign_identity" && "$$sign_identity" != - ]] && \
+	   /usr/bin/security find-identity -v -p codesigning | \
+	     /usr/bin/grep -Fq "\"$$sign_identity\""; then \
+	  echo "Packaging with signing identity: $$sign_identity"; \
+	else \
+	  echo 'warning: configured signing identity is unavailable; creating an ad-hoc DMG' >&2; \
+	  echo 'warning: macOS Accessibility permission will need repair after this app changes' >&2; \
+	  sign_identity=-; \
+	fi; \
+	$(ROOT)/macos/build-app.sh \
+	  --dmg \
+	  --guest-dir "$(GUEST_DIST)" \
+	  --sign-identity "$$sign_identity"
 
 release-preflight:
 	@[[ "$(RELEASE_SIGN_IDENTITY)" == "Developer ID Application:"* ]] || { echo 'error: RELEASE_SIGN_IDENTITY must be a Developer ID Application identity' >&2; exit 1; }

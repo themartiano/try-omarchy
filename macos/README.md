@@ -12,7 +12,7 @@ Use the root Makefile for normal development:
 make runtime   # macos/.build/qemu-gpu-runtime
 make app       # dist/Try Omarchy.app
 make run
-make package   # ad-hoc dist/Try Omarchy.dmg for local testing
+make package   # auto-signed dist/Try Omarchy.dmg for testing
 make release   # signed and notarized dist/Try Omarchy.dmg
 make test
 ```
@@ -32,8 +32,18 @@ macos/build-app.sh \
   --notarize-profile try-omarchy
 ```
 
-Local app builds are ad-hoc signed. Runtime caches are private to
-`macos/.build/`; user-facing output always goes to `dist/`.
+Local app builds are ad-hoc signed by default. To keep Accessibility and other
+macOS privacy grants across rebuilds, use a stable Apple Development identity:
+
+```sh
+make run DEVELOPMENT_SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"
+```
+
+`make package` uses `PACKAGE_SIGN_IDENTITY`, which defaults to the configured
+Developer ID identity. If that identity is unavailable, it warns and falls back
+to an ad-hoc DMG; override it with an Apple Development identity if desired.
+Runtime caches are private to `macos/.build/`; user-facing output always goes
+to `dist/`.
 
 Normal app launches maintain one stable user VM disk under
 `~/Library/Application Support/Try Omarchy/VM/v1`. Storage integration tests
@@ -48,13 +58,11 @@ Wayland socket and responsive Hyprland monitor. Confirmed **Reset Omarchy**
 remains separate and is reserved for
 storage that cannot be safely recognized or migrated.
 
-Ad-hoc local builds use one stable designated requirement for the app and its
-input-capturing processes, so rebuilding does not invalidate their Accessibility
-grant. Builds made before this requirement was introduced used a changing
-code-hash identity: remove any such stale Try Omarchy entry from Privacy &
-Security > Accessibility once, then use the current build's **Open Settings**
-action and enable it again. Developer ID-signed release builds keep their stable
-identity through the signing certificate.
+Ad-hoc signing identifies one exact build, so macOS intentionally invalidates
+its privacy grants when that build is replaced. The app's **Open Settings**
+action repairs a stale Accessibility entry and registers the installed build,
+but a stable Apple Development or Developer ID signature is required for the
+grant to survive future updates.
 
 See the root `README.md`, `docs/architecture.md`, and `docs/releasing.md` for the
 supported platform, runtime boundaries, and distribution checklist.

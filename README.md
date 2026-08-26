@@ -149,7 +149,10 @@ dist/
 
 The two DMG targets have intentionally different purposes:
 
-- `make package` creates an ad-hoc DMG for local testing. Do not publish it.
+- `make package` creates a local DMG for testing, using
+  `PACKAGE_SIGN_IDENTITY` (the configured Developer ID identity by default)
+  when that identity is available. It warns and falls back to ad-hoc signing
+  otherwise. It is not notarized, so do not publish it.
 - `make release` rebuilds the app, Developer ID-signs the app and DMG, notarizes the DMG with Apple, and staples the notarization tickets. It assumes the guest and QEMU runtime already exist and does not run tests or rebuild those inputs.
 
 Maintainers should follow [`docs/releasing.md`](docs/releasing.md) for the full build, test, signing, license, corresponding-source, and verification checklist.

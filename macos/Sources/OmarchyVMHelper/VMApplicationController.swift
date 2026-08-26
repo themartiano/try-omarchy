@@ -324,6 +324,10 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
 
     private func requestOptionalAccessibilityPermission() {
         guard !AXIsProcessTrusted() else { return }
+        // A replacement app can leave a disabled TCC row tied to the old
+        // code signature. Reset only our own decision so the prompt below
+        // registers the executable that is installed now.
+        _ = AccessibilityPermissionRepair.resetStaleEntry()
         let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         _ = AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
         guard let settingsURL = URL(

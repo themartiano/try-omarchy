@@ -188,22 +188,8 @@ sign_options=(--force --sign "$sign_identity")
 if [[ $sign_identity != - ]]; then
   sign_options+=(--options runtime --timestamp)
 fi
-app_sign_options=("${sign_options[@]}")
+app_sign_options=("${sign_options[@]}" --identifier dev.tryomarchy.native)
 qemu_sign_options=("${sign_options[@]}" --identifier dev.tryomarchy.native)
-if [[ $sign_identity == - ]]; then
-  # The default ad-hoc designated requirement is the binary's CDHash, which
-  # changes on every local rebuild and invalidates an existing Accessibility
-  # grant. Use one stable local requirement for every process that participates
-  # in accessibility-backed input capture.
-  local_designated_requirement='=designated => identifier "dev.tryomarchy.native"'
-  app_sign_options+=(
-    --identifier dev.tryomarchy.native
-    --requirements "$local_designated_requirement"
-  )
-  qemu_sign_options+=(
-    --requirements "$local_designated_requirement"
-  )
-fi
 for library in "$contents/Resources/runtime/lib"/*.dylib; do
   codesign "${sign_options[@]}" "$library"
 done
@@ -253,7 +239,11 @@ if (( build_dmg )); then
   if [[ -n $notarize_profile ]]; then
     package_options+=(--notarize-profile "$notarize_profile")
   fi
-  "$package_dmg" "${package_options[@]}" "$app" "$dmg"
+  if ((${#package_options[@]})); then
+    "$package_dmg" "${package_options[@]}" "$app" "$dmg"
+  else
+    "$package_dmg" "$app" "$dmg"
+  fi
 fi
 if (( open_app )); then
   open "$app"
