@@ -37,6 +37,7 @@ expected_mise=$(read_spec '["supplyChain"]["mise"]["reportedVersion"]')
 [[ $(/usr/bin/mise --version) == "$expected_mise" ]] || { echo "Pinned mise identity mismatch" >&2; exit 1; }
 systemctl enable omarchy-provision-owner.service
 systemctl enable sddm.service
+systemctl enable omarchy-native-mac-share.service
 
 # The app expands only the writable APFS clone to 24 GiB. Grow ext4 online so
 # Omarchy's update-safety check sees that working capacity.

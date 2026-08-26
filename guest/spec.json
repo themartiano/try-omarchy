@@ -138,6 +138,16 @@
         "image/png"
       ]
     },
+    "sharedFolder": {
+      "device": "virtio-9p-pci",
+      "fsdriver": "local",
+      "securityModel": "none",
+      "mountTag": "mac",
+      "guestOwnerUid": 1000,
+      "guestOwnerGid": 1000,
+      "guestMountPoint": "/mnt/mac",
+      "guestLinkNameParameter": "omarchy.shared_folder_name"
+    },
     "devices": [
       "virtio-blk-pci",
       "virtio-gpu-gl-pci",
@@ -150,7 +160,8 @@
       "virtio-rng-pci",
       "virtio-balloon-pci",
       "intel-hda",
-      "hda-micro"
+      "hda-micro",
+      "virtio-9p-pci"
     ]
   }
 }

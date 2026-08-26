@@ -10,6 +10,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let baseEnvironment: [String: String]
     private let supervisor: QEMUGPUProcessSupervisor
     private let preferenceStore: AudioRoutingPreferenceStore
+    private let sharedFolderStore: SharedFolderPreferenceStore
     private let deviceProvider: HostAudioDeviceProviding
     private var startMenuWindow: StartMenuWindow?
 
@@ -26,6 +27,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         baseEnvironment: [String: String] = ProcessInfo.processInfo.environment,
         supervisor: QEMUGPUProcessSupervisor = QEMUGPUProcessSupervisor(),
         preferenceStore: AudioRoutingPreferenceStore = AudioRoutingPreferenceStore(),
+        sharedFolderStore: SharedFolderPreferenceStore = SharedFolderPreferenceStore(),
         deviceProvider: HostAudioDeviceProviding = CoreAudioHostAudioDeviceProvider()
     ) {
         self.launcherURL = launcherURL
@@ -33,6 +35,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         self.baseEnvironment = baseEnvironment
         self.supervisor = supervisor
         self.preferenceStore = preferenceStore
+        self.sharedFolderStore = sharedFolderStore
         self.deviceProvider = deviceProvider
     }
 
@@ -79,6 +82,15 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             },
             resetStorage: { [weak self] in
                 self?.resetVirtualMachine()
+            },
+            sharedFolderStatus: { [weak self] in
+                self?.sharedFolderMenuState() ?? SharedFolderMenuState.disabled
+            },
+            chooseSharedFolder: { [weak self] path in
+                self?.chooseSharedFolder(path)
+            },
+            setSharedFolderEnabled: { [weak self] enabled in
+                self?.setSharedFolderEnabled(enabled)
             },
             launch: { [weak self] in
                 self?.startVirtualMachine()
@@ -195,11 +207,16 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             preferences: preferences,
             catalog: catalog
         )
+        let sharing = SharedFolderLaunchConfiguration.make(
+            baseEnvironment: configuration.environment,
+            preference: sharedFolderStore.load(),
+            homeDirectory: Self.homeDirectory
+        )
 
         try supervisor.start(
             executableURL: launcherURL,
             arguments: arguments,
-            environment: configuration.environment,
+            environment: sharing.environment,
             launchEvent: { [weak self] event in
                 if event == .virtualMachineReady {
                     self?.virtualMachineDidStart()
@@ -215,6 +232,36 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         virtualMachineReachedStart = true
         startMenuWindow?.dismiss()
         startMenuWindow = nil
+    }
+
+    private static var homeDirectory: String {
+        FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+    }
+
+    private func sharedFolderMenuState() -> SharedFolderMenuState {
+        SharedFolderMenuState.make(
+            preference: sharedFolderStore.load(),
+            homeDirectory: Self.homeDirectory
+        )
+    }
+
+    /// Returns an error message when the folder is rejected; otherwise saves
+    /// it as the enabled share.
+    private func chooseSharedFolder(_ path: String) -> String? {
+        do {
+            let canonical = try SharedFolderPolicy.validate(path, homeDirectory: Self.homeDirectory)
+            sharedFolderStore.save(SharedFolderPreference(path: canonical, isEnabled: true))
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private func setSharedFolderEnabled(_ enabled: Bool) {
+        var preference = sharedFolderStore.load()
+        guard preference.path != nil else { return }
+        preference.isEnabled = enabled
+        sharedFolderStore.save(preference)
     }
 
     private func requestOptionalAccessibilityPermission() {

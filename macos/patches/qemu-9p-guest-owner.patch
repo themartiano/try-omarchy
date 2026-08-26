@@ -1,0 +1,154 @@
+diff --git a/fsdev/file-op-9p.h b/fsdev/file-op-9p.h
+--- a/fsdev/file-op-9p.h
++++ b/fsdev/file-op-9p.h
+@@ -96,6 +96,12 @@
+     FsThrottle fst;
+     mode_t fmode;
+     mode_t dmode;
++    /*
++     * Try Omarchy: present the exporting host user's files to the guest as
++     * these credentials (security_model=none only). -1 disables the remap.
++     */
++    uid_t guest_owner_uid;
++    gid_t guest_owner_gid;
+ } FsDriverEntry;
+ 
+ struct FsContext {
+@@ -109,6 +115,8 @@
+     void *private;
+     mode_t fmode;
+     mode_t dmode;
++    uid_t guest_owner_uid;
++    gid_t guest_owner_gid;
+ };
+ 
+ struct V9fsPath {
+diff --git a/fsdev/qemu-fsdev-opts.c b/fsdev/qemu-fsdev-opts.c
+--- a/fsdev/qemu-fsdev-opts.c
++++ b/fsdev/qemu-fsdev-opts.c
+@@ -46,6 +46,12 @@
+         }, {
+             .name = "dmode",
+             .type = QEMU_OPT_NUMBER,
++        }, {
++            .name = "guest_owner_uid",
++            .type = QEMU_OPT_NUMBER,
++        }, {
++            .name = "guest_owner_gid",
++            .type = QEMU_OPT_NUMBER,
+         },
+ 
+         THROTTLE_OPTS,
+@@ -91,6 +97,12 @@
+             .type = QEMU_OPT_NUMBER,
+         }, {
+             .name = "dmode",
++            .type = QEMU_OPT_NUMBER,
++        }, {
++            .name = "guest_owner_uid",
++            .type = QEMU_OPT_NUMBER,
++        }, {
++            .name = "guest_owner_gid",
+             .type = QEMU_OPT_NUMBER,
+         },
+ 
+diff --git a/fsdev/qemu-fsdev.c b/fsdev/qemu-fsdev.c
+--- a/fsdev/qemu-fsdev.c
++++ b/fsdev/qemu-fsdev.c
+@@ -59,6 +59,8 @@
+             "fmode",
+             "dmode",
+             "multidevs",
++            "guest_owner_uid",
++            "guest_owner_gid",
+             "throttling.bps-total",
+             "throttling.bps-read",
+             "throttling.bps-write",
+diff --git a/hw/9pfs/9p-local.c b/hw/9pfs/9p-local.c
+--- a/hw/9pfs/9p-local.c
++++ b/hw/9pfs/9p-local.c
+@@ -182,6 +182,25 @@
+     fclose(fp);
+ }
+ 
++/*
++ * Try Omarchy: with security_model=none every host operation runs as the
++ * QEMU process user, so files that user owns are the ones the guest can
++ * actually modify. Report them as owned by the configured guest account so
++ * the guest kernel's permission checks agree with the host's.
++ */
++static void local_remap_guest_owner(FsContext *fs_ctx, struct stat *stbuf)
++{
++    if (!(fs_ctx->export_flags & V9FS_SM_NONE)) {
++        return;
++    }
++    if (fs_ctx->guest_owner_uid != (uid_t)-1 && stbuf->st_uid == geteuid()) {
++        stbuf->st_uid = fs_ctx->guest_owner_uid;
++    }
++    if (fs_ctx->guest_owner_gid != (gid_t)-1 && stbuf->st_gid == getegid()) {
++        stbuf->st_gid = fs_ctx->guest_owner_gid;
++    }
++}
++
+ static int local_lstat(FsContext *fs_ctx, V9fsPath *fs_path, struct stat *stbuf)
+ {
+     int err = -1;
+@@ -224,6 +243,7 @@
+     } else if (fs_ctx->export_flags & V9FS_SM_MAPPED_FILE) {
+         local_mapped_file_attr(dirfd, name, stbuf);
+     }
++    local_remap_guest_owner(fs_ctx, stbuf);
+ 
+ err_out:
+     close_preserve_errno(dirfd);
+@@ -811,6 +831,7 @@
+         errno = EOPNOTSUPP;
+         return -1;
+     }
++    local_remap_guest_owner(fs_ctx, stbuf);
+     return err;
+ }
+ 
+@@ -1581,6 +1602,30 @@
+             error_setg(errp, "dmode is only valid for mapped security modes");
+             return -1;
+         }
++    }
++
++    fse->guest_owner_uid = (uid_t)-1;
++    fse->guest_owner_gid = (gid_t)-1;
++    if (qemu_opt_find(opts, "guest_owner_uid") ||
++        qemu_opt_find(opts, "guest_owner_gid")) {
++        uint64_t owner_uid = qemu_opt_get_number(opts, "guest_owner_uid",
++                                                 (uint64_t)-1);
++        uint64_t owner_gid = qemu_opt_get_number(opts, "guest_owner_gid",
++                                                 (uint64_t)-1);
++
++        if (!(fse->export_flags & V9FS_SM_NONE)) {
++            error_setg(errp, "guest_owner_uid and guest_owner_gid are only "
++                       "valid for security_model=none");
++            return -1;
++        }
++        if (owner_uid == (uint64_t)-1 || owner_gid == (uint64_t)-1 ||
++            owner_uid >= (uid_t)-1 || owner_gid >= (gid_t)-1) {
++            error_setg(errp, "guest_owner_uid and guest_owner_gid must both "
++                       "be set to valid ids");
++            return -1;
++        }
++        fse->guest_owner_uid = (uid_t)owner_uid;
++        fse->guest_owner_gid = (gid_t)owner_gid;
+     }
+ 
+     fse->path = g_strdup(path);
+diff --git a/hw/9pfs/9p.c b/hw/9pfs/9p.c
+--- a/hw/9pfs/9p.c
++++ b/hw/9pfs/9p.c
+@@ -4329,6 +4329,8 @@
+ 
+     s->ctx.fmode = fse->fmode;
+     s->ctx.dmode = fse->dmode;
++    s->ctx.guest_owner_uid = fse->guest_owner_uid;
++    s->ctx.guest_owner_gid = fse->guest_owner_gid;
+ 
+     s->fids = g_hash_table_new(NULL, NULL);
+     qemu_co_rwlock_init(&s->rename_lock);

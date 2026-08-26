@@ -1,0 +1,10 @@
+[Unit]
+Description=Link the shared Mac folder into the home directory
+ConditionPathIsMountPoint=/mnt/mac
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/omarchy-native-mac-share --link
+
+[Install]
+WantedBy=default.target

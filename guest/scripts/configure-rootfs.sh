@@ -66,13 +66,15 @@ install -m 0755 "$guest_dir/compat/ttfx-arm64" "$root/usr/local/bin/ttfx"
 # also carries one deliberate command replacement for safe PipeWire input
 # switching. The display fragment selects Cocoa's host-composited cursor path
 # and keeps the guest mode synchronized when QEMU changes the virtual EDID.
-# The clipboard bridge mirrors the Mac pasteboard into the Wayland session.
+# The clipboard bridge mirrors the Mac pasteboard into the Wayland session,
+# and the Mac folder mount completes the host integration.
 cp -a "$guest_dir/native-overlay/." "$root/"
 chmod 0755 \
   "$root/usr/bin/omarchy-audio-input-set-default" \
   "$root/usr/local/bin/omarchy-native-audio-bridge" \
   "$root/usr/local/bin/omarchy-native-clipboard-bridge" \
-  "$root/usr/local/bin/omarchy-native-display-sync"
+  "$root/usr/local/bin/omarchy-native-display-sync" \
+  "$root/usr/local/bin/omarchy-native-mac-share"
 audio_helper_source_digest=$(sha256sum \
   "$guest_dir/native-overlay/usr/bin/omarchy-audio-input-set-default")
 audio_helper_source_digest=${audio_helper_source_digest%% *}
@@ -89,6 +91,14 @@ ln -sfn /usr/lib/systemd/user/omarchy-native-audio-bridge.service \
 # graphical session rather than the plain user manager.
 ln -sfn /usr/lib/systemd/user/omarchy-native-clipboard-bridge.service \
   "$root/etc/systemd/user/graphical-session.target.wants/omarchy-native-clipboard-bridge.service"
+
+# The shared Mac folder mounts system-wide at the spec's mount point; at login
+# each account links ~/<Mac folder name> to it. QEMU maps the Mac user's files
+# to the Omarchy owner account (uid 1000, the first provisioned user).
+shared_folder_mount_point=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime"]["sharedFolder"]["guestMountPoint"])' "$spec")
+[[ $shared_folder_mount_point == /mnt/mac ]] || fail "shared folder mount point must match the link unit"
+ln -sfn /usr/lib/systemd/user/omarchy-native-mac-share-link.service \
+  "$root/etc/systemd/user/default.target.wants/omarchy-native-mac-share-link.service"
 cat "$guest_dir/fragments/hypr-monitors-arm-qemu.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
 
 hostname=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["guest"]["hostname"])' "$spec")
