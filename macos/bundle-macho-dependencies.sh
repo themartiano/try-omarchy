@@ -108,6 +108,21 @@ while ((index < ${#queue[@]})); do
       install_name_tool -change "$dependency" "$replacement" "$image"
     queue+=("$local_path")
   done < <(macho_dependencies "$image")
+
+  # Homebrew's sdl2 formula is now sdl2-compat, which dlopens SDL3 at runtime
+  # (@loader_path/libSDL3.dylib). otool -L does not surface that dependency.
+  if [[ ${image##*/} == libSDL2-2.0.0.dylib ]] && \
+    LC_ALL=C grep -aFq '@loader_path/libSDL3.dylib' "$image"; then
+    local_sdl3="$lib_dir/libSDL3.dylib"
+    if [[ ! -f $local_sdl3 || -L $local_sdl3 ]]; then
+      if [[ -f $brew_prefix/opt/sdl3/lib/libSDL3.0.dylib ]]; then
+        install -m 0755 "$brew_prefix/opt/sdl3/lib/libSDL3.0.dylib" "$local_sdl3"
+      else
+        install -m 0755 "$(find_brew_library libSDL3.0.dylib)" "$local_sdl3"
+      fi
+    fi
+    queue+=("$local_sdl3")
+  fi
 done
 
 for library in "$lib_dir"/*.dylib; do
