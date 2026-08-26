@@ -44,7 +44,8 @@ cannot be shared. **Turn Off** keeps the choice but stops exporting it on the
 next launch; Omarchy then removes the link and gives back any standard folder
 such as `~/Documents` that the link had taken over. The share belongs to the
 first Omarchy account created during
-provisioning; additional guest accounts see it read-only.
+provisioning. Additional guest accounts can reach the same share, with each
+entry's normal Unix permission bits deciding whether they can modify it.
 
 ## Requirements
 

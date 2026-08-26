@@ -96,17 +96,17 @@ shared_folder_name() {
     encoded=${argument#*=}
   done
   if [[ -z $encoded || ! $encoded =~ ^[A-Za-z0-9_-]+$ ]]; then
-    echo "$fallback_name"
+    printf '%s\n' "$fallback_name"
     return 0
   fi
   local padded=$encoded
   while (( ${#padded} % 4 )); do padded+="="; done
   decoded=$(printf '%s' "$padded" | tr -- '-_' '+/' | base64 -d 2>/dev/null | tr -d '\0') || decoded=""
   if [[ -z $decoded || $decoded == */* || $decoded == . || $decoded == .. || $decoded == *$'\n'* ]]; then
-    echo "$fallback_name"
+    printf '%s\n' "$fallback_name"
     return 0
   fi
-  echo "$decoded"
+  printf '%s\n' "$decoded"
 }
 
 # Folders that xdg-user-dirs manages for this user, one absolute path per
@@ -130,18 +130,25 @@ xdg_user_dirs() {
   done
 }
 
+is_xdg_user_dir() {
+  local candidate=$1
+  local home=$2
+  local xdg_dir
+  while IFS= read -r xdg_dir; do
+    [[ $xdg_dir == "$candidate" ]] && return 0
+  done < <(xdg_user_dirs "$home")
+  return 1
+}
+
 # Remove a link to the share. A link that replaced an empty xdg folder gives
 # that folder back so file pickers and downloads keep working.
 remove_share_link() {
   local link=$1
   local home=$2
-  local xdg_dir
   rm -f "$link"
-  while IFS= read -r xdg_dir; do
-    [[ $xdg_dir == "$link" ]] || continue
+  if is_xdg_user_dir "$link" "$home"; then
     mkdir -p "$link" && log "restored $link after removing the shared folder link"
-    break
-  done < <(xdg_user_dirs "$home")
+  fi
 }
 
 link_share() {
@@ -157,10 +164,10 @@ link_share() {
   # Drop links from an earlier share so only the current one remains. This
   # runs even without a mount, otherwise turning sharing off would leave
   # ~/<old name> pointing at an empty, root-owned mount point.
-  for existing in "$home"/* "$home"/.[!.]*; do
+  while IFS= read -r -d '' existing; do
     [[ -L $existing && $(readlink "$existing") == "$mount_point" && $existing != "$target" ]] || continue
     remove_share_link "$existing" "$home"
-  done
+  done < <(find "$home" -mindepth 1 -maxdepth 1 -type l -print0)
   if [[ -z $target ]]; then
     log "no Mac folder is mounted; nothing to link"
     return 0
@@ -171,8 +178,11 @@ link_share() {
     target="$home/$fallback_name"
   elif [[ -d $target ]]; then
     # xdg-user-dirs pre-creates folders such as Documents. Replace only an
-    # empty one; keep real content and fall back to the generic name.
-    if ! rmdir "$target" 2>/dev/null; then
+    # empty one; preserve every other directory, even when it is empty.
+    if ! is_xdg_user_dir "$target" "$home"; then
+      log "$target is an existing non-xdg folder; using ~/$fallback_name instead"
+      target="$home/$fallback_name"
+    elif ! rmdir "$target" 2>/dev/null; then
       log "$target already has content; using ~/$fallback_name instead"
       target="$home/$fallback_name"
     fi

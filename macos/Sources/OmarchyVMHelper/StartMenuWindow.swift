@@ -231,15 +231,27 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
 
         let sharedFolder = sharedFolderStatus()
         let sharedFolderDetail: String
+        let sharedFolderDetailLines: [String]?
         var sharedFolderActions: [(String, Selector)] = [("Choose…", #selector(beginSharedFolderSelection))]
         if let problem = sharedFolder.problem {
             sharedFolderDetail = problem
+            sharedFolderDetailLines = nil
         } else if let displayPath = sharedFolder.displayPath, sharedFolder.isEnabled {
-            sharedFolderDetail = "Omarchy can read and write “\(displayPath)” as ~/\(SharedFolderPolicy.guestLinkName(sharedFolder.path ?? displayPath))."
+            let guestPath = "~/\(SharedFolderPolicy.guestLinkName(sharedFolder.path ?? displayPath))"
+            sharedFolderDetail = "Mac folder: \(displayPath). In Omarchy: \(guestPath)."
+            sharedFolderDetailLines = [
+                "Mac folder: \(displayPath)",
+                "In Omarchy: \(guestPath)",
+            ]
         } else if let displayPath = sharedFolder.displayPath {
-            sharedFolderDetail = "Off. “\(displayPath)” stays private to this Mac until turned on."
+            sharedFolderDetail = "Mac folder: \(displayPath). In Omarchy: Off."
+            sharedFolderDetailLines = [
+                "Mac folder: \(displayPath)",
+                "In Omarchy: Off",
+            ]
         } else {
             sharedFolderDetail = "Optional. Pick a Mac folder to use inside Omarchy under the same name."
+            sharedFolderDetailLines = nil
         }
         if sharedFolder.path != nil {
             sharedFolderActions.append(
@@ -252,18 +264,23 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             symbolName: "folder",
             title: "Shared folder",
             detail: sharedFolderDetail,
+            compactDetailLines: sharedFolderDetailLines,
             granted: sharedFolder.isEnabled && sharedFolder.problem == nil,
             statusLabels: ("●  On", "○  Off"),
-            actions: sharedFolderActions
+            actions: sharedFolderActions,
+            minimumHeight: 92
         )
 
         let permissionRows = NSStackView(
             views: [accessibilityRow, separator(), microphoneRow, separator(), sharedFolderRow]
         )
         permissionRows.orientation = .vertical
-        permissionRows.alignment = .width
+        permissionRows.alignment = .leading
         permissionRows.spacing = 0
         permissionRows.translatesAutoresizingMaskIntoConstraints = false
+        for row in [accessibilityRow, microphoneRow, sharedFolderRow] {
+            row.widthAnchor.constraint(equalTo: permissionRows.widthAnchor).isActive = true
+        }
 
         let permissionCard = NSView()
         permissionCard.wantsLayer = true
@@ -469,14 +486,17 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         symbolName: String,
         title: String,
         detail: String,
+        compactDetailLines: [String]? = nil,
         granted: Bool,
         statusLabels: (granted: String, denied: String),
-        actions: [(String, Selector)]
+        actions: [(String, Selector)],
+        minimumHeight: CGFloat = 76
     ) -> NSView {
         let symbol = NSImageView()
         symbol.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
         symbol.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 19, weight: .medium)
         symbol.contentTintColor = .controlAccentColor
+        symbol.identifier = NSUserInterfaceItemIdentifier("permission-symbol-\(symbolName)")
         symbol.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             symbol.widthAnchor.constraint(equalToConstant: 26),
@@ -485,13 +505,31 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
 
         let name = NSTextField(labelWithString: title)
         name.font = .systemFont(ofSize: 14, weight: .semibold)
+        name.identifier = NSUserInterfaceItemIdentifier("permission-title-\(symbolName)")
 
-        let explanation = NSTextField(wrappingLabelWithString: detail)
-        explanation.font = .systemFont(ofSize: 12)
-        explanation.textColor = .secondaryLabelColor
-        explanation.maximumNumberOfLines = 2
+        let explanations: [NSTextField]
+        if let compactDetailLines {
+            explanations = compactDetailLines.enumerated().map { index, line in
+                let explanation = NSTextField(labelWithString: line)
+                explanation.font = .systemFont(ofSize: 12)
+                explanation.textColor = .secondaryLabelColor
+                explanation.maximumNumberOfLines = 1
+                explanation.lineBreakMode = .byTruncatingMiddle
+                explanation.toolTip = line
+                explanation.identifier = NSUserInterfaceItemIdentifier(
+                    "permission-detail-\(symbolName)-\(index)"
+                )
+                return explanation
+            }
+        } else {
+            let explanation = NSTextField(wrappingLabelWithString: detail)
+            explanation.font = .systemFont(ofSize: 12)
+            explanation.textColor = .secondaryLabelColor
+            explanation.maximumNumberOfLines = 2
+            explanations = [explanation]
+        }
 
-        let labels = NSStackView(views: [name, explanation])
+        let labels = NSStackView(views: [name] + explanations)
         labels.orientation = .vertical
         labels.alignment = .leading
         labels.spacing = 3
@@ -518,32 +556,53 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             status.textColor = .secondaryLabelColor
         }
         status.alignment = .right
+        status.identifier = NSUserInterfaceItemIdentifier("permission-status-\(symbolName)")
         status.setContentHuggingPriority(.required, for: .horizontal)
 
         var trailingViews: [NSView] = [status]
-        for (actionTitle, action) in actions {
+        for (index, actionDescription) in actions.enumerated() {
+            let (actionTitle, action) = actionDescription
             let button = NSButton(title: actionTitle, target: self, action: action)
-            button.controlSize = .small
+            button.controlSize = .regular
             button.isEnabled = !microphoneRequestInFlight && !launchInProgress && !resetInProgress
-            button.identifier = NSUserInterfaceItemIdentifier("permission-action-\(symbolName)")
+            let identifier = actions.count == 1
+                ? "permission-action-\(symbolName)"
+                : "permission-action-\(symbolName)-\(index)"
+            button.identifier = NSUserInterfaceItemIdentifier(identifier)
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 28).isActive = true
+
             trailingViews.append(button)
         }
         let trailing = NSStackView(views: trailingViews)
         trailing.orientation = .vertical
         trailing.alignment = .trailing
-        trailing.spacing = 6
+        trailing.spacing = 7
+        trailing.translatesAutoresizingMaskIntoConstraints = false
+        if trailingViews.count > 2 {
+            trailing.setCustomSpacing(2, after: trailingViews[1])
+        }
 
-        let row = NSStackView(views: [symbol, labels, trailing])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 12
+        labels.translatesAutoresizingMaskIntoConstraints = false
+
+        let row = NSView()
+        row.identifier = NSUserInterfaceItemIdentifier("permission-row-\(symbolName)")
         row.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(symbol)
+        row.addSubview(labels)
+        row.addSubview(trailing)
         NSLayoutConstraint.activate([
-            row.heightAnchor.constraint(greaterThanOrEqualToConstant: 76),
-            trailing.widthAnchor.constraint(equalToConstant: 112),
+            row.heightAnchor.constraint(greaterThanOrEqualToConstant: minimumHeight),
+            symbol.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            symbol.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            labels.leadingAnchor.constraint(equalTo: symbol.trailingAnchor, constant: 12),
+            labels.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            labels.trailingAnchor.constraint(lessThanOrEqualTo: trailing.leadingAnchor, constant: -12),
+            trailing.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            trailing.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            trailing.widthAnchor.constraint(equalToConstant: 124),
         ])
-        if let button = trailingViews.last as? NSButton {
-            button.widthAnchor.constraint(equalTo: trailing.widthAnchor).isActive = true
+        for actionView in trailingViews.dropFirst() {
+            actionView.widthAnchor.constraint(equalTo: trailing.widthAnchor).isActive = true
         }
         labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
         labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)

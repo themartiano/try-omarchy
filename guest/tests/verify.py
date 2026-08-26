@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -33,6 +34,10 @@ def json_file(path: Path) -> dict:
     value = json.loads(read(path))
     check(isinstance(value, dict), f"{path.name} contains a JSON object")
     return value
+
+
+def encoded_share_name(name: str) -> str:
+    return base64.urlsafe_b64encode(name.encode()).decode().rstrip("=")
 
 
 def main() -> None:
@@ -193,6 +198,18 @@ def main() -> None:
         environment["HOME"] = str(home)
         name = subprocess.run([str(mac_share), "--name"], text=True, env=environment, capture_output=True, check=True)
         check(name.stdout == "Wörk Files\n", "Mac share link name decodes from the kernel command line")
+        for option_like_name in ("-n", "-e", "-E"):
+            cmdline.write_text(
+                f"root=/dev/vda rw omarchy.shared_folder_name={encoded_share_name(option_like_name)}\n"
+            )
+            decoded = subprocess.run(
+                [str(mac_share), "--name"], text=True, env=environment, capture_output=True, check=True
+            )
+            check(
+                decoded.stdout == f"{option_like_name}\n",
+                f"Mac share link preserves option-like name {option_like_name}",
+            )
+        cmdline.write_text("root=/dev/vda rw omarchy.qemu_virgl=1 omarchy.shared_folder_name=V8O2cmsgRmlsZXM\n")
         subprocess.run([str(mac_share), "--link"], env=environment, check=True, capture_output=True)
         check(
             os.readlink(home / "Wörk Files") == "/mnt/mac" and not (home / "OldName").exists(),
@@ -236,6 +253,40 @@ def main() -> None:
             and not (home / "Documents").is_symlink(),
             "Mac share link cleanup runs without a mount and restores a displaced xdg folder",
         )
+
+        # Existing non-XDG directories belong to the guest, even when empty.
+        # Use ~/Mac as the fallback instead of deleting the existing folder.
+        work = home / "Work"
+        work.mkdir()
+        cmdline.write_text(
+            f"root=/dev/vda rw omarchy.shared_folder_name={encoded_share_name('Work')}\n"
+        )
+        environment["OMARCHY_MAC_SHARE_ASSUME_MOUNTED"] = "1"
+        subprocess.run([str(mac_share), "--link"], env=environment, check=True, capture_output=True)
+        check(
+            work.is_dir() and not work.is_symlink() and os.readlink(home / "Mac") == "/mnt/mac",
+            "Mac share link preserves an empty non-xdg folder and falls back to ~/Mac",
+        )
+        environment["OMARCHY_MAC_SHARE_ASSUME_MOUNTED"] = "0"
+        subprocess.run([str(mac_share), "--link"], env=environment, check=True, capture_output=True)
+        check(work.is_dir(), "Mac share cleanup leaves the preserved non-xdg folder intact")
+
+        # Names beginning with two dots are valid Mac basenames and must be
+        # included when stale links are removed.
+        cmdline.write_text(
+            f"root=/dev/vda rw omarchy.shared_folder_name={encoded_share_name('..Work')}\n"
+        )
+        environment["OMARCHY_MAC_SHARE_ASSUME_MOUNTED"] = "1"
+        subprocess.run([str(mac_share), "--link"], env=environment, check=True, capture_output=True)
+        hidden_share = home / "..Work"
+        check(
+            hidden_share.is_symlink() and os.readlink(hidden_share) == "/mnt/mac",
+            "Mac share link supports a name beginning with two dots",
+        )
+        environment["OMARCHY_MAC_SHARE_ASSUME_MOUNTED"] = "0"
+        subprocess.run([str(mac_share), "--link"], env=environment, check=True, capture_output=True)
+        check(not hidden_share.exists() and not hidden_share.is_symlink(), "Mac share cleanup removes a ..-prefixed link")
+        cmdline.write_text("root=/dev/vda rw\n")
         environment["OMARCHY_MAC_SHARE_ASSUME_MOUNTED"] = "1"
 
         # Sharing turned off: --mount returns at once instead of polling for
