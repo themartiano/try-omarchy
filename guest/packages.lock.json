@@ -337,7 +337,7 @@
     "libusbmuxd": "2.1.1-2",
     "libutempter": "1.2.3-1",
     "libutf8proc": "2.11.3-1",
-    "libuv": "1.52.1-1",
+    "libuv": "1.52.1-2",
     "libva": "2.24.1-1",
     "libvdpau": "1.5-4",
     "libverto": "0.3.2-6",

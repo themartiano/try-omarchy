@@ -97,7 +97,7 @@ epoxy_archive_name=libepoxy-1.0.4.arm64_sequoia.bottle.tar.gz
 epoxy_url="https://github.com/startergo/homebrew-libepoxy/releases/download/v1.0.4/$epoxy_archive_name"
 epoxy_sha256=8787cc8c34921834665262dff4941216dd6717edddf2c6d5cdfe04f03b24c517
 
-slirp_version=4.9.3
+slirp_version=4.9.4
 sdl_version=2.32.70
 
 die() {
