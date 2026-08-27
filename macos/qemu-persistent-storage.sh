@@ -53,23 +53,23 @@ _qps_is_positive_integer() {
 }
 
 _qps_lstat_kind() {
-  stat -f '%HT' "$1" 2>/dev/null
+  /usr/bin/stat -f '%HT' "$1" 2>/dev/null
 }
 
 _qps_owner() {
-  stat -f '%u' "$1" 2>/dev/null
+  /usr/bin/stat -f '%u' "$1" 2>/dev/null
 }
 
 _qps_permissions() {
-  stat -f '%Lp' "$1" 2>/dev/null
+  /usr/bin/stat -f '%Lp' "$1" 2>/dev/null
 }
 
 _qps_size() {
-  stat -f '%z' "$1" 2>/dev/null
+  /usr/bin/stat -f '%z' "$1" 2>/dev/null
 }
 
 _qps_file_identity() {
-  stat -f '%d:%i' "$1" 2>/dev/null
+  /usr/bin/stat -f '%d:%i' "$1" 2>/dev/null
 }
 
 _qps_assert_private_directory() {
@@ -235,7 +235,7 @@ _qps_lock_fd_is_open() {
 _qps_fd_matches_path() {
   local qps_fd=$1
   local qps_path=$2
-  [[ $(stat -f '%HT:%u:%i' "/dev/fd/$qps_fd" 2>/dev/null) == \
+  [[ $(/usr/bin/stat -f '%HT:%u:%i' "/dev/fd/$qps_fd" 2>/dev/null) == \
      "Regular File:$(id -u):$(_qps_file_identity "$qps_path" | sed 's/^.*://')" ]]
 }
 
@@ -1008,7 +1008,7 @@ _qps_migrate_legacy_single_workspace() {
       _qps_error "leaving oversized legacy workspace untouched: $qps_candidate_name"
       continue
     fi
-    qps_candidate_mtime=$(stat -f '%m' "$qps_candidate/rootfs.ext4" 2>/dev/null)
+    qps_candidate_mtime=$(/usr/bin/stat -f '%m' "$qps_candidate/rootfs.ext4" 2>/dev/null)
     [[ $qps_candidate_mtime =~ ^[0-9]+$ ]] || {
       [[ $qps_candidate_name != "$qps_identity" ]] || qps_exact_invalid=1
       _qps_error "leaving legacy workspace with an unreadable modification time untouched: $qps_candidate_name"

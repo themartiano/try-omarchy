@@ -47,7 +47,7 @@ port_forwarding_library="$script_dir/qemu-port-forwarding.sh"
 [[ -d $guest_input && ! -L $guest_input ]] || fail "ARM guest directory is missing or unsafe: $guest_input"
 guest_dir=$(cd "$guest_input" && pwd -P)
 
-for command in codesign file getconf id mktemp ps stat sysctl; do
+for command in codesign file getconf id mktemp ps sysctl; do
   command -v "$command" >/dev/null || fail "$command is required"
 done
 
@@ -745,7 +745,7 @@ if [[ -n $shared_folder ]]; then
   [[ $shared_folder != *$'\n'* && $shared_folder != *$'\r'* && $shared_folder != *,* ]] || {
     fail "shared folder resolves to a path with an unsupported character: $shared_folder"
   }
-  [[ $(stat -f '%u' "$shared_folder") == $(id -u) ]] || {
+  [[ $(_qps_owner "$shared_folder") == $(id -u) ]] || {
     fail "shared folder must be owned by this user: $shared_folder"
   }
   home_dir=$(cd "$HOME" 2>/dev/null && pwd -P || true)
@@ -816,7 +816,7 @@ cleanup() {
     case "$work_dir" in
       /private/tmp/omarchy-qemu-gpu.??????)
         if [[ -d $work_dir && ! -L $work_dir && -f $owner_marker && ! -L $owner_marker ]] &&
-           [[ $(stat -f '%u' "$work_dir" 2>/dev/null) == $(id -u) ]] &&
+           [[ $(_qps_owner "$work_dir") == $(id -u) ]] &&
            [[ $(<"$owner_marker") == "$owner_token" ]]; then
           /bin/rm -rf "$work_dir" || {
             echo "run-qemu-gpu: could not remove owned temporary directory $work_dir" >&2
@@ -850,8 +850,8 @@ reap_stale_work_dirs() {
 
   for candidate in /private/tmp/omarchy-qemu-gpu.??????; do
     [[ -d $candidate && ! -L $candidate ]] || continue
-    [[ $(stat -f '%u' "$candidate" 2>/dev/null) == $(id -u) ]] || continue
-    [[ $(stat -f '%Lp' "$candidate" 2>/dev/null) == 700 ]] || continue
+    [[ $(_qps_owner "$candidate") == $(id -u) ]] || continue
+    [[ $(_qps_permissions "$candidate") == 700 ]] || continue
 
     marker="$candidate/.run-qemu-gpu.owner"
     [[ -f $marker && ! -L $marker ]] || continue
@@ -890,7 +890,7 @@ case "$work_dir" in
   *) fail "mktemp returned an unexpected path: $work_dir" ;;
 esac
 [[ -d $work_dir && ! -L $work_dir ]] || fail "temporary directory is unsafe: $work_dir"
-[[ $(stat -f '%u' "$work_dir") == $(id -u) ]] || fail "temporary directory is not owned by this user"
+[[ $(_qps_owner "$work_dir") == $(id -u) ]] || fail "temporary directory is not owned by this user"
 owner_marker="$work_dir/.run-qemu-gpu.owner"
 owner_token="run-qemu-gpu:v1:$$:${RANDOM}${RANDOM}"
 printf '%s\n' "$owner_token" >"$owner_marker"

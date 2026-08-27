@@ -130,18 +130,30 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+# Runtime filesystem checks must use macOS BSD stat even when Homebrew
+# coreutils shadows it in the caller's PATH.
+shadow_bin="$test_root/path-shadow"
+mkdir "$shadow_bin"
+printf '%s\n' \
+  '#!/bin/bash' \
+  'echo "qemu-persistent-storage.test: PATH stat was invoked" >&2' \
+  'exit 97' \
+  >"$shadow_bin/stat"
+chmod 700 "$shadow_bin/stat"
+export PATH="$shadow_bin:$PATH"
+
 export OMARCHY_QEMU_GPU_STATE_ROOT="$test_root/state"
 export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=1
 source_disk="$test_root/source.ext4"
 dd if=/dev/zero of="$source_disk" bs=4096 count=1 >/dev/null 2>&1
 printf 'immutable-base' | dd of="$source_disk" bs=1 seek=32 conv=notrunc >/dev/null 2>&1
 printf '\x53\xef' | dd of="$source_disk" bs=1 seek=1080 conv=notrunc >/dev/null 2>&1
-source_bytes=$(stat -f '%z' "$source_disk")
+source_bytes=$(/usr/bin/stat -f '%z' "$source_disk")
 source_sha=$(shasum -a 256 "$source_disk" | awk '{print $1}')
 source_disk_b="$test_root/source-b.ext4"
 /bin/cp "$source_disk" "$source_disk_b"
 printf 'updated-factory' | dd of="$source_disk_b" bs=1 seek=64 conv=notrunc >/dev/null 2>&1
-source_bytes_b=$(stat -f '%z' "$source_disk_b")
+source_bytes_b=$(/usr/bin/stat -f '%z' "$source_disk_b")
 source_sha_b=$(shasum -a 256 "$source_disk_b" | awk '{print $1}')
 identity_a=$(printf 'bundle-a' | shasum -a 256 | awk '{print $1}')
 identity_b=$(printf 'bundle-b' | shasum -a 256 | awk '{print $1}')
@@ -162,7 +174,7 @@ set -euo pipefail
 /bin/cp "$3" "$5"
 EOF
 chmod 700 "$zstd_test"
-compressed_bytes=$(stat -f '%z' "$compressed_disk")
+compressed_bytes=$(/usr/bin/stat -f '%z' "$compressed_disk")
 qemu_persistent_storage_materialize_source \
   "$identity_compressed" "$compressed_disk" "$compressed_bytes" \
   "$source_sha" "$source_bytes" "$zstd_test"
@@ -179,7 +191,7 @@ expanded_bytes=$((source_bytes + 16384))
 qemu_persistent_storage_select \
   persistent "$identity_expanded" "$source_disk" "$source_sha" "$source_bytes" '' "$expanded_bytes"
 expanded_disk=$QEMU_SELECTED_DISK
-assert_eq "$(stat -f '%z' "$expanded_disk")" "$expanded_bytes"
+assert_eq "$(/usr/bin/stat -f '%z' "$expanded_disk")" "$expanded_bytes"
 printf 'expanded-persistence' | dd of="$expanded_disk" bs=1 seek="$source_bytes" conv=notrunc >/dev/null 2>&1
 qemu_persistent_storage_release_lock
 qemu_persistent_storage_select \
@@ -193,7 +205,7 @@ persistent_a=$QEMU_SELECTED_DISK
 assert_eq "$QEMU_SELECTED_STORAGE_MODE" persistent
 assert test -f "$persistent_a"
 assert test -f "${persistent_a%/*}/metadata.json"
-assert_eq "$(stat -f '%Lp' "$persistent_a")" 600
+assert_eq "$(/usr/bin/stat -f '%Lp' "$persistent_a")" 600
 printf 'saved-user-data' | dd of="$persistent_a" bs=1 seek=128 conv=notrunc >/dev/null 2>&1
 qemu_persistent_storage_release_lock
 
