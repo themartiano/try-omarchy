@@ -366,9 +366,12 @@ checksums["guest-manifest.json"] = hashlib.sha256(manifest_data).hexdigest()
 )
 PY
 
-PATH="$shim_dir:/usr/bin:/bin:/usr/sbin:/sbin" \
+if ! PATH="$shim_dir:/usr/bin:/bin:/usr/sbin:/sbin" \
   "$fixture_macos/build-app.sh" --guest-dir "$fixture_guest" \
-  >"$test_root/build.stdout" 2>"$test_root/build.stderr"
+  >"$test_root/build.stdout" 2>"$test_root/build.stderr"; then
+  /bin/cat "$test_root/build.stderr" >&2
+  fail "fixture app build failed"
+fi
 
 app="$fixture_repo/dist/Try Omarchy.app"
 launch_plist="$app/Contents/Resources/guest/launch.plist"
@@ -394,7 +397,7 @@ assert_eq "$(plist_read updateDiskSHA256)" "$(printf 'b%.0s' {1..64})"
 assert_eq "$(plist_read updateDiskBytes)" 8388608
 assert_eq "$(plist_read compressedUpdateDiskBytes)" \
   "$(stat -f '%z' "$fixture_guest/update.ext4.zst")"
-assert_eq "$(plist_read guestStateSchema)" 1
+assert_eq "$(plist_read guestStateSchema)" 2
 assert_eq "$(plist_read bootABI)" arm64-qemu-direct-v1
 assert_eq "$(plist_read controlPort)" dev.tryomarchy.control
 assert_eq "$(plist_read protocolVersion)" 1
@@ -419,7 +422,7 @@ assert_eq "$inspect_command_line" "$expected_kernel_command_line"
 assert_eq "$inspect_update_sha" "$(printf 'b%.0s' {1..64})"
 assert_eq "$inspect_update_bytes" 8388608
 assert_eq "$inspect_update_zst_bytes" "$(stat -f '%z' "$fixture_guest/update.ext4.zst")"
-assert_eq "$inspect_schema" 1
+assert_eq "$inspect_schema" 2
 assert_eq "$inspect_abi" arm64-qemu-direct-v1
 assert_eq "$inspect_control_port" dev.tryomarchy.control
 assert_eq "$inspect_protocol" 1
@@ -664,7 +667,7 @@ assert_eq "$(sed -n '1p' "$success_control_log")" --bridge-native-control
 assert_eq "$(sed -n '5p' "$success_control_log")" update
 assert_eq "$(sed -n '6p' "$success_control_log")" "$control_token"
 assert_eq "$(sed -n '7p' "$success_control_log")" arm64-qemu-direct-v1
-assert_eq "$(sed -n '8p' "$success_control_log")" 1
+assert_eq "$(sed -n '8p' "$success_control_log")" 2
 assert_contains "$(<"$success_storage_log")" 'materialize-update '
 assert_contains "$(<"$success_storage_log")" 'prepare-update '
 assert_before "$success_storage_log" prepare-update 'qemu-exit 0'
@@ -727,7 +730,7 @@ clean_control_log="$test_root/clean-normal-launch/control.log"
 assert_eq "$(sed -n '5p' "$clean_control_log")" health
 assert_eq "$(sed -n '6p' "$clean_control_log")" -
 assert_eq "$(sed -n '7p' "$clean_control_log")" arm64-qemu-direct-v1
-assert_eq "$(sed -n '8p' "$clean_control_log")" 1
+assert_eq "$(sed -n '8p' "$clean_control_log")" 2
 
 # QEMU status zero alone is not a guest-health proof. If the normal boot never
 # publishes the validated marker, keep the predecessor for the next retry.

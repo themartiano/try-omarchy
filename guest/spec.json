@@ -43,6 +43,16 @@
       "binarySha256": "6b7471271a990cbd6a795b24f9df83338aa220c227bf75fd083442e5a728f5f7",
       "reportedVersion": "2026.8.11 linux-arm64 (2026-08-23)",
       "license": "MIT"
+    },
+    "yay": {
+      "version": "13.0.1",
+      "url": "https://github.com/Jguer/yay/releases/download/v13.0.1/yay_13.0.1_aarch64.tar.gz",
+      "sha256": "75bc500c8677d6760f51117ae0a61689e9cf165bea3c4800825a5c879d030726",
+      "binarySha256": "ec7453a87021f28331782d8077b8a2a7c69870710fcee991f2164dc197362ff2",
+      "reportedVersion": "yay v13.0.1 - libalpm v16.0.1",
+      "license": "GPL-3.0-or-later",
+      "licenseUrl": "https://raw.githubusercontent.com/Jguer/yay/v13.0.1/LICENSE",
+      "licenseSha256": "589ed823e9a84c56feb95ac58e7cf384626b9cbf4fda2a907bc36e103de1bad2"
     }
   },
   "themes": [
@@ -135,7 +145,7 @@
       "bootABI": "arm64-qemu-direct-v1",
       "compressedImage": "update.ext4.zst",
       "controlPort": "dev.tryomarchy.control",
-      "guestStateSchema": 1,
+      "guestStateSchema": 2,
       "image": "update.ext4",
       "protocolVersion": 1
     },

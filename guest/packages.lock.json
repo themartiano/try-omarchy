@@ -60,6 +60,7 @@
     "exiv2": "0.28.8-2",
     "expat": "2.8.3-1",
     "eza": "0.23.5-2",
+    "fakeroot": "1:1.37.2-3",
     "fastfetch": "2.67.1-1",
     "fcft": "3.3.3-1",
     "fd": "10.4.2-2",
@@ -337,7 +338,7 @@
     "libusbmuxd": "2.1.1-2",
     "libutempter": "1.2.3-1",
     "libutf8proc": "2.11.3-1",
-    "libuv": "1.52.1-1",
+    "libuv": "1.52.1-2",
     "libva": "2.24.1-1",
     "libvdpau": "1.5-4",
     "libverto": "0.3.2-6",
@@ -594,6 +595,6 @@
     "zram-generator": "1.2.1-1",
     "zstd": "1.5.7-3"
   },
-  "requestedFileSha256": "d4e35a4991fb8e86f00db88518d7ebb5382a59c45ca549edd207beb9eda11d8f",
+  "requestedFileSha256": "c63acbf1a06b04b494bd65b38f1ee10847786fcbc3ff5cab4e8e0039c0582f30",
   "schemaVersion": 1
 }
