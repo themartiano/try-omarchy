@@ -53,6 +53,7 @@ struct NativeControlBridgeTests {
         """.utf8))
         #expect(update == GuestControlMessage(
             bootABI: bootABI,
+            errorCode: nil,
             fromGuestStateSchema: 0,
             guestStateSchema: 1,
             kind: .update,
@@ -91,6 +92,20 @@ struct NativeControlBridgeTests {
         #expect(try !sequence.receive(update))
         #expect(try sequence.receive(health))
 
+        let failed = try GuestControlMessage.decode(Data("""
+        {"bootABI":"\(bootABI)","errorCode":"package-transaction-failed","fromGuestStateSchema":0,"guestStateSchema":1,"protocolVersion":1,"status":"failed","transaction":"\(transaction)","type":"update"}
+        """.utf8))
+        #expect(failed.errorCode == "package-transaction-failed")
+        var failedSequence = GuestControlSequence(expectation: GuestControlExpectation(
+            bootABI: bootABI,
+            guestStateSchema: 1,
+            kind: .update,
+            transaction: transaction
+        ))
+        #expect(throws: HelperError.io("guest update failed: package-transaction-failed")) {
+            try failedSequence.receive(failed)
+        }
+
         let resumed = try GuestControlMessage.decode(Data("""
         {"bootABI":"\(bootABI)","fromGuestStateSchema":1,"guestStateSchema":1,"protocolVersion":1,"status":"complete","transaction":"\(transaction)","type":"update"}
         """.utf8))
@@ -113,6 +128,7 @@ struct NativeControlBridgeTests {
             "{\"bootABI\":\"\(bootABI)\",\"extra\":true,\"guestStateSchema\":1,\"protocolVersion\":1,\"status\":\"ready\",\"type\":\"health\"}",
             "{\"bootABI\":\"\(bootABI)\",\"guestStateSchema\":1,\"protocolVersion\":1,\"readiness\":\"system\",\"status\":\"ready\",\"type\":\"health\"}",
             "{\"bootABI\":\"\(bootABI)\",\"guestStateSchema\":1,\"protocolVersion\":1,\"readiness\":\"graphical\",\"status\":\"ready\",\"transaction\":\"\(transaction)\",\"type\":\"health\"}",
+            "{\"bootABI\":\"\(bootABI)\",\"errorCode\":\"Bad_Error\",\"fromGuestStateSchema\":0,\"guestStateSchema\":1,\"protocolVersion\":1,\"status\":\"failed\",\"transaction\":\"\(transaction)\",\"type\":\"update\"}",
         ]
         for message in invalid {
             #expect(throws: HelperError.self) {

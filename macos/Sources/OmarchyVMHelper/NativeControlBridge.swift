@@ -20,6 +20,7 @@ struct GuestControlMessage: Equatable {
     static let maximumLineBytes = 4 * 1024
 
     let bootABI: String
+    let errorCode: String?
     let fromGuestStateSchema: Int?
     let guestStateSchema: Int
     let kind: Kind
@@ -43,6 +44,7 @@ struct GuestControlMessage: Equatable {
         }
 
         let transaction = object["transaction"] as? String
+        var errorCode: String?
         var fromGuestStateSchema: Int?
         var readiness: Readiness?
         switch kind {
@@ -61,20 +63,31 @@ struct GuestControlMessage: Equatable {
             }
             readiness = decodedReadiness
         case .update:
-            guard Set(object.keys) == [
+            let completionKeys = Set([
                 "bootABI", "fromGuestStateSchema", "guestStateSchema", "protocolVersion", "status",
                 "transaction", "type",
-            ], status == "complete",
+            ])
+            let failureKeys = completionKeys.union(["errorCode"])
+            guard (status == "complete" && Set(object.keys) == completionKeys)
+                    || (status == "failed" && Set(object.keys) == failureKeys),
                   let sourceSchema = exactInteger(object["fromGuestStateSchema"]), sourceSchema >= 0,
                   sourceSchema <= schema,
                   let transaction, isIdentity(transaction) else {
                 throw HelperError.io("guest update message has an unexpected schema")
+            }
+            if status == "failed" {
+                guard let decodedErrorCode = object["errorCode"] as? String,
+                      isErrorCode(decodedErrorCode) else {
+                    throw HelperError.io("guest update failure has an invalid error code")
+                }
+                errorCode = decodedErrorCode
             }
             fromGuestStateSchema = sourceSchema
         }
 
         return Self(
             bootABI: bootABI,
+            errorCode: errorCode,
             fromGuestStateSchema: fromGuestStateSchema,
             guestStateSchema: schema,
             kind: kind,
@@ -107,6 +120,22 @@ struct GuestControlMessage: Equatable {
         value.utf8.count == 64 && value.utf8.allSatisfy {
             ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
         }
+    }
+
+    private static func isErrorCode(_ value: String) -> Bool {
+        let bytes = value.utf8
+        guard !bytes.isEmpty, bytes.count <= 64,
+              bytes.first != 45, bytes.last != 45 else { return false }
+        var previousWasHyphen = false
+        for byte in bytes {
+            let isHyphen = byte == 45
+            guard (byte >= 48 && byte <= 57)
+                    || (byte >= 97 && byte <= 122)
+                    || isHyphen,
+                  !(isHyphen && previousWasHyphen) else { return false }
+            previousWasHyphen = isHyphen
+        }
+        return true
     }
 }
 
@@ -141,6 +170,9 @@ struct GuestControlSequence: Equatable {
         if !updateCompleted {
             guard expectation.accepts(message) else {
                 throw HelperError.io("guest update completion does not match this launch")
+            }
+            if let errorCode = message.errorCode {
+                throw HelperError.io("guest update failed: \(errorCode)")
             }
             updateCompleted = true
             return false

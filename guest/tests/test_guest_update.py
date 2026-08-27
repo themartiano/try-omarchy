@@ -313,6 +313,24 @@ class BootstrapMigrationTests(unittest.TestCase):
             sentinel = candidate / "home/user/state.txt"
             sentinel.parent.mkdir(parents=True)
             sentinel.write_text("irreplaceable user state\n", encoding="utf-8")
+            autologin = candidate / "etc/sddm.conf.d/autologin.conf"
+            autologin.parent.mkdir(parents=True)
+            autologin_content = (
+                "[Autologin]\nUser=martiano\nSession=omarchy.desktop\n"
+            )
+            autologin_cleanup = (
+                candidate
+                / "etc/systemd/system/omarchy-provision-autologin-once.service"
+            )
+            autologin_cleanup.parent.mkdir(parents=True, exist_ok=True)
+            autologin_cleanup.write_text("one-shot cleanup\n", encoding="utf-8")
+            autologin_cleanup_link = (
+                candidate
+                / "etc/systemd/system/graphical.target.wants"
+                / autologin_cleanup.name
+            )
+            autologin_cleanup_link.parent.mkdir(parents=True, exist_ok=True)
+            autologin_cleanup_link.symlink_to(f"../{autologin_cleanup.name}")
             representative = {
                 "/usr/share/omarchy/version": "target-version\n",
                 "/usr/bin/omarchy-menu": "#!/bin/sh\necho target-command\n",
@@ -350,6 +368,13 @@ class BootstrapMigrationTests(unittest.TestCase):
                 encoding="ascii",
             )
             release_id = "e" * 64
+            preserved_autologin = (
+                candidate
+                / f"var/lib/try-omarchy/preserved/{release_id}/original-etc"
+                / autologin.relative_to(candidate / "etc")
+            )
+            preserved_autologin.parent.mkdir(parents=True)
+            preserved_autologin.write_text(autologin_content, encoding="utf-8")
             (update / "target-state.json").write_text(
                 json.dumps({"releaseId": release_id}, separators=(",", ":")) + "\n",
                 encoding="ascii",
@@ -362,6 +387,10 @@ class BootstrapMigrationTests(unittest.TestCase):
             environment = os.environ.copy()
             environment["TRY_OMARCHY_INITRAMFS_ROOT"] = str(initramfs)
             environment["TRY_OMARCHY_OWNED_PAYLOAD_RUNNER"] = str(OWNED_PAYLOAD)
+
+            # Model the real SDDM package transaction, which removed the
+            # provisioner's machine-specific autologin file.
+            self.assertFalse(autologin.exists())
 
             for mode in ("apply", "verify", "apply", "verify"):
                 subprocess.run(
@@ -378,6 +407,9 @@ class BootstrapMigrationTests(unittest.TestCase):
                 "SIGNED=1\n",
             )
             self.assertEqual(sentinel.read_text(), "irreplaceable user state\n")
+            self.assertEqual(autologin.read_text(), autologin_content)
+            self.assertFalse(autologin_cleanup.exists())
+            self.assertFalse(autologin_cleanup_link.exists())
             self.assertEqual(
                 (candidate / "var/lib/pacman/sync/try-omarchy.db").read_text(),
                 "target repo\n",

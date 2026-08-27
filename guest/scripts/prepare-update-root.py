@@ -49,6 +49,7 @@ EXACT_OWNED_PATHS = (
     "/etc/systemd/system/multi-user.target.wants/omarchy-native-mac-share.service",
     "/etc/systemd/system/multi-user.target.wants/try-omarchy-health.service",
     "/etc/systemd/system/omarchy-provision-owner.service",
+    "/etc/systemd/system/omarchy-provision-owner.service.d/10-try-omarchy-native.conf",
     "/etc/systemd/user/default.target.wants/omarchy-native-audio-bridge.service",
     "/etc/systemd/user/default.target.wants/omarchy-native-mac-share-link.service",
     "/etc/systemd/user/graphical-session.target.wants/omarchy-native-clipboard-bridge.service",
