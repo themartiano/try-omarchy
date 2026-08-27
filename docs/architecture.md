@@ -56,8 +56,10 @@ kernel command line as `omarchy.shared_folder_name=<base64url>`.
 
 The guest image is built by this project; it is not an official prebuilt image
 from Basecamp. The `guest/` builder starts with pinned Arch Linux ARM packages,
-installs a pinned upstream Omarchy source tree, and adds the small configuration
-and compatibility layer needed for ARM64 and QEMU.
+installs a pinned upstream Omarchy source tree, applies any explicitly declared
+and checksummed backports to the staged copy, and adds the small configuration
+and compatibility layer needed for ARM64 and QEMU. The verified upstream Git
+checkout itself stays untouched.
 
 The result is upstream Omarchy running in a project-built ARM64 Linux image. The
 image has no preconfigured user, so Omarchy's upstream owner-provisioning flow
@@ -69,10 +71,11 @@ creates the account on first boot.
 - A few QEMU C and Objective-C files are patched before QEMU is compiled. These
   patches cover the Cocoa app identity, display behavior, graphics integration,
   host audio-device routing, and shared-folder ownership mapping.
-- The pinned Omarchy runtime trees are copied from upstream. Guest overlays add
-  the QEMU and ARM64 integration around them, including narrowly audited
-  command replacements for host-backed audio selection and VM-aware cursor
-  restoration after the screensaver exits.
+- The pinned Omarchy runtime trees are copied from upstream. Reviewed temporary
+  backports are applied strictly against declared file hashes and recorded in
+  artifact provenance. Guest overlays add the QEMU and ARM64 integration around
+  them, including narrowly audited command replacements for host-backed audio
+  selection and VM-aware cursor restoration after the screensaver exits.
 - The final Arch Linux ARM pacman files live under `/usr/share/try-omarchy/`.
   An Omarchy-supported `pre-refresh-pacman` hook restores them after a channel
   refresh writes its x86_64 templates to `/etc`; the upstream templates remain
@@ -103,6 +106,8 @@ Ephemeral mode uses a disposable disk.
 
 The app validates the exact guest file set, JSON schemas, hashes, sizes, pinned
 upstream identity, runtime contract, kernel command line, architecture, and
-factory profile before QEMU starts. It also verifies the app signature and
-required QEMU features. Updates to a pinned dependency should update its digest,
-contract tests, notices, and review evidence together.
+factory profile before QEMU starts. Guest provenance separates verbatim runtime
+trees from backported trees and records each reviewed patch with its input and
+output hashes. The app also verifies the app signature and required QEMU
+features. Updates to a pinned dependency should update its digest, contract
+tests, notices, and review evidence together.

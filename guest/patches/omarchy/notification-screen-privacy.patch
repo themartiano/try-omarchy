@@ -1,0 +1,167 @@
+diff --git a/shell/plugins/notifications/Service.qml b/shell/plugins/notifications/Service.qml
+index 0122310..72f10b2 100644
+--- a/shell/plugins/notifications/Service.qml
++++ b/shell/plugins/notifications/Service.qml
+@@ -50,6 +50,19 @@ Item {
+   readonly property int defaultBarSize: barVertical ? Style.bar.sizeVertical : Style.bar.sizeHorizontal
+   readonly property int liveBarSize: shell && shell.bar && !shell.bar.barHidden ? Math.max(0, shell.bar.barSize) : defaultBarSize
+   readonly property int barClearance: liveBarSize + Style.gapsOut
++  // Notification surfaces live on the overlay layer, above the ordinary
++  // fullscreen terminal used by the screensaver. Hide them while either the
++  // screensaver or secure lock covers the session, and resume their remaining
++  // lifetime only once the user can see them again. Startup remains private
++  // until the idle service reconciles windows that predate a shell reload.
++  readonly property var idleService: shell ? shell.firstPartyServiceFor("omarchy.idle") : null
++  readonly property var lockService: shell ? shell.firstPartyServiceFor("omarchy.lock") : null
++  readonly property bool screenObscured:
++    !idleService
++    || !idleService.screensaverStateKnown
++    || idleService.screensaverWindowCount > 0
++    || !lockService
++    || lockService.locked
+ 
+   // Live Notification objects by originalId, kept OUT of the ListModels: a
+   // QObject stored in a model role becomes a dangling C++ pointer when the
+@@ -956,7 +969,7 @@ Item {
+       id: popupWindow
+       required property var modelData
+       screen: modelData
+-      visible: popupModel.count > 0
++      visible: popupModel.count > 0 && !service.screenObscured
+ 
+       WlrLayershell.namespace: "omarchy-notifications"
+       WlrLayershell.layer: WlrLayer.Overlay
+@@ -1012,7 +1025,7 @@ Item {
+ 
+             readonly property real lifetime: service.durationFor(cardSlot.urgency, cardSlot.expireTimeout)
+             property real remainingLifetime: 1.0
+-            readonly property bool ticking: cardSlot.lifetime > 0 && !card.hovered
++            readonly property bool ticking: cardSlot.lifetime > 0 && !card.hovered && !service.screenObscured
+ 
+             // A client updating this notification in place rewrites the row
+             // under the card (see refreshPopup). New text deserves a full look,
+diff --git a/shell/plugins/services/idle/Service.qml b/shell/plugins/services/idle/Service.qml
+index 488f296..40d3b05 100644
+--- a/shell/plugins/services/idle/Service.qml
++++ b/shell/plugins/services/idle/Service.qml
+@@ -35,6 +35,8 @@ Item {
+   property string lastEventAt: ""
+   property var screensaverWindows: ({})
+   property int screensaverWindowCount: 0
++  property bool screensaverStateKnown: false
++  property var screensaverWindowsClosedDuringProbe: ({})
+ 
+   function secondsFromConfig(value, fallback) {
+     return IdleModel.secondsFromConfig(value, fallback)
+@@ -115,13 +117,57 @@ Item {
+     root.screensaverWindowCount = 0
+   }
+ 
++  function normalizeWindowAddress(address) {
++    var normalized = String(address || "").toLowerCase()
++    return normalized.indexOf("0x") === 0 ? normalized.slice(2) : normalized
++  }
++
+   function setScreensaverWindow(address, visible) {
+-    var next = IdleModel.screensaverWindowsAfter(root.screensaverWindows, address, visible)
++    var next = IdleModel.screensaverWindowsAfter(root.screensaverWindows, normalizeWindowAddress(address), visible)
+     root.screensaverWindows = next.windows
+     root.screensaverWindowCount = next.count
+   }
+ 
++  function setScreensaverProbeClosed(address, closed) {
++    var normalized = normalizeWindowAddress(address)
++    if (!normalized) return
++
++    var next = ({})
++    for (var existing in root.screensaverWindowsClosedDuringProbe) {
++      if (existing !== normalized && root.screensaverWindowsClosedDuringProbe[existing]) next[existing] = true
++    }
++    if (closed) next[normalized] = true
++    root.screensaverWindowsClosedDuringProbe = next
++  }
++
++  function reconcileScreensaverWindows(payload) {
++    var clients
++    try {
++      clients = JSON.parse(String(payload || ""))
++    } catch (error) {
++      logEvent("screensaver-state-probe-invalid", error)
++      screensaverStateProbeRetry.restart()
++      return
++    }
++    if (!Array.isArray(clients)) {
++      logEvent("screensaver-state-probe-invalid", "expected client array")
++      screensaverStateProbeRetry.restart()
++      return
++    }
++
++    for (var index = 0; index < clients.length; index++) {
++      var client = clients[index] || ({})
++      if (String(client.class || "") !== root.screensaverClass) continue
++      var address = normalizeWindowAddress(client.address)
++      if (address && !root.screensaverWindowsClosedDuringProbe[address]) setScreensaverWindow(address, true)
++    }
++    root.screensaverWindowsClosedDuringProbe = ({})
++    root.screensaverStateKnown = true
++    logEvent("screensaver-state-ready", root.screensaverWindowCount + " window(s)")
++  }
++
+   function handleScreensaverWindowOpened(address) {
++    if (!root.screensaverStateKnown) setScreensaverProbeClosed(address, false)
+     setScreensaverWindow(address, true)
+     screensaverLaunchGraceTimer.stop()
+   }
+@@ -149,7 +195,8 @@ Item {
+       if (String(open[2] || "") === root.screensaverClass) root.handleScreensaverWindowOpened(open[0])
+     } else if (name === "closewindow") {
+       var close = eventParts(event, 1)
+-      var address = String(close[0] || "")
++      var address = normalizeWindowAddress(close[0])
++      if (!root.screensaverStateKnown) setScreensaverProbeClosed(address, true)
+       if (root.screensaverWindows[address]) root.handleScreensaverWindowClosed(address)
+     }
+   }
+@@ -280,6 +327,13 @@ Item {
+     }
+   }
+ 
++  Timer {
++    id: screensaverStateProbeRetry
++    interval: 2000
++    repeat: false
++    onTriggered: if (!root.screensaverStateKnown && !screensaverStateProbe.running) screensaverStateProbe.running = true
++  }
++
+   Connections {
+     target: Hyprland
+     function onRawEvent(event) { root.handleHyprlandEvent(event) }
+@@ -289,6 +343,20 @@ Item {
+     id: screensaverProcess
+     onExited: function(exitCode, exitStatus) { root.logEvent("process-exit", "screensaver exitCode=" + exitCode + " status=" + exitStatus) }
+   }
++  Process {
++    id: screensaverStateProbe
++    command: ["hyprctl", "-j", "clients"]
++    stdout: StdioCollector {
++      waitForEnd: true
++      onStreamFinished: root.reconcileScreensaverWindows(text)
++    }
++    onExited: function(exitCode, exitStatus) {
++      if (!root.screensaverStateKnown) {
++        root.logEvent("screensaver-state-probe-failed", "exitCode=" + exitCode + " status=" + exitStatus)
++        screensaverStateProbeRetry.restart()
++      }
++    }
++  }
+   Process {
+     id: lockProcess
+     onExited: function(exitCode, exitStatus) { root.logEvent("process-exit", "lock exitCode=" + exitCode + " status=" + exitStatus) }
+@@ -331,6 +399,7 @@ Item {
+ 
+   Component.onCompleted: {
+     logEvent("service-ready")
++    screensaverStateProbe.running = true
+     refreshStayAwakeState()
+   }
+ 

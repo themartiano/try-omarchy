@@ -10,6 +10,7 @@ import json
 import os
 import py_compile
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -62,6 +63,39 @@ def main() -> None:
     check(set(spec["inputs"]) == {"packages", "packageLock", "pacmanConfig"}, "spec has a minimal input set")
     for path in spec["inputs"].values():
         check((GUEST / path).is_file(), f"spec input exists: {path}")
+
+    authenticity = spec["authenticity"]
+    verbatim_trees = authenticity["verbatimRuntimeTrees"]
+    backported_trees = authenticity["backportedRuntimeTrees"]
+    check(
+        "shell" not in verbatim_trees
+        and backported_trees == ["shell"]
+        and not set(verbatim_trees) & set(backported_trees),
+        "patched shell tree is separated from verbatim upstream runtime trees",
+    )
+    backports = authenticity["backports"]
+    check(
+        [backport.get("id") for backport in backports]
+        == ["notification-hover-close", "notification-screen-privacy"],
+        "notification backports are explicitly ordered and identified",
+    )
+    for backport in backports:
+        patch_path = GUEST / backport["patch"]
+        check(patch_path.is_file(), f"backport patch exists: {backport['id']}")
+        check(
+            hashlib.sha256(patch_path.read_bytes()).hexdigest() == backport["patchSha256"],
+            f"backport patch digest matches: {backport['id']}",
+        )
+        check(
+            backport.get("reference", "").startswith("https://github.com/basecamp/omarchy/"),
+            f"backport has an upstream review reference: {backport['id']}",
+        )
+        for target in backport["targets"]:
+            check(
+                re.fullmatch(r"[0-9a-f]{64}", target.get("beforeSha256", "")) is not None
+                and re.fullmatch(r"[0-9a-f]{64}", target.get("afterSha256", "")) is not None,
+                f"backport target digests are pinned: {backport['id']} {target['path']}",
+            )
 
     pacman_conf = read(GUEST / spec["inputs"]["pacmanConfig"])
     check(
@@ -274,6 +308,19 @@ def main() -> None:
         "verify-screensaver-override.py" in build
         and build.index("verify-screensaver-override.py") < build.index("materialize-omarchy.sh"),
         "every guest build checks the screensaver override against its pinned source",
+    )
+    check(
+        "apply-omarchy-backports.py" in build
+        and build.index("materialize-omarchy.sh") < build.index("apply-omarchy-backports.py")
+        < build.index("configure-rootfs.sh"),
+        "reviewed Omarchy backports apply only to the verified staged source",
+    )
+    provenance_writer = read(GUEST / "scripts/write-provenance.py")
+    check(
+        "backportedRuntimeTrees" in provenance_writer
+        and '"backports": backports' in provenance_writer
+        and "enumerated reviewed backports" in provenance_writer,
+        "guest provenance distinguishes verbatim trees from reviewed backports",
     )
     register_runtime = read(GUEST / "scripts/register-omarchy-runtime.sh")
     check(
@@ -681,6 +728,106 @@ HOTPLUG=1
         check(tagged_commit == expected_commit, "optional Omarchy source checkout matches the release tag")
         for relative in spec["authenticity"]["requiredPaths"]:
             check((source / relative).exists(), f"pinned source contains {relative}")
+
+        for backport in backports:
+            for target in backport["targets"]:
+                check(
+                    hashlib.sha256((source / target["path"]).read_bytes()).hexdigest()
+                    == target["beforeSha256"],
+                    f"pinned source matches backport preimage: {backport['id']} {target['path']}",
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            staged_root = Path(temporary) / "root"
+            staged_omarchy = staged_root / "usr/share/omarchy"
+            for backport in backports:
+                for target in backport["targets"]:
+                    destination = staged_omarchy / target["path"]
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source / target["path"], destination)
+
+            subprocess.run(
+                [
+                    "python3",
+                    str(GUEST / "scripts/apply-omarchy-backports.py"),
+                    "--root",
+                    str(staged_root),
+                    "--spec",
+                    str(GUEST / "spec.json"),
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            for backport in backports:
+                for target in backport["targets"]:
+                    check(
+                        hashlib.sha256((staged_omarchy / target["path"]).read_bytes()).hexdigest()
+                        == target["afterSha256"],
+                        f"backport produces reviewed postimage: {backport['id']} {target['path']}",
+                    )
+
+            notification_card = read(
+                staged_omarchy / "shell/plugins/notifications/components/NotificationCard.qml"
+            )
+            check(
+                'Layout.rightMargin: Style.space(10)' in notification_card
+                and 'opacity: root.hovered ? 1 : 0' in notification_card
+                and 'text: "✕"' in notification_card
+                and 'onClicked: root.closeRequested()' in notification_card
+                and notification_card.index("// Hover-revealed close")
+                > notification_card.index("id: mainColumn"),
+                "notification hover exposes a topmost clickable dismiss control",
+            )
+
+            notification_service = read(
+                staged_omarchy / "shell/plugins/notifications/Service.qml"
+            )
+            check(
+                'firstPartyServiceFor("omarchy.idle")' in notification_service
+                and 'firstPartyServiceFor("omarchy.lock")' in notification_service
+                and "!idleService.screensaverStateKnown" in notification_service
+                and 'visible: popupModel.count > 0 && !service.screenObscured'
+                in notification_service
+                and "!card.hovered && !service.screenObscured" in notification_service,
+                "notification popups hide and pause behind screensaver and lock surfaces",
+            )
+            idle_service = read(staged_omarchy / "shell/plugins/services/idle/Service.qml")
+            check(
+                "property bool screensaverStateKnown: false" in idle_service
+                and 'command: ["hyprctl", "-j", "clients"]' in idle_service
+                and "function reconcileScreensaverWindows(payload)" in idle_service
+                and "screensaverWindowsClosedDuringProbe" in idle_service
+                and "id: screensaverStateProbeRetry" in idle_service
+                and idle_service.count("screensaverStateProbeRetry.restart()") >= 3
+                and "!root.screensaverStateKnown && !screensaverStateProbe.running"
+                in idle_service,
+                "screensaver state reconciles preexisting windows and retries failed probes",
+            )
+            popup_visible = lambda count, state_known, screensavers, lock_ready, locked: (
+                count > 0
+                and state_known
+                and screensavers == 0
+                and lock_ready
+                and not locked
+            )
+            check(
+                popup_visible(1, True, 0, True, False)
+                and not popup_visible(1, False, 0, True, False)
+                and not popup_visible(1, True, 1, True, False)
+                and not popup_visible(1, True, 0, False, False)
+                and not popup_visible(1, True, 0, True, True)
+                and not popup_visible(0, True, 0, True, False),
+                "notification visibility covers startup, screensaver, lock, and empty states",
+            )
+
+        source_status = subprocess.run(
+            ["git", "-C", str(source), "status", "--porcelain", "--untracked-files=all"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+        check(source_status == "", "backport verification leaves the pinned checkout untouched")
 
         upstream_screensaver = read(source / "bin/omarchy-screensaver")
         upstream_cursor_restore = (

@@ -223,6 +223,7 @@ python3 "$guest_dir/scripts/verify-screensaver-override.py" \
   --source "$source_dir/bin/omarchy-screensaver" \
   --override "$guest_dir/native-overlay/usr/bin/omarchy-screensaver"
 "$guest_dir/scripts/materialize-omarchy.sh" --root "$root" --source "$source_dir" --spec "$spec"
+python3 "$guest_dir/scripts/apply-omarchy-backports.py" --root "$root" --spec "$spec"
 "$guest_dir/scripts/configure-rootfs.sh" --root "$root" --spec "$spec"
 "$guest_dir/scripts/register-omarchy-runtime.sh" \
   --root "$root" \

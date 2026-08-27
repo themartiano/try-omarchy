@@ -95,8 +95,45 @@
       "config",
       "default",
       "install",
-      "migrations",
+      "migrations"
+    ],
+    "backportedRuntimeTrees": [
       "shell"
+    ],
+    "backports": [
+      {
+        "id": "notification-hover-close",
+        "description": "Restore the upstream hover-revealed notification dismiss control omitted from v4.0.1.",
+        "reference": "https://github.com/basecamp/omarchy/commit/9b72edcc94513cba016f145b1ac4ffdaea54b577",
+        "patch": "patches/omarchy/notification-hover-close.patch",
+        "patchSha256": "f9c57fba4e3ce99cbfa32c2e497a58c1afd8627302991454ca023c1f9e149d95",
+        "targets": [
+          {
+            "path": "shell/plugins/notifications/components/NotificationCard.qml",
+            "beforeSha256": "3ffb66ebc065886fc05b6215bd6fff9cd9e5769fac15f807748d550c91efc2f4",
+            "afterSha256": "03db278b7301b41e5b21925bf22f92f3f3ff718a74d5b17121da993cd2342ae3"
+          }
+        ]
+      },
+      {
+        "id": "notification-screen-privacy",
+        "description": "Hide and pause notification popups while the screensaver or lock surface obscures the session.",
+        "reference": "https://github.com/basecamp/omarchy/pull/8247",
+        "patch": "patches/omarchy/notification-screen-privacy.patch",
+        "patchSha256": "11248cba5a641f8174d3cb51974f56950cacf868ebf2b90b7c45021ba9cfeaf1",
+        "targets": [
+          {
+            "path": "shell/plugins/notifications/Service.qml",
+            "beforeSha256": "11665542e70df80ccd3c785a6143dee2daefd2082e4f75c740adc2c9947cf7c2",
+            "afterSha256": "e1f17b537e06c4e5d904f3c7ca0292ece330503f684430272d490fa78815bf04"
+          },
+          {
+            "path": "shell/plugins/services/idle/Service.qml",
+            "beforeSha256": "c61f91b55adf864e4ce571526644727b7a2e9f672964af8098b9fd9a4913eee2",
+            "afterSha256": "43f7d1dbf07885316ea7cb58b4513ad4ff5287abe5da1b91b85daace6b940b46"
+          }
+        ]
+      }
     ],
     "requiredPaths": [
       "LICENSE",
@@ -119,6 +156,9 @@
       "install/provisioning/omarchy-provision-owner.service",
       "install/provisioning/setup-form.sh",
       "install/user/all.sh",
+      "shell/plugins/notifications/components/NotificationCard.qml",
+      "shell/plugins/notifications/Service.qml",
+      "shell/plugins/services/idle/Service.qml",
       "shell/shell.qml",
       "themes/tokyo-night/colors.toml",
       "version"

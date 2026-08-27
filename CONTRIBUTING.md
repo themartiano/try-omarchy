@@ -47,7 +47,9 @@ runs the guest contract against that exact checkout.
 Before committing an update, review the upstream diff—especially changes to
 `install/omarchy-base.packages`—against the intentionally trimmed
 `guest/packages.txt`. Add runtime dependencies the native guest now needs, then
-run `make guest` and `make test`. The upstream source can report a development
+review every entry in `authenticity.backports`: drop a backport that the new
+release contains, or refresh its strict preimage and postimage hashes after
+review. Run `make guest` and `make test`. The upstream source can report a development
 version even for an official tag, so never hand-edit the `version` or `release`
 fields to make them agree; they record different upstream identities.
 
