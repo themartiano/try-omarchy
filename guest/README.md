@@ -25,7 +25,10 @@ guest/test
 
 `spec.json` is the authoritative image and runtime contract. `packages.txt` is
 the requested transaction and `packages.lock.json` pins the full resolved ARM64
-package set. Source repositories, commits, downloads, versions, and hashes are
+package set. The transaction includes CJK fonts and `fcitx5-chinese-addons` so
+Simplified Chinese can be displayed and typed without changing the desktop LANG.
+
+Source repositories, commits, downloads, versions, and hashes are
 reviewed inputs rather than floating build dependencies.
 
 The output includes the kernel, initramfs, raw and compressed ext4 image,

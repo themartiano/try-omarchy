@@ -121,6 +121,23 @@ def main() -> None:
     )
     packages = package_lock.get("packages")
     check(isinstance(packages, dict) and len(packages) > 100, "package transaction is fully locked")
+    requested_names = {
+        line.split("#", 1)[0].strip()
+        for line in package_text.decode().splitlines()
+        if line.split("#", 1)[0].strip()
+    }
+    check(
+        {
+            "fcitx5",
+            "fcitx5-chinese-addons",
+            "fcitx5-configtool",
+            "fcitx5-gtk",
+            "fcitx5-qt",
+            "noto-fonts-cjk",
+        }
+        <= requested_names,
+        "factory transaction requests CJK fonts and Simplified Chinese input",
+    )
 
     container = read(GUEST / "build-container.sh")
     check("linux/arm64" in container and '"$guest_dir/Containerfile"' in container, "container builder targets ARM64")
@@ -137,6 +154,18 @@ def main() -> None:
 
     configure = read(GUEST / "scripts/configure-rootfs.sh")
     check("factory-overlay" in configure and "native-overlay" in configure, "rootfs receives only native factory overlays")
+    check(
+        "zh_CN.UTF-8 UTF-8" in configure
+        and 'printf \'LANG=en_US.UTF-8\\n\' >"$root/etc/locale.conf"' in configure,
+        "factory generates zh_CN.UTF-8 without changing the English desktop LANG",
+    )
+    fcitx_profile = read(GUEST / "factory-overlay/etc/skel/.config/fcitx5/profile")
+    check(
+        "Name=pinyin" in fcitx_profile
+        and "Name=keyboard-us" in fcitx_profile
+        and "DefaultIM=keyboard-us" in fcitx_profile,
+        "new users get Pinyin in the default Fcitx5 group",
+    )
     check("omarchy-provision-owner.service" in configure, "first boot uses upstream owner provisioning")
     check("omarchy-native-audio-bridge" in configure, "guest installs native host-audio integration")
     check(

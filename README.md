@@ -15,6 +15,7 @@ Try Omarchy is not official or affiliated with Omarchy.
 - Mac audio input/output selection inside Omarchy, with live routing and system-default fallback
 - Two-way clipboard sharing for text and PNG images between macOS and Omarchy
 - One optional shared Mac folder, available inside Omarchy under the same name (`~/Work` stays `~/Work`)
+- Simplified Chinese display and Pinyin input preinstalled in the factory guest (desktop language stays English)
 
 > **Current limitation:** Video decoding is CPU-only, so playback can be slow, especially at high resolutions. An improved video path is in development.
 
@@ -25,6 +26,20 @@ Try Omarchy is not official or affiliated with Omarchy.
 3. Launch **Try Omarchy** from Applications.
 
 Every launch begins at the start menu. Accessibility enables Mac Command-to-guest-Super shortcuts; microphone access is optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
+
+## Simplified Chinese display and input
+
+The factory guest preinstalls CJK fonts (`noto-fonts-cjk`) and the Chinese
+input engine recommended by the [Omarchy manual](https://omarchy.org/manual/keyboard-mouse-trackpad/)
+(`fcitx5-chinese-addons` and `fcitx5-configtool`), together with the `fcitx5`
+framework Omarchy already uses for compose sequences. `zh_CN.UTF-8` is
+generated so applications can render Chinese text, but the desktop `LANG`
+stays `en_US.UTF-8` because Omarchy's menus are English-only.
+
+New accounts get Pinyin in the default Fcitx5 group alongside the US keyboard.
+Switch input methods with the Fcitx5 trigger. Existing VMs keep their home
+directories across updates; use a factory reset, or install the same packages
+inside Omarchy, to pick up the factory seed there.
 
 ## Clipboard sharing
 

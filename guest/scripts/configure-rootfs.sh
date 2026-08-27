@@ -121,7 +121,13 @@ cat >"$root/etc/hosts" <<EOF
 ::1 localhost
 127.0.1.1 $hostname
 EOF
-printf 'en_US.UTF-8 UTF-8\n' >"$root/etc/locale.gen"
+# Generate zh_CN.UTF-8 so applications can render Simplified Chinese.
+# Keep LANG=en_US.UTF-8: Omarchy's menus are English-only, and changing the
+# desktop language breaks those labels.
+cat >"$root/etc/locale.gen" <<'EOF'
+en_US.UTF-8 UTF-8
+zh_CN.UTF-8 UTF-8
+EOF
 printf 'LANG=en_US.UTF-8\n' >"$root/etc/locale.conf"
 printf 'KEYMAP=us\n' >"$root/etc/vconsole.conf"
 # An unprovisioned machine receives a new identity from systemd on first boot.

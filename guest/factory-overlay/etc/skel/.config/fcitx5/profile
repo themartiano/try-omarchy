@@ -1,0 +1,18 @@
+# Seed Pinyin into the default Fcitx5 group for new accounts.
+# Leave the US keyboard as DefaultIM so English typing and Omarchy compose
+# sequences stay unchanged until the user switches input methods.
+[Groups/0]
+Name=Default
+Default Layout=us
+DefaultIM=keyboard-us
+
+[Groups/0/Items/0]
+Name=keyboard-us
+Layout=
+
+[Groups/0/Items/1]
+Name=pinyin
+Layout=
+
+[GroupOrder]
+0=Default

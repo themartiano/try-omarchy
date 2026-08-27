@@ -12,6 +12,11 @@ dua-cli
 e2fsprogs
 eza
 fastfetch
+fcitx5
+fcitx5-chinese-addons
+fcitx5-configtool
+fcitx5-gtk
+fcitx5-qt
 fd
 fontconfig
 foot
@@ -39,6 +44,7 @@ nautilus
 neovim
 networkmanager
 noto-fonts
+noto-fonts-cjk
 noto-fonts-emoji
 omarchy-keyring
 pacman-contrib
