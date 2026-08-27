@@ -1,5 +1,13 @@
 #!/usr/bin/ash
 
+resolve_control_device() (
+  control_link=$1
+  resolved_control_device=$(readlink -f "$control_link") || return 1
+  [ -c "$resolved_control_device" ] && [ ! -L "$resolved_control_device" ] \
+    || return 1
+  printf '%s\n' "$resolved_control_device"
+)
+
 run_latehook() {
   [ "$(getarg tryomarchy.update)" = 1 ] || return 0
   transaction=$(getarg tryomarchy.transaction)
@@ -8,19 +16,25 @@ run_latehook() {
   # shellcheck disable=SC1090
   . "$release_environment"
 
-  control_device="/dev/virtio-ports/$TRY_OMARCHY_CONTROL_PORT"
+  control_link="/dev/virtio-ports/$TRY_OMARCHY_CONTROL_PORT"
   attempts=0
-  while { [ ! -b /dev/vdb ] || [ ! -e "$control_device" ]; } && [ "$attempts" -lt 100 ]; do
+  while { [ ! -b /dev/vdb ] || [ ! -e "$control_link" ]; } && [ "$attempts" -lt 100 ]; do
     sleep 0.05
     attempts=$((attempts + 1))
   done
-  [ -b /dev/vdb ] && [ -e "$control_device" ] || {
+  [ -b /dev/vdb ] && [ -e "$control_link" ] || {
     err "Try Omarchy update devices did not appear"
     poweroff -f
     return 1
   }
+  control_device=$(resolve_control_device "$control_link") || {
+    err "Try Omarchy update control device is unsafe"
+    poweroff -f
+    return 1
+  }
 
-  candidate_root=/sysroot
+  # mkinitcpio mounts the real root at /new_root before running late hooks.
+  candidate_root=/new_root
   update_mount="$candidate_root/run/try-omarchy-update"
   mkdir -p "$update_mount" "$candidate_root/dev" "$candidate_root/proc" "$candidate_root/sys"
   mount -t ext4 -o ro,nosuid,nodev,noexec /dev/vdb "$update_mount" || {
@@ -28,20 +42,35 @@ run_latehook() {
     poweroff -f
     return 1
   }
-  mount -o bind /dev "$candidate_root/dev" || update_setup_failed=1
-  mount -t proc proc "$candidate_root/proc" || update_setup_failed=1
-  mount -t sysfs sys "$candidate_root/sys" || update_setup_failed=1
+  update_setup_failed=0
+  mount -o bind /dev "$candidate_root/dev" || {
+    err "Could not bind the update device tree"
+    update_setup_failed=1
+  }
+  mount -t proc proc "$candidate_root/proc" || {
+    err "Could not mount proc for the candidate update"
+    update_setup_failed=1
+  }
+  mount -t sysfs sys "$candidate_root/sys" || {
+    err "Could not mount sysfs for the candidate update"
+    update_setup_failed=1
+  }
   for protected in home root; do
     protected_path="$candidate_root/$protected"
-    if [ ! -d "$protected_path" ] || [ -L "$protected_path" ] \
-      || ! mount -o bind "$protected_path" "$protected_path" \
-      || ! mount -o remount,bind,ro "$protected_path"; then
+    if [ ! -d "$protected_path" ] || [ -L "$protected_path" ]; then
+      err "Candidate $protected directory is unsafe"
+      update_setup_failed=1
+    elif ! mount -o bind "$protected_path" "$protected_path"; then
+      err "Could not protect the candidate $protected directory"
+      update_setup_failed=1
+    elif ! mount -o remount,bind,ro "$protected_path" "$protected_path"; then
+      err "Could not make the candidate $protected directory read-only"
       update_setup_failed=1
     fi
   done
 
   update_status=0
-  if [ "${update_setup_failed:-0}" -ne 0 ]; then
+  if [ "$update_setup_failed" -ne 0 ]; then
     update_status=1
   else
     TRY_OMARCHY_RELEASE_ENV="$release_environment" \

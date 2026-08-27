@@ -347,6 +347,25 @@ def main() -> None:
         and "native-overlay/." in configure,
         "factory image retains the universal owned-payload reconciler",
     )
+    bootstrap_migration = read(
+        GUEST / "migrations/0000-0001-bootstrap-update-v1.sh"
+    )
+    check(
+        "original-etc/sddm.conf.d/autologin.conf" in bootstrap_migration
+        and "Session=omarchy.desktop" in bootstrap_migration
+        and "restore_autologin" in bootstrap_migration,
+        "schema bootstrap preserves the provisioned graphical autologin",
+    )
+    native_autologin = read(
+        GUEST
+        / "native-overlay/etc/systemd/system/omarchy-provision-owner.service.d/10-try-omarchy-native.conf"
+    )
+    check(
+        "ExecStartPost=" in native_autologin
+        and "omarchy-provision-autologin-once.service" in native_autologin
+        and "10-try-omarchy-native.conf" in prepare_update,
+        "native provisioning keeps direct graphical login across VM boots",
+    )
     yay_migration = read(GUEST / "migrations/0001-0002-add-yay.sh")
     check(
         all(
@@ -391,6 +410,17 @@ def main() -> None:
         "remount,bind,ro" in update_hook
         and "for protected in home root" in update_hook,
         "offline update makes home and root read-only",
+    )
+    check(
+        "candidate_root=/new_root" in update_hook
+        and "candidate_root=/sysroot" not in update_hook,
+        "offline update targets mkinitcpio's mounted real root",
+    )
+    check(
+        'control_link="/dev/virtio-ports/$TRY_OMARCHY_CONTROL_PORT"' in update_hook
+        and 'readlink -f "$control_link"' in update_hook
+        and '[ -c "$resolved_control_device" ]' in update_hook,
+        "offline update resolves the udev control symlink to a character device",
     )
     update_runner = read(
         GUEST / "native-overlay/usr/local/lib/try-omarchy/update-runner"
