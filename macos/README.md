@@ -12,8 +12,8 @@ Use the root Makefile for normal development:
 make runtime   # macos/.build/qemu-gpu-runtime
 make app       # dist/Try Omarchy.app
 make run
-make package   # signed and notarized dist/Try Omarchy.dmg
-make release   # signed and notarized dist/Try Omarchy.dmg
+make package   # signed and notarized dist/TryOmarchy.dmg
+make release   # signed and notarized dist/TryOmarchy.dmg
 make test
 ```
 

@@ -139,7 +139,7 @@ All generated output has one predictable home:
 ```text
 dist/
 ├── Try Omarchy.app
-├── Try Omarchy.dmg       # after make package or make release
+├── TryOmarchy.dmg        # after make package or make release
 └── guest/                # verified guest build artifacts
 ```
 

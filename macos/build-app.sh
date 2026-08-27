@@ -220,7 +220,7 @@ codesign --verify --deep --strict --verbose=2 "$app"
 
 echo "[native] Built $app"
 if (( build_dmg )); then
-  dmg="$repo_dir/dist/Try Omarchy.dmg"
+  dmg="$repo_dir/dist/TryOmarchy.dmg"
   rm -f "$dmg"
   package_options=()
   if [[ $sign_identity != - ]]; then
