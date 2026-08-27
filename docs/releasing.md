@@ -26,15 +26,12 @@ Outputs are written to:
 - `dist/Try Omarchy.dmg`
 - `dist/guest/`
 
-`make package` creates a local build using `PACKAGE_SIGN_IDENTITY` (the
-configured Developer ID identity by default) when it is available, but does not
-notarize it. It warns and falls back to ad-hoc signing otherwise; those builds
-cannot retain macOS privacy grants after their code changes. `make release` uses
-the maintainer's Developer ID Application identity and the `try-omarchy`
-notarytool keychain profile to sign, notarize, and staple the app and DMG. Both
-commands first ensure the content-hashed guest and runtime artifacts are
-current; packaging and signing themselves always run freshly. Another
-maintainer can override both defaults:
+`make package` and `make release` both create distributable builds: they sign
+the app and DMG with Developer ID, submit the DMG to Apple's notarization
+service, and staple the resulting tickets. Neither command falls back to an
+unnotarized build. Both commands first ensure the content-hashed guest and
+runtime artifacts are current; packaging and signing themselves always run
+freshly. Another maintainer can override the release defaults:
 
 ```sh
 make release \

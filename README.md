@@ -143,13 +143,15 @@ dist/
 └── guest/                # verified guest build artifacts
 ```
 
-The two DMG targets have intentionally different purposes:
+Both DMG targets create distributable artifacts:
 
-- `make package` creates a local DMG for testing, using
-  `PACKAGE_SIGN_IDENTITY` (the configured Developer ID identity by default)
-  when that identity is available. It warns and falls back to ad-hoc signing
-  otherwise. It is not notarized, so do not publish it.
-- `make release` rebuilds the app, Developer ID-signs the app and DMG, notarizes the DMG with Apple, and staples the notarization tickets. It assumes the guest and QEMU runtime already exist and does not run tests or rebuild those inputs.
+- `make package` rebuilds the app, Developer ID-signs the app and DMG,
+  notarizes the DMG with Apple, and staples the notarization tickets. It uses
+  `PACKAGE_SIGN_IDENTITY` and `PACKAGE_NOTARY_PROFILE`, which default to the
+  configured release credentials, and fails instead of producing an
+  unnotarized fallback.
+- `make release` performs the same signing and notarization workflow with the
+  release-specific credential variables.
 
 Maintainers should follow [`docs/releasing.md`](docs/releasing.md) for the full build, test, signing, license, corresponding-source, and verification checklist.
 

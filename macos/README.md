@@ -12,7 +12,7 @@ Use the root Makefile for normal development:
 make runtime   # macos/.build/qemu-gpu-runtime
 make app       # dist/Try Omarchy.app
 make run
-make package   # auto-signed dist/Try Omarchy.dmg for testing
+make package   # signed and notarized dist/Try Omarchy.dmg
 make release   # signed and notarized dist/Try Omarchy.dmg
 make test
 ```
@@ -39,9 +39,9 @@ macOS privacy grants across rebuilds, use a stable Apple Development identity:
 make run DEVELOPMENT_SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"
 ```
 
-`make package` uses `PACKAGE_SIGN_IDENTITY`, which defaults to the configured
-Developer ID identity. If that identity is unavailable, it warns and falls back
-to an ad-hoc DMG; override it with an Apple Development identity if desired.
+`make package` uses `PACKAGE_SIGN_IDENTITY` and `PACKAGE_NOTARY_PROFILE`, which
+default to the configured release credentials. It fails instead of producing
+an unnotarized fallback.
 Runtime caches are private to `macos/.build/`; user-facing output always goes
 to `dist/`.
 

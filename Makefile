@@ -11,10 +11,11 @@ RELEASE_SIGN_IDENTITY ?= Developer ID Application: Eduardo Martinez (RZC79MPD34)
 RELEASE_NOTARY_PROFILE ?= try-omarchy
 DEVELOPMENT_SIGN_IDENTITY ?= -
 PACKAGE_SIGN_IDENTITY ?= $(RELEASE_SIGN_IDENTITY)
+PACKAGE_NOTARY_PROFILE ?= $(RELEASE_NOTARY_PROFILE)
 FORCE ?= 0
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor test guest runtime app build run run-ephemeral reset update-omarchy package release release-preflight clean clean-all clean-guest
+.PHONY: help doctor test guest runtime app build run run-ephemeral reset update-omarchy package package-preflight release release-preflight clean clean-all clean-guest
 
 help:
 	@printf '%s\n' \
@@ -29,7 +30,7 @@ help:
 	  '                      Keep macOS privacy grants across local rebuilds' \
 	  '  make update-omarchy OMARCHY_RELEASE=x.y.z' \
 	  '                      Pin an upstream release and refresh the ARM64 lock' \
-	  '  make package        Create a DMG; signs automatically when available' \
+	  '  make package        Create a signed and notarized distribution DMG' \
 	  '  make release        Create a signed and notarized distribution DMG' \
 	  '' \
 	  'Component builds:' \
@@ -96,21 +97,17 @@ update-omarchy:
 	  --refresh-package-lock "$(ROOT)/guest/packages.lock.json"
 	@$(ROOT)/guest/test --source "$(ROOT)/.build/upstream/omarchy-v$(OMARCHY_RELEASE)"
 
-package: guest runtime
-	@sign_identity='$(PACKAGE_SIGN_IDENTITY)'; \
-	if [[ -n "$$sign_identity" && "$$sign_identity" != - ]] && \
-	   /usr/bin/security find-identity -v -p codesigning | \
-	     /usr/bin/grep -Fq "\"$$sign_identity\""; then \
-	  echo "Packaging with signing identity: $$sign_identity"; \
-	else \
-	  echo 'warning: configured signing identity is unavailable; creating an ad-hoc DMG' >&2; \
-	  echo 'warning: macOS Accessibility permission will need repair after this app changes' >&2; \
-	  sign_identity=-; \
-	fi; \
-	$(ROOT)/macos/build-app.sh \
+package-preflight:
+	@[[ "$(PACKAGE_SIGN_IDENTITY)" == "Developer ID Application:"* ]] || { echo 'error: PACKAGE_SIGN_IDENTITY must be a Developer ID Application identity' >&2; exit 1; }
+	@[[ -n "$(strip $(PACKAGE_NOTARY_PROFILE))" ]] || { echo 'error: PACKAGE_NOTARY_PROFILE must name a notarytool keychain profile' >&2; exit 1; }
+
+package: package-preflight
+	@$(MAKE) --no-print-directory guest runtime
+	@$(ROOT)/macos/build-app.sh \
 	  --dmg \
 	  --guest-dir "$(GUEST_DIST)" \
-	  --sign-identity "$$sign_identity"
+	  --sign-identity "$(PACKAGE_SIGN_IDENTITY)" \
+	  --notarize-profile "$(PACKAGE_NOTARY_PROFILE)"
 
 release-preflight:
 	@[[ "$(RELEASE_SIGN_IDENTITY)" == "Developer ID Application:"* ]] || { echo 'error: RELEASE_SIGN_IDENTITY must be a Developer ID Application identity' >&2; exit 1; }
