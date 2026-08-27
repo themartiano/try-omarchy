@@ -503,6 +503,7 @@ supply_chain_keys = {
     "mise",
     "omarchyPackagesCommit",
     "omarchyPackagesRepository",
+    "yay",
 }
 supply_chain = exact_keys(spec.get("supplyChain"), supply_chain_keys, "build spec supply chain")
 if (
@@ -526,6 +527,31 @@ if mise != {
     "license": "MIT",
 }:
     fail("factory mise component is not the reviewed ARM64 release")
+yay = exact_keys(
+    supply_chain.get("yay"),
+    {
+        "binarySha256",
+        "license",
+        "licenseSha256",
+        "licenseUrl",
+        "reportedVersion",
+        "sha256",
+        "url",
+        "version",
+    },
+    "build spec yay component",
+)
+if yay != {
+    "version": "13.0.1",
+    "url": "https://github.com/Jguer/yay/releases/download/v13.0.1/yay_13.0.1_aarch64.tar.gz",
+    "sha256": "75bc500c8677d6760f51117ae0a61689e9cf165bea3c4800825a5c879d030726",
+    "binarySha256": "ec7453a87021f28331782d8077b8a2a7c69870710fcee991f2164dc197362ff2",
+    "reportedVersion": "yay v13.0.1 - libalpm v16.0.1",
+    "license": "GPL-3.0-or-later",
+    "licenseUrl": "https://raw.githubusercontent.com/Jguer/yay/v13.0.1/LICENSE",
+    "licenseSha256": "589ed823e9a84c56feb95ac58e7cf384626b9cbf4fda2a907bc36e103de1bad2",
+}:
+    fail("factory yay component is not the reviewed ARM64 release")
 
 command_line = runtime.get("kernelCommandLine")
 if not isinstance(command_line, str) or not command_line or any(character in command_line for character in "\x00\r\n\t"):

@@ -15,7 +15,7 @@ promotes that candidate only after the updated guest reports healthy.
   "bootABI": "arm64-qemu-direct-v1",
   "compressedImage": "update.ext4.zst",
   "controlPort": "dev.tryomarchy.control",
-  "guestStateSchema": 1,
+  "guestStateSchema": 2,
   "image": "update.ext4",
   "protocolVersion": 1
 }
@@ -120,14 +120,14 @@ before pacman runs, covering configuration owned by ordinary OS packages.
 Update success is one canonical JSON line:
 
 ```json
-{"bootABI":"arm64-qemu-direct-v1","fromGuestStateSchema":0,"guestStateSchema":1,"protocolVersion":1,"status":"complete","transaction":"<64hex>","type":"update"}
+{"bootABI":"arm64-qemu-direct-v1","fromGuestStateSchema":1,"guestStateSchema":2,"protocolVersion":1,"status":"complete","transaction":"<64hex>","type":"update"}
 ```
 
 Failure uses `"status":"failed"` and adds a stable kebab-case `errorCode`.
 Trial-boot health is:
 
 ```json
-{"bootABI":"arm64-qemu-direct-v1","guestStateSchema":1,"protocolVersion":1,"readiness":"system","status":"ready","transaction":"<64hex>","type":"health"}
+{"bootABI":"arm64-qemu-direct-v1","guestStateSchema":2,"protocolVersion":1,"readiness":"system","status":"ready","transaction":"<64hex>","type":"health"}
 ```
 
 The transaction nonce is mandatory during an update and lets the host reject

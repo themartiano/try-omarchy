@@ -72,8 +72,7 @@ def main() -> None:
         }
         and update["bootABI"] == "arm64-qemu-direct-v1"
         and update["controlPort"] == "dev.tryomarchy.control"
-        and isinstance(update["guestStateSchema"], int)
-        and update["guestStateSchema"] > 0
+        and update["guestStateSchema"] == 2
         and isinstance(update["protocolVersion"], int)
         and update["protocolVersion"] > 0,
         "offline update protocol is explicit and versioned",
@@ -121,6 +120,40 @@ def main() -> None:
     )
     packages = package_lock.get("packages")
     check(isinstance(packages, dict) and len(packages) > 100, "package transaction is fully locked")
+    requested_packages = {
+        line.strip()
+        for line in package_text.decode().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    check(
+        "fakeroot" in requested_packages and "fakeroot" in packages,
+        "factory transaction includes fakeroot for AUR package builds",
+    )
+    yay = spec.get("supplyChain", {}).get("yay", {})
+    check(
+        set(yay)
+        == {
+            "binarySha256",
+            "license",
+            "licenseSha256",
+            "licenseUrl",
+            "reportedVersion",
+            "sha256",
+            "url",
+            "version",
+        }
+        and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", yay.get("version", "")) is not None
+        and yay.get("url")
+        == f"https://github.com/Jguer/yay/releases/download/v{yay.get('version')}/yay_{yay.get('version')}_aarch64.tar.gz"
+        and yay.get("licenseUrl")
+        == f"https://raw.githubusercontent.com/Jguer/yay/v{yay.get('version')}/LICENSE"
+        and yay.get("license") == "GPL-3.0-or-later"
+        and all(
+            re.fullmatch(r"[0-9a-f]{64}", yay.get(key, "")) is not None
+            for key in ("sha256", "binarySha256", "licenseSha256")
+        ),
+        "official ARM64 yay release and license are fully pinned",
+    )
 
     container = read(GUEST / "build-container.sh")
     check("linux/arm64" in container and '"$guest_dir/Containerfile"' in container, "container builder targets ARM64")
@@ -179,6 +212,11 @@ def main() -> None:
         in local_repository,
         "pacman recovery files snapshot the final local-repository configuration",
     )
+    check(
+        "expected_archive_count=3" in local_repository
+        and "factory repository is missing pinned yay" in local_repository,
+        "immutable local repository requires the pinned yay package",
+    )
     shared_folder = spec["runtime"]["sharedFolder"]
     check(
         shared_folder["device"] == "virtio-9p-pci"
@@ -209,6 +247,24 @@ def main() -> None:
     check("cmp -s" not in configure, "rootfs configuration uses only declared build tools")
 
     build = read(GUEST / "build.sh")
+    register_yay = read(GUEST / "scripts/register-pinned-yay.sh")
+    check(
+        "register-pinned-yay.sh" in build
+        and build.index("register-pinned-yay.sh")
+        < build.index("register-local-repository.sh")
+        and "download digest mismatch" in register_yay
+        and "yay archive has an unexpected member set" in register_yay
+        and "installed yay binary digest mismatch" in register_yay
+        and "depend = fakeroot" in register_yay
+        and "provides = yay=$version" in register_yay
+        and "runuser -u alpm -- /usr/bin/yay --version" in register_yay,
+        "guest installs verified yay before sealing its local repository",
+    )
+    third_party_notices = read(REPO / "THIRD_PARTY_NOTICES.md")
+    check(
+        "**yay**" in third_party_notices and "GPL-3.0-or-later" in third_party_notices,
+        "third-party notices cover the pinned yay redistribution",
+    )
     pack_image = read(GUEST / "scripts/pack-image.sh")
     check(
         "build-update-image.sh" in build
@@ -280,6 +336,19 @@ def main() -> None:
         and "omarchy-provision-autologin-once.service" in native_autologin
         and "10-try-omarchy-native.conf" in prepare_update,
         "native provisioning keeps direct graphical login across VM boots",
+    )
+    yay_migration = read(GUEST / "migrations/0001-0002-add-yay.sh")
+    check(
+        all(
+            marker in yay_migration
+            for marker in (
+                "/usr/bin/yay",
+                "/usr/bin/fakeroot",
+                "/usr/share/licenses/try-omarchy-yay/LICENSE",
+                "The package transaction runs before schema migrations",
+            )
+        ),
+        "schema 1-to-2 migration verifies the pinned yay package state",
     )
     update_hook = read(
         GUEST / "native-overlay/usr/lib/initcpio/hooks/try-omarchy-update"

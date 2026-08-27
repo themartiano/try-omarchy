@@ -23,6 +23,7 @@ HEALTH_REPORT = GUEST / "native-overlay/usr/local/lib/try-omarchy/health-report"
 UPDATE_RUNNER = GUEST / "native-overlay/usr/local/lib/try-omarchy/update-runner"
 OWNED_PAYLOAD = GUEST / "native-overlay/usr/local/lib/try-omarchy/owned-payload"
 BOOTSTRAP_MIGRATION = GUEST / "migrations/0000-0001-bootstrap-update-v1.sh"
+YAY_MIGRATION = GUEST / "migrations/0001-0002-add-yay.sh"
 
 
 def load_module(name: str, path: Path):
@@ -68,7 +69,7 @@ class UpdateContractTests(unittest.TestCase):
             environment_path = root / "usr/share/try-omarchy/update/release.env"
             state = json.loads(state_path.read_text())
             release = json.loads(release_path.read_text())
-            self.assertEqual(state["guestStateSchema"], 1)
+            self.assertEqual(state["guestStateSchema"], 2)
             self.assertEqual(state["bootABI"], "arm64-qemu-direct-v1")
             self.assertEqual(state["releaseId"], release_id)
             self.assertEqual(state["kind"], "try-omarchy-guest-state")
@@ -80,7 +81,7 @@ class UpdateContractTests(unittest.TestCase):
                 json.dumps(state, separators=(",", ":"), sort_keys=True) + "\n",
             )
             environment = environment_path.read_text()
-            self.assertIn("TRY_OMARCHY_GUEST_STATE_SCHEMA=1\n", environment)
+            self.assertIn("TRY_OMARCHY_GUEST_STATE_SCHEMA=2\n", environment)
             self.assertIn(f"TRY_OMARCHY_UPDATE_SHA256SUMS={digest}\n", environment)
 
 
@@ -422,6 +423,41 @@ class BootstrapMigrationTests(unittest.TestCase):
             )
             self.assertEqual(preserved_stale.read_text(), "old archive\n")
 
+    def test_yay_migration_verifies_package_transaction_postconditions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate = root / "candidate"
+            update = root / "update"
+            candidate.mkdir()
+            update.mkdir()
+
+            before = subprocess.run(
+                ["/bin/sh", str(YAY_MIGRATION), "verify", str(candidate), str(update)],
+                check=False,
+            )
+            self.assertNotEqual(before.returncode, 0)
+            subprocess.run(
+                ["/bin/sh", str(YAY_MIGRATION), "apply", str(candidate), str(update)],
+                check=True,
+            )
+
+            for relative in ("usr/bin/yay", "usr/bin/fakeroot"):
+                executable = candidate / relative
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                executable.write_text("#!/bin/sh\n", encoding="ascii")
+                executable.chmod(0o755)
+            license_file = (
+                candidate / "usr/share/licenses/try-omarchy-yay/LICENSE"
+            )
+            license_file.parent.mkdir(parents=True, exist_ok=True)
+            license_file.write_text("GPL-3.0-or-later\n", encoding="ascii")
+
+            for mode in ("verify", "apply", "verify"):
+                subprocess.run(
+                    ["/bin/sh", str(YAY_MIGRATION), mode, str(candidate), str(update)],
+                    check=True,
+                )
+
 
 class UpdateRunnerTests(unittest.TestCase):
     release_id = "c" * 64
@@ -616,7 +652,7 @@ class HealthReportTests(unittest.TestCase):
             self.assertEqual(message["status"], "ready")
             self.assertEqual(message["readiness"], "system")
             self.assertEqual(message["transaction"], UpdateRunnerTests.transaction)
-            self.assertEqual(message["guestStateSchema"], 1)
+            self.assertEqual(message["guestStateSchema"], 2)
             self.assertEqual(message["bootABI"], "arm64-qemu-direct-v1")
 
     def test_normal_health_requires_live_graphical_session_marker(self) -> None:

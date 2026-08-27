@@ -235,6 +235,11 @@ done
   --work "$work" \
   --spec "$spec" \
   --pacman-config "$pacman_config"
+"$guest_dir/scripts/register-pinned-yay.sh" \
+  --root "$root" \
+  --work "$work" \
+  --spec "$spec" \
+  --pacman-config "$pacman_config"
 "$guest_dir/scripts/register-local-repository.sh" --root "$root" --spec "$spec"
 arch-chroot "$root" /usr/bin/env TRY_OMARCHY_DEFER_INITRAMFS=1 \
   /usr/local/lib/try-omarchy/finalize-rootfs
