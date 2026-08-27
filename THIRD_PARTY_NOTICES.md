@@ -14,6 +14,10 @@ code.
 - **ANGLE, VirGLRenderer, libepoxy, SDL, libslirp, GLib, Pixman, and other QEMU
   dependencies** — retain their respective upstream licenses.
 - **mise** — MIT; the reviewed ARM64 release is pinned in `guest/spec.json`.
+- **ttfx** — MIT; the reviewed source release and locked Rust dependencies are
+  pinned in `guest/spec.json` and built natively for ARM64. Its packaged
+  `LICENSE` and `NOTICE` retain attribution to TerminalTextEffects and
+  ChrisBuilds.
 - **yay** — GPL-3.0-or-later; the official ARM64 release and its versioned
   license are pinned in `guest/spec.json` and packaged into the guest's local
   repository.

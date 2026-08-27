@@ -1,0 +1,21 @@
+#!/bin/bash
+
+# QEMU Cocoa composes the Mac cursor outside the guest scanout, so the VirGL
+# guest must keep Hyprland's cursor hidden. Other Omarchy environments retain
+# the upstream screensaver behavior and restore the guest cursor when it exits.
+cmdline_file=${OMARCHY_NATIVE_CURSOR_CMDLINE:-/proc/cmdline}
+cursor_invisible=false
+
+if [[ -r $cmdline_file ]]; then
+  read -r -a kernel_options <"$cmdline_file" || true
+  for kernel_option in "${kernel_options[@]}"; do
+    if [[ $kernel_option == omarchy.qemu_virgl=1 ]]; then
+      cursor_invisible=true
+      break
+    fi
+  done
+fi
+
+hyprctl eval "hl.config({ cursor = { invisible = $cursor_invisible } })" &>/dev/null ||
+  hyprctl keyword cursor:invisible "$cursor_invisible" &>/dev/null ||
+  true

@@ -136,11 +136,41 @@ def main() -> None:
         ),
         "official ARM64 yay release and license are fully pinned",
     )
+    ttfx = spec.get("supplyChain", {}).get("ttfx", {})
+    check(
+        ttfx
+        == {
+            "version": "0.3.2",
+            "pkgrel": 1,
+            "repository": "https://github.com/omacom-io/ttfx",
+            "commit": "7203e354498462064b7c0a89375051f65cf2ce99",
+            "tree": "2162aa57e857d28d6e81fcbe1c65ad390d4f24f3",
+            "packageRecipeCommit": "6284fcf437681c5e9b5cb6354fb111c48125ed3f",
+            "url": "https://github.com/omacom-io/ttfx/archive/refs/tags/v0.3.2.tar.gz",
+            "sha256": "d0c0df4867e7f03142fb7f77c66670d0e8da15534239c1a7abfd89f19dfc00f6",
+            "cargoLockSha256": "49e2091962fc4d425b4cf3bde1a105719b5b50eed0583ec90e85922adb45e2ce",
+            "binarySha256": "9171a07c752b202a21f80a4ad336a9d093be06a6c96b062e8b5e0c158d2a86d2",
+            "target": "aarch64-unknown-linux-gnu",
+            "rustPackageVersion": "rust 1:1.98.0-1",
+            "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+            "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)",
+            "reportedVersion": "ttfx 0.3.2",
+            "license": "MIT",
+            "licenseSha256": "175441de2eb9a0d3f0627c404ad71929336fd98d75926cc27b9e364d35cc7977",
+            "noticeSha256": "e2db8c2ff527fdd6d012440d629916e9d75328f38d0e0975f4e942ea91c4e98c",
+        },
+        "official ttfx ARM64 source build and package recipe are fully pinned",
+    )
 
     container = read(GUEST / "build-container.sh")
     check("linux/arm64" in container and '"$guest_dir/Containerfile"' in container, "container builder targets ARM64")
     check('output="$repo_dir/dist/guest"' in container, "guest output defaults to dist/guest")
     check("try-omarchy-guest-work" in container, "guest cache has a project-scoped Docker volume")
+    containerfile = read(GUEST / "Containerfile")
+    check(
+        "arch-install-scripts e2fsprogs git python rust=1:1.98.0-1 zstd" in containerfile,
+        "guest builder pins Rust for source-built components",
+    )
 
     materialize = read(GUEST / "scripts/materialize-omarchy.sh")
     check(
@@ -152,6 +182,10 @@ def main() -> None:
 
     configure = read(GUEST / "scripts/configure-rootfs.sh")
     check("factory-overlay" in configure and "native-overlay" in configure, "rootfs receives only native factory overlays")
+    check(
+        "compat/ttfx-arm64" not in configure and not (GUEST / "compat/ttfx-arm64").exists(),
+        "obsolete no-op ttfx compatibility command is absent",
+    )
     check("omarchy-provision-owner.service" in configure, "first boot uses upstream owner provisioning")
     native_autologin = read(
         GUEST
@@ -200,9 +234,10 @@ def main() -> None:
         "pacman recovery files snapshot the final local-repository configuration",
     )
     check(
-        "expected_archive_count=3" in local_repository
+        "expected_archive_count=4" in local_repository
+        and "factory repository is missing pinned ttfx" in local_repository
         and "factory repository is missing pinned yay" in local_repository,
-        "immutable local repository requires the pinned yay package",
+        "immutable local repository requires the pinned ttfx and yay packages",
     )
     shared_folder = spec["runtime"]["sharedFolder"]
     check(
@@ -227,13 +262,26 @@ def main() -> None:
     )
     check(
         '"$root/usr/bin/omarchy-audio-input-set-default"' in configure
-        and "audio_helper_source_digest=$(sha256sum" in configure
-        and "native audio input helper did not replace" in configure,
-        "native input selection replaces the upstream command",
+        and '"$root/usr/bin/omarchy-screensaver"' in configure
+        and "for native_command in omarchy-audio-input-set-default omarchy-screensaver" in configure
+        and "did not replace the upstream command" in configure,
+        "native input selection and screensaver cleanup replace upstream commands",
     )
     check("cmp -s" not in configure, "rootfs configuration uses only declared build tools")
 
     build = read(GUEST / "build.sh")
+    check(
+        "verify-screensaver-override.py" in build
+        and build.index("verify-screensaver-override.py") < build.index("materialize-omarchy.sh"),
+        "every guest build checks the screensaver override against its pinned source",
+    )
+    register_runtime = read(GUEST / "scripts/register-omarchy-runtime.sh")
+    check(
+        'cursor_restore="$root/usr/local/bin/omarchy-native-cursor-restore"' in register_runtime
+        and 'cp -a "$cursor_restore" "$stage/usr/local/bin/omarchy-native-cursor-restore"'
+        in register_runtime,
+        "packaged Omarchy runtime owns the screensaver cursor helper",
+    )
     register_yay = read(GUEST / "scripts/register-pinned-yay.sh")
     check(
         "register-pinned-yay.sh" in build
@@ -247,16 +295,53 @@ def main() -> None:
         and "runuser -u alpm -- /usr/bin/yay --version" in register_yay,
         "guest installs verified yay before sealing its local repository",
     )
+    register_ttfx = read(GUEST / "scripts/register-pinned-ttfx.sh")
+    check(
+        "register-pinned-ttfx.sh" in build
+        and build.index("register-pinned-ttfx.sh")
+        < build.index("register-local-repository.sh")
+        and "download digest mismatch" in register_ttfx
+        and "ttfx source archive has an unsafe member set" in register_ttfx
+        and "ttfx Cargo.lock digest mismatch" in register_ttfx
+        and "ttfx license digest mismatch" in register_ttfx
+        and "ttfx notice digest mismatch" in register_ttfx
+        and 'cargo fetch --locked --target "$target"' in register_ttfx
+        and 'cargo build --frozen --release --target "$target"' in register_ttfx
+        and "CARGO_ENCODED_RUSTFLAGS" in register_ttfx
+        and "ttfx Rust package identity mismatch" in register_ttfx
+        and "ttfx reproducible binary digest mismatch" in register_ttfx
+        and "ttfx build is missing required screensaver option" in register_ttfx
+        and "ttfx build failed its bounded ASCII render smoke test" in register_ttfx
+        and "ttfx build is not an ARM64 ELF binary" in register_ttfx
+        and "provides = ttfx=$version" in register_ttfx
+        and "conflict = ttfx" in register_ttfx
+        and "installed ttfx binary differs from the built artifact" in register_ttfx
+        and 'arch-chroot "$root" /usr/bin/ttfx --version' in register_ttfx,
+        "guest builds and packages verified ttfx before sealing its local repository",
+    )
     third_party_notices = read(REPO / "THIRD_PARTY_NOTICES.md")
     check(
         "**yay**" in third_party_notices and "GPL-3.0-or-later" in third_party_notices,
         "third-party notices cover the pinned yay redistribution",
+    )
+    check(
+        "**ttfx**" in third_party_notices
+        and "TerminalTextEffects" in third_party_notices
+        and "MIT" in third_party_notices,
+        "third-party notices cover ttfx and its TerminalTextEffects attribution",
     )
 
     finalizer = read(GUEST / "scripts/finalize-rootfs.sh")
     check("factory" in finalizer and "aarch64" in finalizer, "finalizer enforces the native factory contract")
     check("systemd-growfs-root.service" in finalizer, "factory disk grows on first boot")
     check("systemctl enable omarchy-native-mac-share.service" in finalizer, "shared Mac folder mounts at boot")
+    check(
+        'expected_ttfx=$(read_spec' in finalizer
+        and "/usr/bin/ttfx --version" in finalizer
+        and "pacman -Qoq /usr/local/bin/omarchy-native-cursor-restore" in finalizer
+        and "Obsolete ttfx compatibility command shadows" in finalizer,
+        "finalizer requires packaged ttfx without a shadowing compatibility command",
+    )
 
     manifest_writer = read(GUEST / "scripts/write-guest-manifest.py")
     check('"kind": "try-omarchy-guest-artifacts"' in manifest_writer, "new artifacts use the native manifest identity")
@@ -454,13 +539,25 @@ def main() -> None:
     audio_input_helper = GUEST / "native-overlay/usr/bin/omarchy-audio-input-set-default"
     check(audio_input_helper.stat().st_mode & stat.S_IXUSR != 0, "native audio input helper is executable")
 
+    screensaver_override = GUEST / "native-overlay/usr/bin/omarchy-screensaver"
+    cursor_restore = GUEST / "native-overlay/usr/local/bin/omarchy-native-cursor-restore"
+    check(screensaver_override.stat().st_mode & stat.S_IXUSR != 0, "native screensaver override is executable")
+    check(cursor_restore.stat().st_mode & stat.S_IXUSR != 0, "native cursor restore helper is executable")
+    check(
+        "/usr/local/bin/omarchy-native-cursor-restore 2>/dev/null || true"
+        in read(screensaver_override),
+        "screensaver cleanup delegates to the native cursor policy",
+    )
+
     display_sync = GUEST / "native-overlay/usr/local/bin/omarchy-native-display-sync"
     check(display_sync.stat().st_mode & stat.S_IXUSR != 0, "native display sync is executable")
     monitor_fragment = read(GUEST / "fragments/hypr-monitors-arm-qemu.append.lua")
     check(
         'o.exec_on_start("/usr/local/bin/omarchy-native-display-sync")'
-        in monitor_fragment,
-        "ARM VirGL profile starts native display sync",
+        in monitor_fragment
+        and 'omarchy_kernel_option_enabled("omarchy.qemu_virgl=1")' in monitor_fragment
+        and "cursor = { invisible = true }" in monitor_fragment,
+        "ARM VirGL profile starts display sync and uses the host-composited cursor",
     )
     with tempfile.TemporaryDirectory() as temporary:
         temporary_path = Path(temporary)
@@ -549,6 +646,8 @@ HOTPLUG=1
 
     shell_files = [
         GUEST / "test",
+        screensaver_override,
+        cursor_restore,
         display_sync,
         mac_share,
         *GUEST.glob("*.sh"),
@@ -582,6 +681,19 @@ HOTPLUG=1
         check(tagged_commit == expected_commit, "optional Omarchy source checkout matches the release tag")
         for relative in spec["authenticity"]["requiredPaths"]:
             check((source / relative).exists(), f"pinned source contains {relative}")
+
+        upstream_screensaver = read(source / "bin/omarchy-screensaver")
+        upstream_cursor_restore = (
+            "  hyprctl eval 'hl.config({ cursor = { invisible = false } })' &>/dev/null "
+            "|| hyprctl keyword cursor:invisible false &>/dev/null || true"
+        )
+        native_cursor_restore = "  /usr/local/bin/omarchy-native-cursor-restore 2>/dev/null || true"
+        check(
+            upstream_screensaver.count(upstream_cursor_restore) == 1
+            and read(screensaver_override)
+            == upstream_screensaver.replace(upstream_cursor_restore, native_cursor_restore),
+            "native screensaver override differs from pinned upstream only at cursor restoration",
+        )
 
     print("native guest contract verified")
 

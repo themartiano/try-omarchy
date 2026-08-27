@@ -463,6 +463,7 @@ supply_chain_keys = {
     "mise",
     "omarchyPackagesCommit",
     "omarchyPackagesRepository",
+    "ttfx",
     "yay",
 }
 supply_chain = exact_keys(spec.get("supplyChain"), supply_chain_keys, "build spec supply chain")
@@ -487,6 +488,51 @@ if mise != {
     "license": "MIT",
 }:
     fail("factory mise component is not the reviewed ARM64 release")
+ttfx = exact_keys(
+    supply_chain.get("ttfx"),
+    {
+        "cargoLockSha256",
+        "binarySha256",
+        "commit",
+        "license",
+        "licenseSha256",
+        "noticeSha256",
+        "packageRecipeCommit",
+        "pkgrel",
+        "reportedVersion",
+        "repository",
+        "rustPackageVersion",
+        "rustcVersion",
+        "cargoVersion",
+        "sha256",
+        "target",
+        "tree",
+        "url",
+        "version",
+    },
+    "build spec ttfx component",
+)
+if ttfx != {
+    "version": "0.3.2",
+    "pkgrel": 1,
+    "repository": "https://github.com/omacom-io/ttfx",
+    "commit": "7203e354498462064b7c0a89375051f65cf2ce99",
+    "tree": "2162aa57e857d28d6e81fcbe1c65ad390d4f24f3",
+    "packageRecipeCommit": "6284fcf437681c5e9b5cb6354fb111c48125ed3f",
+    "url": "https://github.com/omacom-io/ttfx/archive/refs/tags/v0.3.2.tar.gz",
+    "sha256": "d0c0df4867e7f03142fb7f77c66670d0e8da15534239c1a7abfd89f19dfc00f6",
+    "cargoLockSha256": "49e2091962fc4d425b4cf3bde1a105719b5b50eed0583ec90e85922adb45e2ce",
+    "binarySha256": "9171a07c752b202a21f80a4ad336a9d093be06a6c96b062e8b5e0c158d2a86d2",
+    "target": "aarch64-unknown-linux-gnu",
+    "rustPackageVersion": "rust 1:1.98.0-1",
+    "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+    "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)",
+    "reportedVersion": "ttfx 0.3.2",
+    "license": "MIT",
+    "licenseSha256": "175441de2eb9a0d3f0627c404ad71929336fd98d75926cc27b9e364d35cc7977",
+    "noticeSha256": "e2db8c2ff527fdd6d012440d629916e9d75328f38d0e0975f4e942ea91c4e98c",
+}:
+    fail("factory ttfx component is not the reviewed ARM64 source build")
 yay = exact_keys(
     supply_chain.get("yay"),
     {

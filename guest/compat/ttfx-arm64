@@ -1,7 +1,0 @@
-#!/bin/bash
-
-# The pinned Quattro owner wizard paints a complete static splash before
-# starting ttfx as a background-only colour animation. No ARM64 ttfx package
-# exists in the reviewed repositories, so keep that already-painted splash and
-# let the upstream wizard continue unchanged.
-exit 0

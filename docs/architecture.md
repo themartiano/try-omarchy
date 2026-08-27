@@ -70,7 +70,9 @@ creates the account on first boot.
   patches cover the Cocoa app identity, display behavior, graphics integration,
   host audio-device routing, and shared-folder ownership mapping.
 - The pinned Omarchy runtime trees are copied from upstream. Guest overlays add
-  the QEMU and ARM64 integration around them.
+  the QEMU and ARM64 integration around them, including narrowly audited
+  command replacements for host-backed audio selection and VM-aware cursor
+  restoration after the screensaver exits.
 - The final Arch Linux ARM pacman files live under `/usr/share/try-omarchy/`.
   An Omarchy-supported `pre-refresh-pacman` hook restores them after a channel
   refresh writes its x86_64 templates to `/etc`; the upstream templates remain

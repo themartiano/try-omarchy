@@ -58,31 +58,32 @@ profile=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["guest
 
 mkdir -p "$root/etc" "$root/etc/skel" "$root/usr/share/try-omarchy"
 cp -a "$guest_dir/factory-overlay/." "$root/"
-mkdir -p "$root/usr/local/bin"
-install -m 0755 "$guest_dir/compat/ttfx-arm64" "$root/usr/local/bin/ttfx"
 
 # Session-config customizations are additive, so each fragment remains
 # independently auditable against Basecamp's pinned config. The native overlay
-# also carries one deliberate command replacement for safe PipeWire input
-# switching. The display fragment selects Cocoa's host-composited cursor path
-# and keeps the guest mode synchronized when QEMU changes the virtual EDID.
+# also carries two deliberate command replacements: safe PipeWire input
+# switching and VM-aware cursor restoration after the screensaver exits. The
+# display fragment selects Cocoa's host-composited cursor path and keeps the
+# guest mode synchronized when QEMU changes the virtual EDID.
 # The clipboard bridge mirrors the Mac pasteboard into the Wayland session,
 # and the Mac folder mount completes the host integration.
 cp -a "$guest_dir/native-overlay/." "$root/"
 chmod 0755 \
   "$root/usr/bin/omarchy-audio-input-set-default" \
+  "$root/usr/bin/omarchy-screensaver" \
   "$root/usr/local/bin/omarchy-native-audio-bridge" \
   "$root/usr/local/bin/omarchy-native-clipboard-bridge" \
+  "$root/usr/local/bin/omarchy-native-cursor-restore" \
   "$root/usr/local/bin/omarchy-native-display-sync" \
   "$root/usr/local/bin/omarchy-native-mac-share"
-audio_helper_source_digest=$(sha256sum \
-  "$guest_dir/native-overlay/usr/bin/omarchy-audio-input-set-default")
-audio_helper_source_digest=${audio_helper_source_digest%% *}
-audio_helper_installed_digest=$(sha256sum \
-  "$root/usr/bin/omarchy-audio-input-set-default")
-audio_helper_installed_digest=${audio_helper_installed_digest%% *}
-[[ $audio_helper_installed_digest == "$audio_helper_source_digest" ]] || \
-  fail "native audio input helper did not replace the upstream command"
+for native_command in omarchy-audio-input-set-default omarchy-screensaver; do
+  source_digest=$(sha256sum "$guest_dir/native-overlay/usr/bin/$native_command")
+  source_digest=${source_digest%% *}
+  installed_digest=$(sha256sum "$root/usr/bin/$native_command")
+  installed_digest=${installed_digest%% *}
+  [[ $installed_digest == "$source_digest" ]] || \
+    fail "native $native_command did not replace the upstream command"
+done
 mkdir -p "$root/etc/systemd/user/default.target.wants" \
   "$root/etc/systemd/user/graphical-session.target.wants"
 ln -sfn /usr/lib/systemd/user/omarchy-native-audio-bridge.service \

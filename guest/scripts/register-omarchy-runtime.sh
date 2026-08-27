@@ -98,9 +98,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$stage/usr/bin" "$stage/usr/share" "$stage/usr/share/licenses"
+mkdir -p "$stage/usr/bin" "$stage/usr/local/bin" "$stage/usr/share" "$stage/usr/share/licenses"
 cp -a "$root/usr/share/omarchy" "$stage/usr/share/omarchy"
 cp -a "$root/usr/share/licenses/omarchy" "$stage/usr/share/licenses/omarchy"
+
+# The VM-specific screensaver override is one of the packaged Omarchy commands
+# below. Keep its cursor-policy helper in the same package so reinstalling or
+# verifying the runtime cannot leave that command with an unowned dependency.
+cursor_restore="$root/usr/local/bin/omarchy-native-cursor-restore"
+[[ -f $cursor_restore && -x $cursor_restore && ! -L $cursor_restore ]] ||
+  fail "native screensaver cursor helper is missing or unsafe"
+cp -a "$cursor_restore" "$stage/usr/local/bin/omarchy-native-cursor-restore"
 
 shopt -s nullglob
 runtime_commands=("$root/usr/bin/omarchy" "$root/usr/bin"/omarchy-*)
@@ -162,7 +170,7 @@ pacman \
 
 query=$(pacman --config "$pacman_config" --root "$root" --dbpath "$root/var/lib/pacman" -Q omarchy)
 [[ $query == "$package_name $package_version" ]] || fail "provider query returned: $query"
-pacman --config "$pacman_config" --root "$root" --dbpath "$root/var/lib/pacman" -Qk "$package_name" >/dev/null ||
+pacman --config "$pacman_config" --root "$root" --dbpath "$root/var/lib/pacman" -Qkk "$package_name" >/dev/null ||
   fail "registered package does not own the complete staged runtime"
 
 # Keep an immutable package copy in the guest's local sync repository. Without

@@ -35,6 +35,17 @@ ln -sfn /usr/lib/systemd/system/graphical.target /etc/systemd/system/default.tar
 expected_mise=$(read_spec '["supplyChain"]["mise"]["reportedVersion"]')
 [[ -x /usr/bin/mise ]] || { echo "Missing pinned ARM64 mise" >&2; exit 1; }
 [[ $(/usr/bin/mise --version) == "$expected_mise" ]] || { echo "Pinned mise identity mismatch" >&2; exit 1; }
+expected_ttfx=$(read_spec '["supplyChain"]["ttfx"]["reportedVersion"]')
+[[ -x /usr/bin/ttfx ]] || { echo "Missing pinned ARM64 ttfx" >&2; exit 1; }
+[[ $(/usr/bin/ttfx --version) == "$expected_ttfx" ]] || { echo "Pinned ttfx identity mismatch" >&2; exit 1; }
+[[ $(pacman -Qoq /usr/local/bin/omarchy-native-cursor-restore) == try-omarchy-runtime ]] || {
+  echo "Screensaver cursor helper is not owned by the Omarchy runtime package" >&2
+  exit 1
+}
+[[ ! -e /usr/local/bin/ttfx && ! -L /usr/local/bin/ttfx ]] || {
+  echo "Obsolete ttfx compatibility command shadows the packaged binary" >&2
+  exit 1
+}
 systemctl enable omarchy-provision-owner.service
 systemctl enable sddm.service
 systemctl enable omarchy-native-mac-share.service
