@@ -1,0 +1,119 @@
+#!/bin/sh
+
+# Applies Try Omarchy's versioned per-user repairs. Offline system updates keep
+# /home read-only, so user-owned state is transformed at the next login instead.
+
+set -eu
+
+migration_id=0003-hypr-toggle-defaults
+manifest=${TRY_OMARCHY_USER_MIGRATION_MANIFEST:-/usr/share/try-omarchy/user-migrations/$migration_id.tsv}
+user_home=${HOME:-}
+
+case "$user_home" in
+  /*) ;;
+  *) echo "try-omarchy-user-migrate: HOME is not an absolute path" >&2; exit 1 ;;
+esac
+[ -d "$user_home" ] && [ ! -L "$user_home" ] || {
+  echo "try-omarchy-user-migrate: HOME is not a direct directory" >&2
+  exit 1
+}
+[ -f "$manifest" ] && [ ! -L "$manifest" ] || {
+  echo "try-omarchy-user-migrate: migration manifest is missing or unsafe" >&2
+  exit 1
+}
+
+state_root="$user_home/.local/state/try-omarchy"
+marker_directory="$state_root/migrations"
+marker="$marker_directory/$migration_id"
+preserved_directory="$state_root/preserved/$migration_id"
+toggle_directory="$user_home/.local/state/omarchy/toggles/hypr"
+
+if [ -e "$marker" ] || [ -L "$marker" ]; then
+  [ -f "$marker" ] && [ ! -L "$marker" ] || {
+    echo "try-omarchy-user-migrate: completion marker is unsafe" >&2
+    exit 1
+  }
+  exit 0
+fi
+
+umask 077
+mkdir -p "$marker_directory"
+[ -d "$marker_directory" ] && [ ! -L "$marker_directory" ] || {
+  echo "try-omarchy-user-migrate: marker directory is unsafe" >&2
+  exit 1
+}
+
+moved=0
+preserved=0
+while IFS="$(printf '\t')" read -r expected_digest filename extra \
+  || [ -n "${expected_digest:-}${filename:-}${extra:-}" ]; do
+  case "$expected_digest" in
+    ''|*[!0-9a-f]*) echo "try-omarchy-user-migrate: invalid manifest digest" >&2; exit 1 ;;
+  esac
+  [ "${#expected_digest}" -eq 64 ] || {
+    echo "try-omarchy-user-migrate: invalid manifest digest" >&2
+    exit 1
+  }
+  case "$filename" in
+    ''|*[!a-z0-9.-]*|.*|*..*|*/*)
+      echo "try-omarchy-user-migrate: invalid manifest filename" >&2
+      exit 1
+      ;;
+  esac
+  [ -z "${extra:-}" ] || {
+    echo "try-omarchy-user-migrate: invalid manifest record" >&2
+    exit 1
+  }
+
+  source_path="$toggle_directory/$filename"
+  if [ ! -e "$source_path" ] && [ ! -L "$source_path" ]; then
+    continue
+  fi
+  if [ ! -f "$source_path" ] || [ -L "$source_path" ]; then
+    preserved=$((preserved + 1))
+    continue
+  fi
+  actual_digest=$(sha256sum "$source_path") || exit 1
+  actual_digest=${actual_digest%% *}
+  if [ "$actual_digest" != "$expected_digest" ]; then
+    preserved=$((preserved + 1))
+    continue
+  fi
+
+  mkdir -p "$preserved_directory"
+  [ -d "$preserved_directory" ] && [ ! -L "$preserved_directory" ] || {
+    echo "try-omarchy-user-migrate: preservation directory is unsafe" >&2
+    exit 1
+  }
+  preserved_path="$preserved_directory/$filename"
+  if [ -e "$preserved_path" ] || [ -L "$preserved_path" ]; then
+    if [ ! -f "$preserved_path" ] || [ -L "$preserved_path" ]; then
+      preserved=$((preserved + 1))
+      continue
+    fi
+    preserved_digest=$(sha256sum "$preserved_path") || exit 1
+    preserved_digest=${preserved_digest%% *}
+    if [ "$preserved_digest" != "$expected_digest" ]; then
+      preserved=$((preserved + 1))
+      continue
+    fi
+    rm -f "$source_path"
+  else
+    mv "$source_path" "$preserved_path"
+  fi
+  moved=$((moved + 1))
+done <"$manifest"
+
+temporary_marker=$(mktemp "$marker_directory/.$migration_id.tmp.XXXXXX")
+trap 'rm -f "$temporary_marker"' EXIT HUP INT TERM
+{
+  printf 'migration=%s\n' "$migration_id"
+  printf 'moved=%s\n' "$moved"
+  printf 'preserved=%s\n' "$preserved"
+  printf 'version=1\n'
+} >"$temporary_marker"
+chmod 0600 "$temporary_marker"
+mv "$temporary_marker" "$marker"
+trap - EXIT HUP INT TERM
+
+echo "try-omarchy-user-migrate: $migration_id complete ($moved moved, $preserved preserved)" >&2

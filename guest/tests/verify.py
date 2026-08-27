@@ -72,7 +72,7 @@ def main() -> None:
         }
         and update["bootABI"] == "arm64-qemu-direct-v1"
         and update["controlPort"] == "dev.tryomarchy.control"
-        and update["guestStateSchema"] == 2
+        and update["guestStateSchema"] == 3
         and isinstance(update["protocolVersion"], int)
         and update["protocolVersion"] > 0,
         "offline update protocol is explicit and versioned",
@@ -167,6 +167,30 @@ def main() -> None:
         and 'toggles/flags.lua' in materialize,
         "skel hypr toggles seed only flags.lua, not the catalog",
     )
+    user_migration_manifest = read(
+        GUEST
+        / "native-overlay/usr/share/try-omarchy/user-migrations/0003-hypr-toggle-defaults.tsv"
+    )
+    check(
+        user_migration_manifest.splitlines()
+        == [
+            "22d43e72bf5b38e64b82409961c292329997c314f6c8a418b10b19c2193b1dc8\twindow-no-gaps.lua",
+            "c89793cc84bcf450116fa817db4a18b6e5e026cd2e138fd7ae595d0aec34d3bd\tsingle-window-aspect-ratio.lua",
+        ],
+        "per-user migration freezes the two affected Omarchy 4.0.1 toggles",
+    )
+    user_migration_unit = read(
+        GUEST
+        / "native-overlay/usr/lib/systemd/user/try-omarchy-user-migrate.service"
+    )
+    check(
+        "Before=graphical-session-pre.target graphical-session.target"
+        in user_migration_unit
+        and "ExecStart=/usr/local/lib/try-omarchy/user-migrate"
+        in user_migration_unit
+        and "WantedBy=default.target" in user_migration_unit,
+        "user-state repairs run before the graphical session consumes Hyprland state",
+    )
 
     configure = read(GUEST / "scripts/configure-rootfs.sh")
     check("factory-overlay" in configure and "native-overlay" in configure, "rootfs receives only native factory overlays")
@@ -188,6 +212,11 @@ def main() -> None:
         '"$root/usr/local/bin/omarchy-native-mac-share"' in configure
         and "default.target.wants/omarchy-native-mac-share-link.service" in configure,
         "guest links the shared Mac folder into each home at login",
+    )
+    check(
+        '"$root/usr/local/lib/try-omarchy/user-migrate"' in configure
+        and "default.target.wants/try-omarchy-user-migrate.service" in configure,
+        "guest runs versioned user-state repairs at login",
     )
     check(
         "pre-refresh-pacman-restore-arm.sh" in configure
@@ -330,6 +359,30 @@ def main() -> None:
             )
         ),
         "schema 1-to-2 migration verifies the pinned yay package state",
+    )
+    hypr_toggle_migration = read(
+        GUEST / "migrations/0002-0003-repair-hypr-toggle-defaults.sh"
+    )
+    check(
+        all(
+            marker in hypr_toggle_migration
+            for marker in (
+                "owned-payload",
+                "/usr/local/lib/try-omarchy/user-migrate",
+                "0003-hypr-toggle-defaults.tsv",
+                "try-omarchy-user-migrate.service",
+            )
+        ),
+        "schema 2-to-3 migration arms the deferred Hyprland repair",
+    )
+    migration_edges = [
+        tuple(int(part) for part in path.name.split("-", 2)[:2])
+        for path in sorted(GUEST.glob("migrations/*.sh"))
+    ]
+    check(
+        migration_edges == [(0, 1), (1, 2), (2, 3)]
+        and migration_edges[-1][1] == update["guestStateSchema"],
+        "migration catalog has one complete path from legacy state to schema 3",
     )
     update_hook = read(
         GUEST / "native-overlay/usr/lib/initcpio/hooks/try-omarchy-update"
@@ -736,6 +789,15 @@ HOTPLUG=1
             capture_output=True,
         ).stdout.strip()
         check(tagged_commit == expected_commit, "optional Omarchy source checkout matches the release tag")
+        for record in user_migration_manifest.splitlines():
+            expected_digest, filename = record.split("\t")
+            affected_toggle = source / "default/hypr/toggles" / filename
+            check(
+                affected_toggle.is_file()
+                and hashlib.sha256(affected_toggle.read_bytes()).hexdigest()
+                == expected_digest,
+                f"user migration digest matches pinned toggle {filename}",
+            )
         for relative in spec["authenticity"]["requiredPaths"]:
             check((source / relative).exists(), f"pinned source contains {relative}")
 

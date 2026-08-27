@@ -1,0 +1,10 @@
+[Unit]
+Description=Migrate Try Omarchy user settings
+Before=graphical-session-pre.target graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/try-omarchy/user-migrate
+
+[Install]
+WantedBy=default.target

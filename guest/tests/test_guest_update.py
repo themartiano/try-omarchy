@@ -24,6 +24,7 @@ UPDATE_RUNNER = GUEST / "native-overlay/usr/local/lib/try-omarchy/update-runner"
 OWNED_PAYLOAD = GUEST / "native-overlay/usr/local/lib/try-omarchy/owned-payload"
 BOOTSTRAP_MIGRATION = GUEST / "migrations/0000-0001-bootstrap-update-v1.sh"
 YAY_MIGRATION = GUEST / "migrations/0001-0002-add-yay.sh"
+HYPR_TOGGLE_MIGRATION = GUEST / "migrations/0002-0003-repair-hypr-toggle-defaults.sh"
 
 
 def load_module(name: str, path: Path):
@@ -69,7 +70,7 @@ class UpdateContractTests(unittest.TestCase):
             environment_path = root / "usr/share/try-omarchy/update/release.env"
             state = json.loads(state_path.read_text())
             release = json.loads(release_path.read_text())
-            self.assertEqual(state["guestStateSchema"], 2)
+            self.assertEqual(state["guestStateSchema"], 3)
             self.assertEqual(state["bootABI"], "arm64-qemu-direct-v1")
             self.assertEqual(state["releaseId"], release_id)
             self.assertEqual(state["kind"], "try-omarchy-guest-state")
@@ -81,7 +82,7 @@ class UpdateContractTests(unittest.TestCase):
                 json.dumps(state, separators=(",", ":"), sort_keys=True) + "\n",
             )
             environment = environment_path.read_text()
-            self.assertIn("TRY_OMARCHY_GUEST_STATE_SCHEMA=2\n", environment)
+            self.assertIn("TRY_OMARCHY_GUEST_STATE_SCHEMA=3\n", environment)
             self.assertIn(f"TRY_OMARCHY_UPDATE_SHA256SUMS={digest}\n", environment)
 
 
@@ -102,6 +103,7 @@ class UpdateRootTests(unittest.TestCase):
             "/etc/systemd/system/multi-user.target.wants/try-omarchy-health.service": "/usr/lib/systemd/system/try-omarchy-health.service",
             "/etc/systemd/user/default.target.wants/omarchy-native-audio-bridge.service": "/usr/lib/systemd/user/omarchy-native-audio-bridge.service",
             "/etc/systemd/user/default.target.wants/omarchy-native-mac-share-link.service": "/usr/lib/systemd/user/omarchy-native-mac-share-link.service",
+            "/etc/systemd/user/default.target.wants/try-omarchy-user-migrate.service": "/usr/lib/systemd/user/try-omarchy-user-migrate.service",
             "/etc/systemd/user/graphical-session.target.wants/omarchy-native-clipboard-bridge.service": "/usr/lib/systemd/user/omarchy-native-clipboard-bridge.service",
             "/etc/systemd/user/graphical-session.target.wants/try-omarchy-graphical-health.service": "/usr/lib/systemd/user/try-omarchy-graphical-health.service",
         }
@@ -426,6 +428,74 @@ class BootstrapMigrationTests(unittest.TestCase):
                     check=True,
                 )
 
+    def test_hypr_toggle_migration_verifies_deferred_repair_support(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate = root / "candidate"
+            update = root / "update"
+            candidate.mkdir()
+            update.mkdir()
+            runner = root / "owned-payload"
+            runner_log = root / "owned-payload.log"
+            runner.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$1" >>"$TRY_OMARCHY_TEST_RUNNER_LOG"\n',
+                encoding="ascii",
+            )
+            runner.chmod(0o755)
+            environment = os.environ.copy()
+            environment["TRY_OMARCHY_OWNED_PAYLOAD_RUNNER"] = str(runner)
+            environment["TRY_OMARCHY_TEST_RUNNER_LOG"] = str(runner_log)
+
+            before = subprocess.run(
+                [
+                    "/bin/sh",
+                    str(HYPR_TOGGLE_MIGRATION),
+                    "verify",
+                    str(candidate),
+                    str(update),
+                ],
+                check=False,
+                env=environment,
+            )
+            self.assertNotEqual(before.returncode, 0)
+
+            helper = candidate / "usr/local/lib/try-omarchy/user-migrate"
+            manifest = (
+                candidate
+                / "usr/share/try-omarchy/user-migrations/0003-hypr-toggle-defaults.tsv"
+            )
+            service = (
+                candidate
+                / "usr/lib/systemd/user/try-omarchy-user-migrate.service"
+            )
+            for path in (helper, manifest, service):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("present\n", encoding="ascii")
+            helper.chmod(0o755)
+            wants = (
+                candidate
+                / "etc/systemd/user/default.target.wants/try-omarchy-user-migrate.service"
+            )
+            wants.parent.mkdir(parents=True)
+            wants.symlink_to("/usr/lib/systemd/user/try-omarchy-user-migrate.service")
+
+            for mode in ("verify", "apply", "verify"):
+                subprocess.run(
+                    [
+                        "/bin/sh",
+                        str(HYPR_TOGGLE_MIGRATION),
+                        mode,
+                        str(candidate),
+                        str(update),
+                    ],
+                    check=True,
+                    env=environment,
+                )
+            self.assertEqual(
+                runner_log.read_text(encoding="ascii").splitlines(),
+                ["verify", "verify", "apply", "verify"],
+            )
+
 
 class UpdateRunnerTests(unittest.TestCase):
     release_id = "c" * 64
@@ -580,12 +650,15 @@ class HealthReportTests(unittest.TestCase):
                 "usr/local/bin/omarchy-native-display-sync",
                 "usr/local/bin/omarchy-native-mac-share",
                 "usr/local/lib/try-omarchy/owned-payload",
+                "usr/local/lib/try-omarchy/user-migrate",
+                "usr/share/try-omarchy/user-migrations/0003-hypr-toggle-defaults.tsv",
                 "usr/lib/systemd/system/omarchy-native-mac-share.service",
                 "usr/lib/systemd/system/try-omarchy-health.service",
                 "usr/lib/systemd/user/omarchy-native-audio-bridge.service",
                 "usr/lib/systemd/user/omarchy-native-clipboard-bridge.service",
                 "usr/lib/systemd/user/omarchy-native-mac-share-link.service",
                 "usr/lib/systemd/user/try-omarchy-graphical-health.service",
+                "usr/lib/systemd/user/try-omarchy-user-migrate.service",
             ]
             for relative in required:
                 path = contract_root / relative
@@ -620,7 +693,7 @@ class HealthReportTests(unittest.TestCase):
             self.assertEqual(message["status"], "ready")
             self.assertEqual(message["readiness"], "system")
             self.assertEqual(message["transaction"], UpdateRunnerTests.transaction)
-            self.assertEqual(message["guestStateSchema"], 2)
+            self.assertEqual(message["guestStateSchema"], 3)
             self.assertEqual(message["bootABI"], "arm64-qemu-direct-v1")
 
     def test_normal_health_requires_live_graphical_session_marker(self) -> None:
@@ -652,12 +725,15 @@ class HealthReportTests(unittest.TestCase):
                 "usr/local/bin/omarchy-native-display-sync",
                 "usr/local/bin/omarchy-native-mac-share",
                 "usr/local/lib/try-omarchy/owned-payload",
+                "usr/local/lib/try-omarchy/user-migrate",
+                "usr/share/try-omarchy/user-migrations/0003-hypr-toggle-defaults.tsv",
                 "usr/lib/systemd/system/omarchy-native-mac-share.service",
                 "usr/lib/systemd/system/try-omarchy-health.service",
                 "usr/lib/systemd/user/omarchy-native-audio-bridge.service",
                 "usr/lib/systemd/user/omarchy-native-clipboard-bridge.service",
                 "usr/lib/systemd/user/omarchy-native-mac-share-link.service",
                 "usr/lib/systemd/user/try-omarchy-graphical-health.service",
+                "usr/lib/systemd/user/try-omarchy-user-migrate.service",
             ]
             for relative in required:
                 path = contract_root / relative

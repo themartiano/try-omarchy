@@ -51,6 +51,7 @@ EXACT_OWNED_PATHS = (
     "/etc/systemd/system/omarchy-provision-owner.service",
     "/etc/systemd/user/default.target.wants/omarchy-native-audio-bridge.service",
     "/etc/systemd/user/default.target.wants/omarchy-native-mac-share-link.service",
+    "/etc/systemd/user/default.target.wants/try-omarchy-user-migrate.service",
     "/etc/systemd/user/graphical-session.target.wants/omarchy-native-clipboard-bridge.service",
     "/etc/systemd/user/graphical-session.target.wants/try-omarchy-graphical-health.service",
     "/usr/local/bin/ttfx",

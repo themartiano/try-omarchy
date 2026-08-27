@@ -145,7 +145,7 @@
       "bootABI": "arm64-qemu-direct-v1",
       "compressedImage": "update.ext4.zst",
       "controlPort": "dev.tryomarchy.control",
-      "guestStateSchema": 2,
+      "guestStateSchema": 3,
       "image": "update.ext4",
       "protocolVersion": 1
     },

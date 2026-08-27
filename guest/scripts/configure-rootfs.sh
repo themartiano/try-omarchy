@@ -77,6 +77,7 @@ chmod 0755 \
   "$root/usr/local/bin/omarchy-native-mac-share" \
   "$root/usr/local/lib/try-omarchy/health-report" \
   "$root/usr/local/lib/try-omarchy/owned-payload" \
+  "$root/usr/local/lib/try-omarchy/user-migrate" \
   "$root/usr/local/lib/try-omarchy/update-runner" \
   "$root/usr/lib/initcpio/hooks/try-omarchy-update" \
   "$root/usr/lib/initcpio/install/try-omarchy-update"
@@ -92,6 +93,11 @@ mkdir -p "$root/etc/systemd/user/default.target.wants" \
   "$root/etc/systemd/user/graphical-session.target.wants"
 ln -sfn /usr/lib/systemd/user/omarchy-native-audio-bridge.service \
   "$root/etc/systemd/user/default.target.wants/omarchy-native-audio-bridge.service"
+# User homes stay read-only during offline updates. This one-shot applies
+# versioned, content-matched repairs in the user's own context before the
+# graphical session consumes that state.
+ln -sfn /usr/lib/systemd/user/try-omarchy-user-migrate.service \
+  "$root/etc/systemd/user/default.target.wants/try-omarchy-user-migrate.service"
 # The clipboard agent needs the Wayland socket, so it follows the uwsm-managed
 # graphical session rather than the plain user manager.
 ln -sfn /usr/lib/systemd/user/omarchy-native-clipboard-bridge.service \

@@ -15,7 +15,7 @@ promotes that candidate only after the updated guest reports healthy.
   "bootABI": "arm64-qemu-direct-v1",
   "compressedImage": "update.ext4.zst",
   "controlPort": "dev.tryomarchy.control",
-  "guestStateSchema": 2,
+  "guestStateSchema": 3,
   "image": "update.ext4",
   "protocolVersion": 1
 }
@@ -120,14 +120,14 @@ before pacman runs, covering configuration owned by ordinary OS packages.
 Update success is one canonical JSON line:
 
 ```json
-{"bootABI":"arm64-qemu-direct-v1","fromGuestStateSchema":1,"guestStateSchema":2,"protocolVersion":1,"status":"complete","transaction":"<64hex>","type":"update"}
+{"bootABI":"arm64-qemu-direct-v1","fromGuestStateSchema":2,"guestStateSchema":3,"protocolVersion":1,"status":"complete","transaction":"<64hex>","type":"update"}
 ```
 
 Failure uses `"status":"failed"` and adds a stable kebab-case `errorCode`.
 Trial-boot health is:
 
 ```json
-{"bootABI":"arm64-qemu-direct-v1","guestStateSchema":2,"protocolVersion":1,"readiness":"system","status":"ready","transaction":"<64hex>","type":"health"}
+{"bootABI":"arm64-qemu-direct-v1","guestStateSchema":3,"protocolVersion":1,"readiness":"system","status":"ready","transaction":"<64hex>","type":"health"}
 ```
 
 The transaction nonce is mandatory during an update and lets the host reject
@@ -162,6 +162,13 @@ regenerates the external direct-boot initramfs. Changes to user configuration
 must be explicit, versioned transformations that preserve local edits; upstream
 `omarchy-migrate` remains a per-user graphical-session operation and is not
 falsely treated as an offline system migration.
+
+Try Omarchy-specific user-state repairs follow the same split. An offline guest
+migration installs and enables the signed repair helper, while a one-shot user
+unit performs the content-matched transformation at login. Each repair records
+its own marker under `~/.local/state/try-omarchy/migrations/` and moves replaced
+bytes under `~/.local/state/try-omarchy/preserved/`. This keeps `/home` read-only
+during the candidate transaction and preserves modified or unrecognized files.
 
 Run the host-independent contract suite with:
 
