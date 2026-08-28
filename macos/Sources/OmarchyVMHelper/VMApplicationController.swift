@@ -11,6 +11,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let supervisor: QEMUGPUProcessSupervisor
     private let preferenceStore: AudioRoutingPreferenceStore
     private let sharedFolderStore: SharedFolderPreferenceStore
+    private let fullscreenPreferenceStore: FullscreenPreferenceStore
     private let deviceProvider: HostAudioDeviceProviding
     private var startMenuWindow: StartMenuWindow?
 
@@ -28,6 +29,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         supervisor: QEMUGPUProcessSupervisor = QEMUGPUProcessSupervisor(),
         preferenceStore: AudioRoutingPreferenceStore = AudioRoutingPreferenceStore(),
         sharedFolderStore: SharedFolderPreferenceStore = SharedFolderPreferenceStore(),
+        fullscreenPreferenceStore: FullscreenPreferenceStore = FullscreenPreferenceStore(),
         deviceProvider: HostAudioDeviceProviding = CoreAudioHostAudioDeviceProvider()
     ) {
         self.launcherURL = launcherURL
@@ -36,6 +38,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         self.supervisor = supervisor
         self.preferenceStore = preferenceStore
         self.sharedFolderStore = sharedFolderStore
+        self.fullscreenPreferenceStore = fullscreenPreferenceStore
         self.deviceProvider = deviceProvider
     }
 
@@ -91,6 +94,14 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             },
             setSharedFolderEnabled: { [weak self] enabled in
                 self?.setSharedFolderEnabled(enabled)
+            },
+            immersiveMode: { [weak self] in
+                self?.fullscreenPreferenceStore.load().isImmersive ?? true
+            },
+            setImmersiveMode: { [weak self] isImmersive in
+                self?.fullscreenPreferenceStore.save(
+                    FullscreenPreferences(isImmersive: isImmersive)
+                )
             },
             launch: { [weak self] in
                 self?.startVirtualMachine()
@@ -212,11 +223,15 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             preference: sharedFolderStore.load(),
             homeDirectory: Self.homeDirectory
         )
+        let fullscreen = FullscreenLaunchConfiguration.make(
+            baseEnvironment: sharing.environment,
+            preferences: fullscreenPreferenceStore.load()
+        )
 
         try supervisor.start(
             executableURL: launcherURL,
             arguments: arguments,
-            environment: sharing.environment,
+            environment: fullscreen.environment,
             launchEvent: { [weak self] event in
                 if event == .virtualMachineReady {
                     self?.virtualMachineDidStart()

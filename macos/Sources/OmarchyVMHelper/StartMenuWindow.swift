@@ -57,6 +57,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let sharedFolderStatus: () -> SharedFolderMenuState
     private let chooseSharedFolder: (String) -> String?
     private let setSharedFolderEnabled: (Bool) -> Void
+    private let immersiveMode: () -> Bool
+    private let setImmersiveMode: (Bool) -> Void
     private let launch: () -> Void
     private let canResetStorage: Bool
     private let storageLocation: String?
@@ -66,6 +68,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private var resetInProgress = false
     private var launchInProgress = false
     private var pendingResetSpaceEstimate: String?
+    private weak var immersiveCaption: NSTextField?
 
     init(
         accessibilityStatus: @escaping () -> Bool,
@@ -80,6 +83,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         sharedFolderStatus: @escaping () -> SharedFolderMenuState,
         chooseSharedFolder: @escaping (String) -> String?,
         setSharedFolderEnabled: @escaping (Bool) -> Void,
+        immersiveMode: @escaping () -> Bool,
+        setImmersiveMode: @escaping (Bool) -> Void,
         launch: @escaping () -> Void
     ) {
         self.accessibilityStatus = accessibilityStatus
@@ -94,6 +99,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         self.sharedFolderStatus = sharedFolderStatus
         self.chooseSharedFolder = chooseSharedFolder
         self.setSharedFolderEnabled = setSharedFolderEnabled
+        self.immersiveMode = immersiveMode
+        self.setImmersiveMode = setImmersiveMode
         self.launch = launch
 
         window = NSWindow(
@@ -192,9 +199,9 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         title.font = .systemFont(ofSize: 27, weight: .bold)
 
         let headingStack = NSStackView(views: [icon, title])
-        headingStack.orientation = .vertical
-        headingStack.alignment = .leading
-        headingStack.spacing = 10
+        headingStack.orientation = .horizontal
+        headingStack.alignment = .centerY
+        headingStack.spacing = 14
 
         let accessibilityGranted = accessibilityStatus()
         let accessibilityRow = permissionRow(
@@ -277,14 +284,24 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             minimumHeight: 100
         )
 
+        let immersiveRow = immersiveSettingRow(isEnabled: immersiveMode())
+
         let permissionRows = NSStackView(
-            views: [accessibilityRow, separator(), microphoneRow, separator(), sharedFolderRow]
+            views: [
+                accessibilityRow,
+                separator(),
+                microphoneRow,
+                separator(),
+                sharedFolderRow,
+                separator(),
+                immersiveRow,
+            ]
         )
         permissionRows.orientation = .vertical
         permissionRows.alignment = .leading
         permissionRows.spacing = 0
         permissionRows.translatesAutoresizingMaskIntoConstraints = false
-        for row in [accessibilityRow, microphoneRow, sharedFolderRow] {
+        for row in [accessibilityRow, microphoneRow, sharedFolderRow, immersiveRow] {
             row.widthAnchor.constraint(equalTo: permissionRows.widthAnchor).isActive = true
         }
 
@@ -451,18 +468,18 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 18
-        stack.setCustomSpacing(22, after: headingStack)
+        stack.setCustomSpacing(14, after: headingStack)
         stack.setCustomSpacing(12, after: permissionCard)
-        stack.setCustomSpacing(20, after: resetSection)
-        stack.setCustomSpacing(10, after: launchButton)
+        stack.setCustomSpacing(12, after: resetSection)
+        stack.setCustomSpacing(8, after: launchButton)
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
 
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 42),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -42),
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 48),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -30),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 26),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -20),
             permissionCard.widthAnchor.constraint(equalTo: stack.widthAnchor),
             resetSection.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
             launchButton.widthAnchor.constraint(equalTo: stack.widthAnchor),
@@ -496,7 +513,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         granted: Bool,
         statusLabels: (granted: String, denied: String),
         actions: [(String, Selector)],
-        minimumHeight: CGFloat = 76
+        minimumHeight: CGFloat = 68
     ) -> NSView {
         let symbol = NSImageView()
         symbol.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
@@ -638,6 +655,71 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         return view
     }
 
+    private func immersiveSettingRow(isEnabled: Bool) -> NSView {
+        let symbol = NSImageView()
+        symbol.image = NSImage(
+            systemSymbolName: "arrow.up.left.and.arrow.down.right",
+            accessibilityDescription: nil
+        )
+        symbol.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 19, weight: .medium)
+        symbol.contentTintColor = .controlAccentColor
+        symbol.identifier = NSUserInterfaceItemIdentifier("immersive-symbol")
+        symbol.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            symbol.widthAnchor.constraint(equalToConstant: 26),
+            symbol.heightAnchor.constraint(equalToConstant: 26),
+        ])
+
+        let title = NSTextField(labelWithString: "Immersive")
+        title.font = .systemFont(ofSize: 14, weight: .semibold)
+        title.identifier = NSUserInterfaceItemIdentifier("immersive-title")
+
+        let detailText = Self.immersiveDetailText(isEnabled: isEnabled)
+        let detail = NSTextField(wrappingLabelWithString: detailText)
+        detail.font = .systemFont(ofSize: 12)
+        detail.textColor = .secondaryLabelColor
+        detail.maximumNumberOfLines = 2
+        detail.identifier = NSUserInterfaceItemIdentifier("immersive-caption")
+        immersiveCaption = detail
+
+        let labels = NSStackView(views: [title, detail])
+        labels.orientation = .vertical
+        labels.alignment = .leading
+        labels.spacing = 3
+        labels.translatesAutoresizingMaskIntoConstraints = false
+
+        let toggle = NSSwitch()
+        toggle.state = isEnabled ? .on : .off
+        toggle.target = self
+        toggle.action = #selector(changeImmersiveMode(_:))
+        toggle.isEnabled = !microphoneRequestInFlight && !launchInProgress && !resetInProgress
+        toggle.identifier = NSUserInterfaceItemIdentifier("immersive-toggle")
+        toggle.setAccessibilityLabel("Immersive mode")
+        toggle.setAccessibilityTitleUIElement(title)
+        toggle.setAccessibilityHelp(detailText)
+        toggle.translatesAutoresizingMaskIntoConstraints = false
+
+        let row = NSView()
+        row.identifier = NSUserInterfaceItemIdentifier("immersive-row")
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(symbol)
+        row.addSubview(labels)
+        row.addSubview(toggle)
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(greaterThanOrEqualToConstant: 72),
+            symbol.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            symbol.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            labels.leadingAnchor.constraint(equalTo: symbol.trailingAnchor, constant: 12),
+            labels.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            labels.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -12),
+            toggle.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            toggle.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+        ])
+        labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return row
+    }
+
     @objc private func beginAccessibilityRequest() {
         requestAccessibility()
         render()
@@ -731,6 +813,29 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     @objc private func disableSharedFolder() {
         setSharedFolderEnabled(false)
         render()
+    }
+
+    @objc private func changeImmersiveMode(_ sender: NSSwitch) {
+        guard !launchInProgress, !resetInProgress else { return }
+        let isEnabled = sender.state == .on
+        setImmersiveMode(isEnabled)
+        let detailText = Self.immersiveDetailText(isEnabled: isEnabled)
+        immersiveCaption?.stringValue = detailText
+        sender.setAccessibilityHelp(detailText)
+        NSAccessibility.post(
+            element: NSApplication.shared,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: detailText,
+                .priority: NSAccessibilityPriorityLevel.medium.rawValue,
+            ]
+        )
+    }
+
+    private static func immersiveDetailText(isEnabled: Bool) -> String {
+        isEnabled
+            ? "Mac controls stay hidden. First press Control-Option-G, then Command-F to leave Full Screen."
+            : "Move the pointer to the top of the screen, then choose View › Exit Full Screen or press Command-F."
     }
 
     private func confirmReset() {

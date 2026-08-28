@@ -14,13 +14,17 @@ struct StartMenuWindowTests {
             requestAccessibility: {},
             requestMicrophone: { completion in completion(false) },
             canResetStorage: false,
-            storageLocation: nil,
-            storageLocationURL: nil,
+            storageLocation: "~/Library/Application Support/Try Omarchy",
+            storageLocationURL: URL(
+                fileURLWithPath: "/Users/test/Library/Application Support/Try Omarchy"
+            ),
             storageSpaceEstimate: { nil },
             resetStorage: {},
             sharedFolderStatus: { .disabled },
             chooseSharedFolder: { _ in nil },
             setSharedFolderEnabled: { _ in },
+            immersiveMode: { true },
+            setImmersiveMode: { _ in },
             launch: {}
         )
         menu.show()
@@ -55,6 +59,9 @@ struct StartMenuWindowTests {
         let labelFrame = launchLabel.convert(launchLabel.bounds, to: launchButton)
         #expect(abs(labelFrame.midX - launchButton.bounds.midX) <= 0.5)
         #expect(abs(labelFrame.midY - launchButton.bounds.midY) <= 0.5)
+        let launchFrame = launchButton.convert(launchButton.bounds, to: content)
+        #expect(launchFrame.minY >= content.bounds.minY)
+        #expect(launchFrame.maxY <= content.bounds.maxY)
     }
 
     @Test("shared folder paths keep separate compact lines and actions stay aligned")
@@ -83,6 +90,8 @@ struct StartMenuWindowTests {
             },
             chooseSharedFolder: { _ in nil },
             setSharedFolderEnabled: { _ in },
+            immersiveMode: { true },
+            setImmersiveMode: { _ in },
             launch: {}
         )
         menu.show()
@@ -130,6 +139,93 @@ struct StartMenuWindowTests {
         menu.refreshPermissionStatus()
         content.layoutSubtreeIfNeeded()
         try expectPermissionColumnsAligned(in: content)
+    }
+
+    @Test("Immersive toggle explains how to leave both Full Screen modes")
+    func immersiveToggleUpdatesItsGuidance() throws {
+        _ = NSApplication.shared
+        var isImmersive = true
+        var savedChoices: [Bool] = []
+        let menu = StartMenuWindow(
+            accessibilityStatus: { true },
+            microphoneStatus: { .authorized },
+            requestAccessibility: {},
+            requestMicrophone: { completion in completion(true) },
+            canResetStorage: false,
+            storageLocation: nil,
+            storageLocationURL: nil,
+            storageSpaceEstimate: { nil },
+            resetStorage: {},
+            sharedFolderStatus: { .disabled },
+            chooseSharedFolder: { _ in nil },
+            setSharedFolderEnabled: { _ in },
+            immersiveMode: { isImmersive },
+            setImmersiveMode: { choice in
+                isImmersive = choice
+                savedChoices.append(choice)
+            },
+            launch: {}
+        )
+        menu.show()
+        defer { menu.dismiss() }
+
+        let content = try #require(
+            NSApp.windows.first(where: { $0.isVisible && $0.title == "Try Omarchy" })?.contentView
+        )
+        content.layoutSubtreeIfNeeded()
+
+        let immersiveToggle = try #require(
+            descendant(withIdentifier: "immersive-toggle", in: content) as? NSSwitch
+        )
+        let immersiveCaption = try #require(
+            descendant(withIdentifier: "immersive-caption", in: content) as? NSTextField
+        )
+        let immersiveRow = try #require(
+            descendant(withIdentifier: "immersive-row", in: content)
+        )
+        let launchButton = try #require(
+            descendant(withIdentifier: "launch-button", in: content)
+        )
+        #expect(immersiveToggle.state == .on)
+        #expect(immersiveCaption.stringValue.contains("Control-Option-G, then Command-F"))
+        #expect(immersiveToggle.accessibilityLabel() == "Immersive mode")
+        #expect(immersiveToggle.accessibilityHelp() == immersiveCaption.stringValue)
+        #expect(immersiveToggle.frame.height >= 24)
+        #expect(immersiveCaption.frame.height > 0)
+        let immersiveRowFrame = immersiveRow.convert(immersiveRow.bounds, to: content)
+        #expect(immersiveRowFrame.minY >= content.bounds.minY)
+        #expect(immersiveRowFrame.maxY <= content.bounds.maxY)
+        let launchButtonFrame = launchButton.convert(launchButton.bounds, to: content)
+        #expect(launchButtonFrame.minY >= content.bounds.minY)
+        #expect(launchButtonFrame.maxY <= content.bounds.maxY)
+
+        content.window?.makeFirstResponder(immersiveToggle)
+        immersiveToggle.performClick(nil)
+        content.layoutSubtreeIfNeeded()
+
+        #expect(savedChoices == [false])
+        #expect(content.window?.firstResponder === immersiveToggle)
+        let standardToggle = try #require(
+            descendant(withIdentifier: "immersive-toggle", in: content) as? NSSwitch
+        )
+        let standardCaption = try #require(
+            descendant(withIdentifier: "immersive-caption", in: content) as? NSTextField
+        )
+        #expect(standardToggle.state == .off)
+        #expect(standardCaption.stringValue ==
+            "Move the pointer to the top of the screen, then choose View › Exit Full Screen or press Command-F.")
+        #expect(standardToggle.accessibilityHelp() == standardCaption.stringValue)
+
+        menu.refreshPermissionStatus()
+        content.layoutSubtreeIfNeeded()
+        let refreshedToggle = try #require(
+            descendant(withIdentifier: "immersive-toggle", in: content) as? NSSwitch
+        )
+        let refreshedCaption = try #require(
+            descendant(withIdentifier: "immersive-caption", in: content) as? NSTextField
+        )
+        #expect(refreshedToggle.state == .off)
+        #expect(refreshedCaption.stringValue == standardCaption.stringValue)
     }
 
     private func expectPermissionColumnsAligned(in content: NSView) throws {

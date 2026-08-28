@@ -7,7 +7,8 @@ usage() {
 Usage: macos/build-qemu-gpu-runtime.sh [--archive-dir DIR]
 
 Build the pinned startergo QEMU/VirGL source stack with Try Omarchy's Cocoa
-identity and dynamic-display patches, then relocate, sign, validate, and
+identity, dynamic-display, and immersive-mode patches, then relocate, sign,
+validate, and
 atomically stage it at:
   macos/.build/qemu-gpu-runtime
 
@@ -43,6 +44,7 @@ done
 native_dir=$(cd "$(dirname "$0")" && pwd -P)
 identity_patch="$native_dir/patches/qemu-cocoa-product-identity.patch"
 display_patch="$native_dir/patches/qemu-cocoa-dynamic-display.patch"
+immersive_patch="$native_dir/patches/qemu-cocoa-immersive-mode.patch"
 audio_device_patch="$native_dir/patches/qemu-sdl-audio-device-selection.patch"
 shared_folder_patch="$native_dir/patches/qemu-9p-guest-owner.patch"
 prepare_runtime="$native_dir/prepare-qemu-gpu-runtime.sh"
@@ -62,6 +64,7 @@ texture_patch_sha256=428528d3203fe487e7aac21f313bc83e53ad22168e8fd39aa9eb1791bc1
 gpu_fix_patch_sha256=2b0a589d5821fbbfaa65177c97395ec50382373373e5c6860821279f07d62bb2
 identity_patch_sha256=5c9358c2858a74d6a678eacaae550a021f3e616c98c4e4e98c0e50bd869a0666
 display_patch_sha256=19392fe5723829edea348b82a6b0a74f874724af243ed0fb9101007a22fa5bbb
+immersive_patch_sha256=787b271b3c7260305f54f9d7ed5fbbf82d085347954977df6b12898c2efb5f0f
 audio_device_patch_sha256=20469691f4cdabcd6b9513d6bf00fab9f66983e17b1e8477cc2e5ac47416feed
 shared_folder_patch_sha256=585a5ed40cc7e4a155ca799d731e15354db9e75d4f517d0689be60200750f3e3
 
@@ -123,6 +126,8 @@ macos_major=$(sw_vers -productVersion | awk -F. '{ print $1 }')
   die "missing Cocoa product-identity patch: $identity_patch"
 [[ -f $display_patch && ! -L $display_patch ]] || \
   die "missing dynamic-display patch: $display_patch"
+[[ -f $immersive_patch && ! -L $immersive_patch ]] || \
+  die "missing immersive-mode patch: $immersive_patch"
 [[ -f $audio_device_patch && ! -L $audio_device_patch ]] || \
   die "missing SDL audio-device patch: $audio_device_patch"
 [[ -f $shared_folder_patch && ! -L $shared_folder_patch ]] || \
@@ -304,16 +309,19 @@ verify_file_sha "startergo GPU-resolution patch" "$gpu_fix_patch" "$gpu_fix_patc
 verify_file_sha "Try Omarchy Cocoa product-identity patch" \
   "$identity_patch" "$identity_patch_sha256"
 verify_file_sha "Try Omarchy dynamic-display patch" "$display_patch" "$display_patch_sha256"
+verify_file_sha "Try Omarchy Cocoa immersive-mode patch" \
+  "$immersive_patch" "$immersive_patch_sha256"
 verify_file_sha "Try Omarchy SDL audio-device patch" \
   "$audio_device_patch" "$audio_device_patch_sha256"
 verify_file_sha "Try Omarchy 9p shared-folder patch" \
   "$shared_folder_patch" "$shared_folder_patch_sha256"
 
-log "Applying the exact render, product-identity, dynamic-display, audio-device, and shared-folder patches"
+log "Applying the exact render, product-identity, dynamic-display, immersive-mode, audio-device, and shared-folder patches"
 patch -d "$source_dir" -p1 -f -i "$texture_patch"
 patch -d "$source_dir" -p1 -f -i "$gpu_fix_patch"
 patch -d "$source_dir" -p1 -f -i "$identity_patch"
 patch -d "$source_dir" -p1 -f -i "$display_patch"
+patch -d "$source_dir" -p1 -f -i "$immersive_patch"
 patch -d "$source_dir" -p1 -f -i "$audio_device_patch"
 patch -d "$source_dir" -p1 -f -i "$shared_folder_patch"
 
