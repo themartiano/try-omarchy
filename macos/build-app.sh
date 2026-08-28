@@ -54,6 +54,7 @@ module_cache="$macos_dir/.build/module-cache"
 runtime_source="$macos_dir/.build/qemu-gpu-runtime"
 guest_dir=${guest_dir:-"$repo_dir/dist/guest"}
 dependency_bundler="$macos_dir/bundle-macho-dependencies.sh"
+compatibility_verifier="$macos_dir/verify-macos-compatibility.sh"
 package_dmg="$macos_dir/package-dmg.sh"
 app_icon_source="$macos_dir/OmarchyIcon.svg"
 app_icon_fallback="$macos_dir/Omarchy.icns"
@@ -61,7 +62,6 @@ app_icon_renderer_source="$macos_dir/render-app-icon.swift"
 icon_renderer="$macos_dir/.build/app-icon-renderer"
 iconset="$macos_dir/.build/TryOmarchy.iconset"
 generated_icon="$macos_dir/.build/TryOmarchy.icns"
-zstd_bin=$(command -v zstd || true)
 
 [[ -d $runtime_source && ! -L $runtime_source ]] || {
   echo "build-app: missing staged QEMU runtime; run build-qemu-gpu-runtime.sh first" >&2
@@ -74,6 +74,10 @@ zstd_bin=$(command -v zstd || true)
 guest_dir=$(cd "$guest_dir" && pwd -P)
 [[ -x $dependency_bundler && ! -L $dependency_bundler ]] || {
   echo "build-app: dependency bundler is missing or unsafe" >&2
+  exit 1
+}
+[[ -x $compatibility_verifier && ! -L $compatibility_verifier ]] || {
+  echo "build-app: compatibility verifier is missing or unsafe" >&2
   exit 1
 }
 [[ -f $app_icon_source && ! -L $app_icon_source ]] || {
@@ -98,8 +102,8 @@ if [[ -n $notarize_profile && $sign_identity == - ]]; then
   echo "build-app: notarization requires --sign-identity with a Developer ID Application identity" >&2
   exit 1
 fi
-[[ -n $zstd_bin && -f $zstd_bin && -x $zstd_bin ]] || {
-  echo "build-app: zstd is required to create the self-contained app" >&2
+[[ -x $runtime_source/bin/zstd && ! -L $runtime_source/bin/zstd ]] || {
+  echo "build-app: staged runtime is missing pinned zstd" >&2
   exit 1
 }
 
@@ -108,6 +112,7 @@ cd "$macos_dir"
 mkdir -p "$module_cache/swift" "$module_cache/clang" "$module_cache/icon"
 export SWIFT_MODULECACHE_PATH="$module_cache/swift"
 export CLANG_MODULE_CACHE_PATH="$module_cache/clang"
+export MACOSX_DEPLOYMENT_TARGET=15.0
 swift build --disable-sandbox -c release -debug-info-format none
 
 rm -rf "$iconset"
@@ -154,7 +159,6 @@ install -m 0755 "$helper" "$contents/MacOS/omarchy-vm-helper"
 install -m 0644 "$macos_dir/Info.plist" "$contents/Info.plist"
 install -m 0644 "$generated_icon" "$contents/Resources/TryOmarchy.icns"
 ditto "$runtime_source" "$contents/Resources/runtime"
-install -m 0755 "$zstd_bin" "$contents/Resources/runtime/bin/zstd"
 install -m 0755 "$macos_dir/run-qemu-gpu.sh" "$contents/Resources/scripts/run-qemu-gpu.sh"
 install -m 0644 "$macos_dir/qemu-persistent-storage.sh" \
   "$contents/Resources/scripts/qemu-persistent-storage.sh"
@@ -182,8 +186,8 @@ for guest_resource in \
   chmod 0644 "$contents/Resources/guest/$guest_resource"
 done
 
-"$dependency_bundler" "$contents/Resources/runtime"
 mv "$contents/Resources/runtime/bin/qemu-system-aarch64" "$bundled_qemu"
+"$dependency_bundler" --verify-only "$contents/Resources/runtime"
 
 sign_options=(--force --sign "$sign_identity")
 if [[ $sign_identity != - ]]; then
@@ -219,10 +223,11 @@ codesign "${app_sign_options[@]}" \
   --entitlements "$macos_dir/omarchy-vm-helper.entitlements" \
   "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
+"$compatibility_verifier" "$app"
 
 echo "[native] Built $app"
 if (( build_dmg )); then
-  dmg="$repo_dir/dist/Try Omarchy.dmg"
+  dmg="$repo_dir/dist/TryOmarchy.dmg"
   rm -f "$dmg"
   package_options=()
   if [[ $sign_identity != - ]]; then

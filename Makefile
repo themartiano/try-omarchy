@@ -4,7 +4,7 @@ override ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
 override DIST := $(ROOT)/dist
 override GUEST_DIST := $(DIST)/guest
 override APP := $(DIST)/Try Omarchy.app
-override DMG := $(DIST)/Try Omarchy.dmg
+override DMG := $(DIST)/TryOmarchy.dmg
 override BUILD_CACHE := $(ROOT)/scripts/build-cache.py
 override BUILD_STATE := $(ROOT)/.build/state
 RELEASE_SIGN_IDENTITY ?= Developer ID Application: Eduardo Martinez (RZC79MPD34)
@@ -48,16 +48,19 @@ doctor:
 	@[[ "$$(uname -s)" == Darwin ]] || { echo 'error: macOS is required' >&2; exit 1; }
 	@[[ "$$(uname -m)" == arm64 ]] || { echo 'error: an Apple Silicon Mac is required' >&2; exit 1; }
 	@major=$$(sw_vers -productVersion | cut -d. -f1); (( major >= 15 )) || { echo 'error: macOS 15 or newer is required' >&2; exit 1; }
-	@for tool in brew docker pkg-config swift xcrun zstd; do command -v "$$tool" >/dev/null || { echo "error: $$tool is required" >&2; exit 1; }; done
+	@for tool in curl docker pkg-config python3 swift xcrun; do command -v "$$tool" >/dev/null || { echo "error: $$tool is required" >&2; exit 1; }; done
 	@docker info >/dev/null 2>&1 || { echo 'error: Docker is installed but not running' >&2; exit 1; }
 	@printf 'Toolchain ready: %s (%s)\n' "$$(sw_vers -productVersion)" "$$(uname -m)"
 
 test:
 	@PYTHONDONTWRITEBYTECODE=1 python3 "$(ROOT)/tests/test-build-cache.py"
 	@$(ROOT)/guest/test
+	@$(ROOT)/macos/Tests/macos-compatibility.test.sh
+	@$(ROOT)/macos/Tests/runtime-relocation.test.sh
 	@mkdir -p $(ROOT)/macos/.build/module-cache/swift $(ROOT)/macos/.build/module-cache/clang
 	@cd $(ROOT)/macos && SWIFT_MODULECACHE_PATH=$(ROOT)/macos/.build/module-cache/swift CLANG_MODULE_CACHE_PATH=$(ROOT)/macos/.build/module-cache/clang swift test --disable-sandbox
 	@$(ROOT)/macos/Tests/qemu-port-forwarding.test.sh
+	@$(ROOT)/macos/Tests/qemu-power-actions.test.sh
 	@$(ROOT)/macos/Tests/qemu-persistent-storage.test.sh
 
 guest:

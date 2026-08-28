@@ -23,7 +23,7 @@ before continuing with the normal build and verification sequence.
 Outputs are written to:
 
 - `dist/Try Omarchy.app`
-- `dist/Try Omarchy.dmg`
+- `dist/TryOmarchy.dmg`
 - `dist/guest/`
 
 `make package` and `make release` both create distributable builds: they sign
