@@ -210,6 +210,10 @@
         "image/png"
       ]
     },
+    "guestAgent": {
+      "device": "virtserialport",
+      "port": "org.qemu.guest_agent.0"
+    },
     "sharedFolder": {
       "device": "virtio-9p-pci",
       "fsdriver": "local",

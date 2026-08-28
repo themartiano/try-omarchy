@@ -42,6 +42,12 @@ fingerprint of what it last wrote so the immediate echo is dropped. The marker
 is cleared as soon as the other side moves on to new content, and expires after
 a couple of seconds regardless, so a genuine repeat of the same content still flows.
 
+Developer launches can set `OMARCHY_QEMU_GUEST_AGENT=1` to add a second private
+Unix-socket channel named `org.qemu.guest_agent.0`. The guest package is present,
+and systemd starts its static service when that virtio port appears. This channel
+can execute commands as root, so release launches leave it disabled and the host
+socket exists only inside the launcher's mode-0700 per-boot runtime directory.
+
 When a folder is chosen on the start menu, QEMU exports it over virtio-9p with
 `security_model=none`, so every host file operation runs as the Mac user and
 the Mac keeps real modes and ownership. A small QEMU patch adds
