@@ -1,0 +1,2 @@
+SUBSYSTEM=="virtio-ports", ATTR{name}=="dev.tryomarchy.camera", GROUP="video", MODE="0660"
+KERNEL=="video42", SUBSYSTEM=="video4linux", GROUP="video", MODE="0660"

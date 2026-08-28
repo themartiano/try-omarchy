@@ -73,6 +73,10 @@ microphone_usage=$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescripti
   fail "built app has no microphone usage description"
 }
 [[ -n $microphone_usage ]] || fail "built app has an empty microphone usage description"
+camera_usage=$(/usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$info_plist" 2>/dev/null) || {
+  fail "built app has no camera usage description"
+}
+[[ -n $camera_usage ]] || fail "built app has an empty camera usage description"
 
 exec /usr/bin/open \
   -n \

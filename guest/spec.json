@@ -229,6 +229,17 @@
       "backend": "sdl",
       "duplex": true
     },
+    "camera": {
+      "activation": "on-demand",
+      "device": "virtserialport",
+      "framesPerSecond": 30,
+      "guestDevice": "/dev/video42",
+      "height": 720,
+      "pixelFormat": "NV12",
+      "port": "dev.tryomarchy.camera",
+      "protocolVersion": 1,
+      "width": 1280
+    },
     "storage": {
       "device": "virtio-blk-pci",
       "format": "raw",

@@ -13,6 +13,7 @@ Try Omarchy is not official or affiliated with Omarchy.
 - Hardware-accelerated ARM64 virtualization and VirGL graphics
 - Resizable native window with automatic guest resolution and HiDPI scale updates
 - Mac audio input/output selection inside Omarchy, with live routing and system-default fallback
+- FaceTime HD and other Mac cameras exposed to Omarchy as an on-demand 720p webcam
 - Two-way clipboard sharing for text and PNG images between macOS and Omarchy
 - One optional shared Mac folder, available inside Omarchy under the same name (`~/Work` stays `~/Work`)
 - Loopback-only TCP and UDP port forwarding from the Mac into Omarchy
@@ -25,10 +26,20 @@ Try Omarchy is not official or affiliated with Omarchy.
 2. Open the DMG and drag **Try Omarchy** to **Applications**.
 3. Launch **Try Omarchy** from Applications.
 
-Every launch begins at the start menu. **Immersive** is on by default and its caption explains how to leave Full Screen. Turn it off to keep Omarchy full screen while letting the Mac menu bar and Dock appear at the screen edges. Accessibility enables Mac Command-to-guest-Super shortcuts; microphone access is optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
+Every launch begins at the start menu. **Immersive** is on by default and its caption explains how to leave Full Screen. Turn it off to keep Omarchy full screen while letting the Mac menu bar and Dock appear at the screen edges. Accessibility enables Mac Command-to-guest-Super shortcuts; microphone and camera access are optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
 
 Restarting from inside Omarchy reboots the guest in the same Try Omarchy app.
 Shutting down Omarchy closes the app and leaves it closed.
+
+## Camera sharing
+
+Choose **Allow…** next to **Camera access** on the start menu to make the Mac's
+FaceTime HD camera available in Omarchy as **Mac Camera**. The bridge publishes a
+standard Linux V4L2 camera at `/dev/video42`, so browser calls and Linux camera
+apps can use it without special configuration. Capture is on demand: the Mac
+camera and its indicator turn on only while an Omarchy app is actively using
+the virtual camera. Denying camera permission does not prevent Omarchy from
+launching.
 
 ## Clipboard sharing
 

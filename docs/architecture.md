@@ -17,7 +17,7 @@ Try Omarchy.app
 ## What happens when the app opens
 
 The Swift launcher presents a start menu on every app open. It reports optional
-macOS Accessibility and Microphone permission state, handles confirmed factory
+macOS Accessibility, Microphone, and Camera permission state, handles confirmed factory
 resets, startup, shutdown, and host audio devices. It prepares a writable copy
 of the Linux disk and starts QEMU. QEMU's Cocoa input layer uses the shared
 Accessibility grant to capture system-wide Command chords and deliver Command
@@ -41,6 +41,15 @@ protocol. Text and PNG payloads flow both ways; each side remembers the
 fingerprint of what it last wrote so the immediate echo is dropped. The marker
 is cleared as soon as the other side moves on to new content, and expires after
 a couple of seconds regardless, so a genuine repeat of the same content still flows.
+
+A separate virtio-serial port (`dev.tryomarchy.camera`) carries fixed-size
+1280×720 NV12 frames from an AVFoundation bridge in the signed Mac helper. The
+guest feeds those frames into an exclusive-capabilities `v4l2loopback` device,
+`/dev/video42`, labeled **Mac Camera**. The guest subscribes to the loopback
+driver's client-usage events and requests capture only while a Linux application
+is reading the camera. Camera permission, capture failure, or device removal is
+non-fatal to the VM; the launcher can restart the optional bridge without
+restarting Omarchy.
 
 When a folder is chosen on the start menu, QEMU exports it over virtio-9p with
 `security_model=none`, so every host file operation runs as the Mac user and

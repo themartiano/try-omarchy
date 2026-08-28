@@ -87,11 +87,15 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         let startMenu = StartMenuWindow(
             accessibilityStatus: { AXIsProcessTrusted() },
             microphoneStatus: { MicrophonePreflight.authorizationState() },
+            cameraStatus: { CameraPreflight.authorizationState() },
             requestAccessibility: { [weak self] in
                 self?.requestOptionalAccessibilityPermission()
             },
             requestMicrophone: { completion in
                 MicrophonePreflight.requestAccess(completion: completion)
+            },
+            requestCamera: { completion in
+                CameraPreflight.requestAccess(completion: completion)
             },
             canResetStorage: canResetStorage,
             storageLocation: { [weak self] in
@@ -189,6 +193,13 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             guard resolveStorageLocationAvailability() != .cancelled else {
                 startMenuWindow?.launchDidAbort()
                 return
+            }
+            let cameraDecision = CameraPreflight.decision()
+            if let warning = cameraDecision.warning {
+                fputs("[camera] \(warning)\n", stderr)
+            }
+            guard cameraDecision.allowsLaunch else {
+                throw HelperError.io("camera policy unexpectedly prevented launch")
             }
             try launch(arguments: launchArguments())
         } catch {

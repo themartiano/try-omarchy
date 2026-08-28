@@ -428,6 +428,13 @@ enum MicrophoneAuthorizationState: Equatable {
     case notDetermined
 }
 
+enum CameraAuthorizationState: Equatable {
+    case authorized
+    case denied
+    case restricted
+    case notDetermined
+}
+
 enum AccessibilityAuthorizationState: Equatable {
     case authorized
     case unavailable
@@ -477,6 +484,33 @@ struct MicrophoneLaunchDecision: Equatable {
     }
 }
 
+struct CameraLaunchDecision: Equatable {
+    let allowsLaunch: Bool
+    let warning: String?
+
+    static func make(for state: CameraAuthorizationState) -> Self {
+        switch state {
+        case .authorized:
+            Self(allowsLaunch: true, warning: nil)
+        case .denied:
+            Self(
+                allowsLaunch: true,
+                warning: "Camera access is denied. Omarchy will continue without the Mac camera. Enable Try Omarchy in System Settings > Privacy & Security > Camera, then relaunch."
+            )
+        case .restricted:
+            Self(
+                allowsLaunch: true,
+                warning: "Camera access is restricted by macOS policy. Omarchy will continue without the Mac camera. Ask the Mac administrator to allow camera access for Try Omarchy."
+            )
+        case .notDetermined:
+            Self(
+                allowsLaunch: true,
+                warning: "Camera access was not requested. Omarchy will continue without the Mac camera until access is enabled."
+            )
+        }
+    }
+}
+
 enum MicrophonePreflight {
     static func authorizationState() -> MicrophoneAuthorizationState {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -498,6 +532,31 @@ enum MicrophonePreflight {
     }
 
     static func decision() -> MicrophoneLaunchDecision {
+        .make(for: authorizationState())
+    }
+}
+
+enum CameraPreflight {
+    static func authorizationState() -> CameraAuthorizationState {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            return .authorized
+        case .denied:
+            return .denied
+        case .restricted:
+            return .restricted
+        case .notDetermined:
+            return .notDetermined
+        @unknown default:
+            return .restricted
+        }
+    }
+
+    static func requestAccess(completion: @escaping (Bool) -> Void) {
+        AVCaptureDevice.requestAccess(for: .video, completionHandler: completion)
+    }
+
+    static func decision() -> CameraLaunchDecision {
         .make(for: authorizationState())
     }
 }

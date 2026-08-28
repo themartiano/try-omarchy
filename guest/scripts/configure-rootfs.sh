@@ -72,6 +72,7 @@ chmod 0755 \
   "$root/usr/bin/omarchy-audio-input-set-default" \
   "$root/usr/bin/omarchy-screensaver" \
   "$root/usr/local/bin/omarchy-native-audio-bridge" \
+  "$root/usr/local/bin/omarchy-native-camera-bridge" \
   "$root/usr/local/bin/omarchy-native-clipboard-bridge" \
   "$root/usr/local/bin/omarchy-native-cursor-restore" \
   "$root/usr/local/bin/omarchy-native-display-sync" \
@@ -88,6 +89,8 @@ mkdir -p "$root/etc/systemd/user/default.target.wants" \
   "$root/etc/systemd/user/graphical-session.target.wants"
 ln -sfn /usr/lib/systemd/user/omarchy-native-audio-bridge.service \
   "$root/etc/systemd/user/default.target.wants/omarchy-native-audio-bridge.service"
+ln -sfn /usr/lib/systemd/user/omarchy-native-camera-bridge.service \
+  "$root/etc/systemd/user/default.target.wants/omarchy-native-camera-bridge.service"
 # The clipboard agent needs the Wayland socket, so it follows the uwsm-managed
 # graphical session rather than the plain user manager.
 ln -sfn /usr/lib/systemd/user/omarchy-native-clipboard-bridge.service \

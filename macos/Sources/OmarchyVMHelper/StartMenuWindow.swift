@@ -50,8 +50,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let content = NSView()
     private let accessibilityStatus: () -> Bool
     private let microphoneStatus: () -> MicrophoneAuthorizationState
+    private let cameraStatus: () -> CameraAuthorizationState
     private let requestAccessibility: () -> Void
     private let requestMicrophone: (@escaping (Bool) -> Void) -> Void
+    private let requestCamera: (@escaping (Bool) -> Void) -> Void
     private let storageSpaceEstimate: () -> String?
     private let resetStorage: () -> Void
     private let sharedFolderStatus: () -> SharedFolderMenuState
@@ -71,6 +73,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let useDefaultStorageLocation: () -> Void
 
     private var microphoneRequestInFlight = false
+    private var cameraRequestInFlight = false
     private var resetInProgress = false
     private var launchInProgress = false
     private var pendingResetSpaceEstimate: String?
@@ -81,8 +84,12 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     init(
         accessibilityStatus: @escaping () -> Bool,
         microphoneStatus: @escaping () -> MicrophoneAuthorizationState,
+        cameraStatus: @escaping () -> CameraAuthorizationState = { .authorized },
         requestAccessibility: @escaping () -> Void,
         requestMicrophone: @escaping (@escaping (Bool) -> Void) -> Void,
+        requestCamera: @escaping (@escaping (Bool) -> Void) -> Void = { completion in
+            completion(true)
+        },
         canResetStorage: Bool,
         storageLocation: @escaping () -> String?,
         storageLocationURL: @escaping () -> URL?,
@@ -103,8 +110,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     ) {
         self.accessibilityStatus = accessibilityStatus
         self.microphoneStatus = microphoneStatus
+        self.cameraStatus = cameraStatus
         self.requestAccessibility = requestAccessibility
         self.requestMicrophone = requestMicrophone
+        self.requestCamera = requestCamera
         self.canResetStorage = canResetStorage
         self.storageLocation = storageLocation
         self.storageLocationURL = storageLocationURL
@@ -305,6 +314,35 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 : #selector(beginMicrophoneRequest)
         )
 
+        let cameraState = cameraStatus()
+        let cameraGranted = cameraState == .authorized
+        let cameraDetail: String
+        let cameraActionTitle: String?
+        switch cameraState {
+        case .authorized:
+            cameraDetail = "Apps in Omarchy can use your Mac camera while they are recording."
+            cameraActionTitle = nil
+        case .notDetermined:
+            cameraDetail = "Optional. The camera turns on only while an Omarchy app uses it."
+            cameraActionTitle = cameraRequestInFlight ? "Waiting…" : "Allow…"
+        case .denied:
+            cameraDetail = "The Mac camera is off inside Omarchy."
+            cameraActionTitle = "Open Settings"
+        case .restricted:
+            cameraDetail = "Camera access is unavailable because of this Mac’s policy."
+            cameraActionTitle = nil
+        }
+        let cameraRow = permissionRow(
+            symbolName: "camera",
+            title: "Camera access",
+            detail: cameraDetail,
+            granted: cameraGranted,
+            actionTitle: cameraActionTitle,
+            action: cameraState == .denied
+                ? #selector(openCameraSettings)
+                : #selector(beginCameraRequest)
+        )
+
         let sharedFolder = sharedFolderStatus()
         let sharedFolderDetail: String
         let sharedFolderDetailLines: [String]?
@@ -432,7 +470,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             )
         }
 
-        var permissionRowViews = [accessibilityRow, microphoneRow, sharedFolderRow]
+        var permissionRowViews = [accessibilityRow, microphoneRow, cameraRow, sharedFolderRow]
         if let storageRow {
             permissionRowViews.append(storageRow)
         }
@@ -476,7 +514,11 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         reset.bezelStyle = .rounded
         reset.controlSize = .small
         reset.contentTintColor = .systemRed
-        reset.isEnabled = canResetStorage && !launchInProgress && !resetInProgress
+        reset.isEnabled = canResetStorage
+            && !launchInProgress
+            && !resetInProgress
+            && !microphoneRequestInFlight
+            && !cameraRequestInFlight
         reset.toolTip = canResetStorage
             ? "Erase this VM and return it to factory settings"
             : "Reset is unavailable for a disposable VM"
@@ -498,7 +540,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         launchButton.bezelStyle = .rounded
         launchButton.controlSize = .large
         launchButton.font = launchButtonFont
-        launchButton.isEnabled = !launchInProgress && !resetInProgress && !microphoneRequestInFlight
+        launchButton.isEnabled = !launchInProgress
+            && !resetInProgress
+            && !microphoneRequestInFlight
+            && !cameraRequestInFlight
         launchButton.title = ""
         launchButton.identifier = NSUserInterfaceItemIdentifier("launch-button")
         let launchButtonLabel = MouseIgnoringTextField(labelWithString: launchButtonTitle)
@@ -747,7 +792,11 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             let (actionTitle, action) = actionDescription
             let button = PermissionActionButton(title: actionTitle, target: self, action: action)
             button.controlSize = .regular
-            button.isEnabled = actionsEnabled && !microphoneRequestInFlight && !launchInProgress && !resetInProgress
+            button.isEnabled = actionsEnabled
+                && !microphoneRequestInFlight
+                && !cameraRequestInFlight
+                && !launchInProgress
+                && !resetInProgress
             let identifier = actions.count == 1
                 ? "permission-action-\(symbolName)"
                 : "permission-action-\(symbolName)-\(index)"
@@ -929,6 +978,27 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         NSWorkspace.shared.open(url)
     }
 
+    @objc private func beginCameraRequest() {
+        guard cameraStatus() == .notDetermined, !cameraRequestInFlight else { return }
+        cameraRequestInFlight = true
+        render()
+        requestCamera { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.cameraRequestInFlight = false
+                self.render()
+                self.window.makeKeyAndOrderFront(nil)
+            }
+        }
+    }
+
+    @objc private func openCameraSettings() {
+        guard let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
+        ) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     @objc private func openStorageLocation() {
         guard let storageLocationURL = storageLocationURL() else { return }
         do {
@@ -1039,7 +1109,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func beginSharedFolderSelection() {
-        guard !launchInProgress, !resetInProgress else { return }
+        guard !launchInProgress,
+              !resetInProgress,
+              !microphoneRequestInFlight,
+              !cameraRequestInFlight else { return }
         let panel = NSOpenPanel()
         panel.title = "Choose a folder to share with Omarchy"
         panel.message = "Omarchy will be able to read and change everything inside this folder, linked as ~/<folder name>."
@@ -1120,7 +1193,11 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     private func confirmReset() {
-        guard canResetStorage, !launchInProgress, !resetInProgress else { return }
+        guard canResetStorage,
+              !launchInProgress,
+              !resetInProgress,
+              !microphoneRequestInFlight,
+              !cameraRequestInFlight else { return }
         let estimate = storageSpaceEstimate()
         let alert = NSAlert()
         alert.alertStyle = .critical
@@ -1159,7 +1236,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func launchOmarchy() {
-        guard !launchInProgress, !resetInProgress else { return }
+        guard !launchInProgress,
+              !resetInProgress,
+              !microphoneRequestInFlight,
+              !cameraRequestInFlight else { return }
         launchInProgress = true
         render()
         launch()

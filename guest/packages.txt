@@ -33,6 +33,7 @@ less
 libnotify
 libsecret
 linux-aarch64
+linux-aarch64-headers
 mesa
 mkinitcpio
 mpv
@@ -66,6 +67,7 @@ ttf-jetbrains-mono-nerd
 udiskie
 unzip
 uwsm
+v4l2loopback-dkms
 vulkan-swrast
 wayland
 wireplumber

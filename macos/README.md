@@ -4,7 +4,7 @@ This directory contains the Apple Silicon application layer:
 
 - a Swift/AppKit lifecycle and permission helper;
 - a pinned, patched QEMU ARM64 runtime using HVF and Cocoa/VirGL;
-- persistent-disk, input, audio-device, clipboard, shared-folder, signing, and DMG tooling.
+- persistent-disk, input, audio-device, camera, clipboard, shared-folder, signing, and DMG tooling.
 
 Use the root Makefile for normal development:
 

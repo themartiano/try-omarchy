@@ -5,7 +5,7 @@ import Foundation
 private var terminationSignalSources: [DispatchSourceSignal] = []
 
 private func usage() -> Never {
-    fputs("Usage: omarchy-vm-helper --run-qemu [--ephemeral | --reset-storage | --reset-storage-only] [GUEST_DIR] | --bridge-command-super QEMU_PID QMP_SOCKET | --bridge-native-audio QEMU_PID SOCKET ROUTE_DIRECTORY | --bridge-native-clipboard QEMU_PID SOCKET\n", stderr)
+    fputs("Usage: omarchy-vm-helper --run-qemu [--ephemeral | --reset-storage | --reset-storage-only] [GUEST_DIR] | --bridge-command-super QEMU_PID QMP_SOCKET | --bridge-native-audio QEMU_PID SOCKET ROUTE_DIRECTORY | --bridge-native-camera QEMU_PID SOCKET | --bridge-native-clipboard QEMU_PID SOCKET\n", stderr)
     exit(64)
 }
 
@@ -64,6 +64,29 @@ do {
             terminationSignalSources.append(source)
         }
         fputs("[clipboard-bridge] The Mac clipboard is shared with Omarchy.\n", stderr)
+        try bridge.run()
+        exit(0)
+    }
+
+    if arguments.first == "--bridge-native-camera" {
+        guard arguments.count == 3,
+              let processIdentifier = Int32(arguments[1]),
+              processIdentifier > 1 else { usage() }
+        let bridge = try NativeCameraBridge(
+            targetPID: processIdentifier,
+            socketPath: arguments[2]
+        )
+        for signalNumber in [SIGINT, SIGTERM] {
+            Darwin.signal(signalNumber, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(
+                signal: signalNumber,
+                queue: .global(qos: .userInitiated)
+            )
+            source.setEventHandler { bridge.stop() }
+            source.resume()
+            terminationSignalSources.append(source)
+        }
+        fputs("[camera-bridge] The Mac camera is available to Omarchy on demand.\n", stderr)
         try bridge.run()
         exit(0)
     }

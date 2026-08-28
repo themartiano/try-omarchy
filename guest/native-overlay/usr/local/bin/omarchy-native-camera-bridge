@@ -1,0 +1,315 @@
+#!/usr/bin/python3
+"""Expose the on-demand macOS camera stream as an Omarchy V4L2 camera."""
+
+from __future__ import annotations
+
+import ctypes
+import errno
+import fcntl
+import json
+import os
+from pathlib import Path
+import select
+import struct
+import sys
+import time
+from typing import Any
+
+
+PORT = Path("/dev/virtio-ports/dev.tryomarchy.camera")
+CAMERA = Path("/dev/video42")
+MAGIC = b"TOCM"
+VERSION = 1
+HEADER = struct.Struct("<4sBBHII")
+KIND_STATUS = 1
+KIND_FRAME = 2
+WIDTH = 1280
+HEIGHT = 720
+FRAME_BYTES = WIDTH * HEIGHT * 3 // 2
+MAX_STATUS_BYTES = 4096
+
+V4L2_BUF_TYPE_VIDEO_OUTPUT = 2
+V4L2_FIELD_NONE = 1
+V4L2_COLORSPACE_REC709 = 3
+V4L2_YCBCR_ENC_709 = 2
+V4L2_QUANTIZATION_LIM_RANGE = 2
+V4L2_XFER_FUNC_709 = 1
+V4L2_EVENT_PRIVATE_START = 0x08000000
+V4L2LOOPBACK_EVENT_OFFSET = 0x08E00000
+V4L2_EVENT_PRI_CLIENT_USAGE = (
+    V4L2_EVENT_PRIVATE_START + V4L2LOOPBACK_EVENT_OFFSET + 1
+)
+V4L2_EVENT_SUB_FL_SEND_INITIAL = 0x0002
+
+
+def log(message: str) -> None:
+    print(f"omarchy-native-camera-bridge: {message}", file=sys.stderr, flush=True)
+
+
+def fourcc(value: str) -> int:
+    if len(value) != 4 or not value.isascii():
+        raise ValueError("fourcc must contain four ASCII characters")
+    return int.from_bytes(value.encode("ascii"), "little")
+
+
+class V4L2PixFormat(ctypes.Structure):
+    _fields_ = [
+        ("width", ctypes.c_uint32),
+        ("height", ctypes.c_uint32),
+        ("pixelformat", ctypes.c_uint32),
+        ("field", ctypes.c_uint32),
+        ("bytesperline", ctypes.c_uint32),
+        ("sizeimage", ctypes.c_uint32),
+        ("colorspace", ctypes.c_uint32),
+        ("priv", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+        ("ycbcr_enc", ctypes.c_uint32),
+        ("quantization", ctypes.c_uint32),
+        ("xfer_func", ctypes.c_uint32),
+    ]
+
+
+class V4L2FormatValue(ctypes.Union):
+    # Linux's UAPI union includes pointer-bearing members, so it remains
+    # eight-byte aligned even though the raw storage is exactly 200 bytes.
+    _fields_ = [
+        ("pix", V4L2PixFormat),
+        ("raw_data", ctypes.c_uint8 * 200),
+        ("alignment", ctypes.c_uint64),
+    ]
+
+
+class V4L2Format(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_uint32), ("value", V4L2FormatValue)]
+
+
+class V4L2EventSubscription(ctypes.Structure):
+    _fields_ = [
+        ("type", ctypes.c_uint32),
+        ("id", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32 * 5),
+    ]
+
+
+class TimeSpec(ctypes.Structure):
+    _fields_ = [("seconds", ctypes.c_long), ("nanoseconds", ctypes.c_long)]
+
+
+class V4L2Event(ctypes.Structure):
+    _fields_ = [
+        ("type", ctypes.c_uint32),
+        ("data", ctypes.c_uint8 * 64),
+        ("pending", ctypes.c_uint32),
+        ("sequence", ctypes.c_uint32),
+        ("timestamp", TimeSpec),
+        ("id", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32 * 8),
+    ]
+
+
+def ioctl_number(direction: int, kind: str, number: int, size: int) -> int:
+    return (direction << 30) | (size << 16) | (ord(kind) << 8) | number
+
+
+VIDIOC_S_FMT = ioctl_number(
+    3, "V", 5, ctypes.sizeof(V4L2Format)
+)  # _IOWR('V', 5, struct v4l2_format)
+VIDIOC_DQEVENT = ioctl_number(
+    2, "V", 89, ctypes.sizeof(V4L2Event)
+)  # _IOR('V', 89, struct v4l2_event)
+VIDIOC_SUBSCRIBE_EVENT = ioctl_number(
+    1, "V", 90, ctypes.sizeof(V4L2EventSubscription)
+)  # _IOW('V', 90, struct v4l2_event_subscription)
+
+
+def configure_camera(descriptor: int) -> None:
+    format_value = V4L2Format()
+    format_value.type = V4L2_BUF_TYPE_VIDEO_OUTPUT
+    format_value.value.pix = V4L2PixFormat(
+        width=WIDTH,
+        height=HEIGHT,
+        pixelformat=fourcc("NV12"),
+        field=V4L2_FIELD_NONE,
+        bytesperline=WIDTH,
+        sizeimage=FRAME_BYTES,
+        colorspace=V4L2_COLORSPACE_REC709,
+        priv=0,
+        flags=0,
+        ycbcr_enc=V4L2_YCBCR_ENC_709,
+        quantization=V4L2_QUANTIZATION_LIM_RANGE,
+        xfer_func=V4L2_XFER_FUNC_709,
+    )
+    try:
+        fcntl.ioctl(descriptor, VIDIOC_S_FMT, format_value, True)
+    except OSError as error:
+        raise OSError(error.errno, "cannot set the loopback camera format") from error
+    negotiated = format_value.value.pix
+    if (
+        negotiated.width != WIDTH
+        or negotiated.height != HEIGHT
+        or negotiated.pixelformat != fourcc("NV12")
+        or negotiated.sizeimage < FRAME_BYTES
+    ):
+        raise RuntimeError("v4l2loopback rejected the 1280x720 NV12 camera format")
+
+    # The first write makes an exclusive-caps loopback advertise CAPTURE, so
+    # browsers can discover it before the real Mac camera has been requested.
+    try:
+        write_frame(descriptor, black_frame())
+    except OSError as error:
+        raise OSError(error.errno, "cannot prime the loopback camera") from error
+
+    subscription = V4L2EventSubscription()
+    subscription.type = V4L2_EVENT_PRI_CLIENT_USAGE
+    subscription.flags = V4L2_EVENT_SUB_FL_SEND_INITIAL
+    try:
+        fcntl.ioctl(descriptor, VIDIOC_SUBSCRIBE_EVENT, subscription, True)
+    except OSError as error:
+        raise OSError(error.errno, "cannot subscribe to camera usage events") from error
+
+
+def black_frame() -> bytes:
+    return bytes([16]) * (WIDTH * HEIGHT) + bytes([128]) * (WIDTH * HEIGHT // 2)
+
+
+def write_frame(descriptor: int, frame: bytes | bytearray | memoryview) -> None:
+    if len(frame) != FRAME_BYTES:
+        raise ValueError("camera frame has an unexpected byte count")
+    written = os.write(descriptor, frame)
+    if written != FRAME_BYTES:
+        raise RuntimeError(f"V4L2 accepted only {written} of {FRAME_BYTES} camera bytes")
+
+
+def send_control(descriptor: int, message_type: str) -> None:
+    payload = json.dumps(
+        {"type": message_type}, separators=(",", ":"), sort_keys=True
+    ).encode("ascii") + b"\n"
+    offset = 0
+    while offset < len(payload):
+        try:
+            offset += os.write(descriptor, payload[offset:])
+        except BlockingIOError:
+            select.select([], [descriptor], [], 1)
+
+
+class MessageParser:
+    def __init__(self) -> None:
+        self.buffer = bytearray()
+
+    def feed(self, chunk: bytes) -> list[tuple[int, int, bytes]]:
+        self.buffer.extend(chunk)
+        messages: list[tuple[int, int, bytes]] = []
+        while len(self.buffer) >= HEADER.size:
+            magic, version, kind, reserved, payload_bytes, sequence = HEADER.unpack_from(
+                self.buffer
+            )
+            if magic != MAGIC or version != VERSION or reserved != 0:
+                raise ValueError("host sent an invalid camera message header")
+            if kind == KIND_FRAME:
+                if payload_bytes != FRAME_BYTES:
+                    raise ValueError("host camera frame has an invalid size")
+            elif kind == KIND_STATUS:
+                if payload_bytes > MAX_STATUS_BYTES:
+                    raise ValueError("host camera status exceeds 4 KiB")
+            else:
+                raise ValueError("host sent an unsupported camera message")
+            message_bytes = HEADER.size + payload_bytes
+            if len(self.buffer) < message_bytes:
+                break
+            payload = bytes(self.buffer[HEADER.size:message_bytes])
+            del self.buffer[:message_bytes]
+            messages.append((kind, sequence, payload))
+        if len(self.buffer) > HEADER.size + FRAME_BYTES:
+            raise ValueError("host camera message buffer exceeds its protocol limit")
+        return messages
+
+
+def dequeue_client_count(descriptor: int) -> int:
+    event = V4L2Event()
+    fcntl.ioctl(descriptor, VIDIOC_DQEVENT, event, True)
+    if event.type != V4L2_EVENT_PRI_CLIENT_USAGE:
+        raise RuntimeError("v4l2loopback returned an unexpected event")
+    return int.from_bytes(bytes(event.data[:4]), sys.byteorder)
+
+
+def handle_status(payload: bytes) -> None:
+    value: Any = json.loads(payload)
+    if not isinstance(value, dict) or not isinstance(value.get("status"), str):
+        raise ValueError("host sent an invalid camera status")
+    status = value["status"]
+    if status == "streaming":
+        log(f"streaming {value.get('name', 'Mac Camera')} at {WIDTH}x{HEIGHT}")
+    elif status == "unavailable":
+        log(f"Mac camera is unavailable ({value.get('reason', 'capture error')})")
+
+
+def open_port() -> int:
+    while True:
+        try:
+            return os.open(PORT, os.O_RDWR | os.O_CLOEXEC | os.O_NOCTTY | os.O_NONBLOCK)
+        except FileNotFoundError:
+            time.sleep(1)
+
+
+def open_camera() -> int:
+    while True:
+        try:
+            return os.open(CAMERA, os.O_RDWR | os.O_CLOEXEC)
+        except FileNotFoundError:
+            time.sleep(1)
+
+
+def main() -> int:
+    camera = open_camera()
+    port = open_port()
+    try:
+        configure_camera(camera)
+        parser = MessageParser()
+        poller = select.poll()
+        poller.register(camera, select.POLLPRI)
+        poller.register(port, select.POLLIN | select.POLLHUP | select.POLLERR)
+        clients_active = False
+
+        while True:
+            for descriptor, events in poller.poll(1000):
+                if descriptor == camera and events & select.POLLPRI:
+                    active = dequeue_client_count(camera) > 0
+                    if active != clients_active:
+                        clients_active = active
+                        send_control(port, "start" if active else "stop")
+                        if not active:
+                            write_frame(camera, black_frame())
+                if descriptor == port:
+                    if events & (select.POLLHUP | select.POLLERR):
+                        return 0
+                    if events & select.POLLIN:
+                        try:
+                            chunk = os.read(port, 256 * 1024)
+                        except BlockingIOError:
+                            continue
+                        if not chunk:
+                            return 0
+                        for kind, _, payload in parser.feed(chunk):
+                            if kind == KIND_STATUS:
+                                handle_status(payload)
+                            elif clients_active:
+                                write_frame(camera, payload)
+    finally:
+        try:
+            send_control(port, "stop")
+        except OSError:
+            pass
+        os.close(port)
+        os.close(camera)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as error:
+        if isinstance(error, OSError) and error.errno == errno.ENODEV:
+            log("the virtual camera device disappeared")
+        else:
+            log(str(error))
+        raise SystemExit(1)
