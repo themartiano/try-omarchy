@@ -257,7 +257,6 @@ for relative in "${runtime_files[@]}"; do
   [[ $description == *Mach-O* && $description == *arm64* ]] || \
     die "expected an arm64 Mach-O image, got '$description' for $relative"
   xattr -c "$image"
-  codesign --remove-signature "$image" >/dev/null 2>&1 || true
   runtime_images+=("$image")
 done
 

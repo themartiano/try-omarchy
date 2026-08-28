@@ -64,9 +64,6 @@ assert_fails_with 'external dependency remains' \
   "$bundler" --verify-only "$runtime"
 assert_fails_with 'needs an unstaged library' "$bundler" "$missing_runtime"
 
-for image in "$runtime/bin/fixture" "$runtime/lib/libfixture.dylib"; do
-  codesign --remove-signature "$image" >/dev/null 2>&1 || true
-done
 "$bundler" "$runtime" >/dev/null
 codesign --force --sign - "$runtime/lib/libfixture.dylib" >/dev/null
 codesign --force --sign - "$runtime/bin/fixture" >/dev/null
