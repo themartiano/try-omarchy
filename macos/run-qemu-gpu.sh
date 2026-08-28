@@ -940,6 +940,12 @@ if ((reset_only)); then
   exit 0
 fi
 
+case ${OMARCHY_QEMU_GPU_IMMERSIVE:-1} in
+  1) cocoa_full_grab=on ;;
+  0) cocoa_full_grab=off ;;
+  *) fail "OMARCHY_QEMU_GPU_IMMERSIVE must be 0 or 1" ;;
+esac
+
 qemu_args=(
   -name 'Try Omarchy'
   # HVF exposes the ARM virtual GICv2 interface on current Apple Silicon.
@@ -969,9 +975,10 @@ qemu_args=(
   -device "$gpu_device"
   # Cocoa forwards its live backing-pixel dimensions and the current host
   # display refresh rate through Virtio GPU EDID. Its accessibility-backed
-  # full grab captures system/global Command chords before Spotlight or a
-  # launcher can consume them; Command remains guest Super and Option guest Alt.
-  -display 'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,swap-opt-cmd=off'
+  # Immersive mode uses Cocoa's full grab to capture system/global Command
+  # chords and hard-hide Mac chrome. Standard mode stays full screen but lets
+  # Cocoa reveal the Mac menu bar and Dock at the screen edges.
+  -display "cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=$cocoa_full_grab,swap-opt-cmd=off"
   -device 'virtio-keyboard-pci,romfile='
   -device 'virtio-tablet-pci,romfile='
   -object 'rng-random,id=omarchy-rng,filename=/dev/urandom'
