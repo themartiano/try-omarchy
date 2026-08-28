@@ -158,6 +158,8 @@ install -m 0755 "$zstd_bin" "$contents/Resources/runtime/bin/zstd"
 install -m 0755 "$macos_dir/run-qemu-gpu.sh" "$contents/Resources/scripts/run-qemu-gpu.sh"
 install -m 0644 "$macos_dir/qemu-persistent-storage.sh" \
   "$contents/Resources/scripts/qemu-persistent-storage.sh"
+install -m 0644 "$macos_dir/qemu-port-forwarding.sh" \
+  "$contents/Resources/scripts/qemu-port-forwarding.sh"
 for guest_resource in \
   LICENSE.omarchy \
   SHA256SUMS \

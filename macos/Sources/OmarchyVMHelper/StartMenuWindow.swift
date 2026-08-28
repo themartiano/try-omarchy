@@ -57,6 +57,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let sharedFolderStatus: () -> SharedFolderMenuState
     private let chooseSharedFolder: (String) -> String?
     private let setSharedFolderEnabled: (Bool) -> Void
+    private let portForwardingStatus: () -> [PortForwardMapping]
+    private let savePortForwarding: ([PortForwardMapping]) -> String?
     private let launch: () -> Void
     private let canResetStorage: Bool
     private let storageLocation: String?
@@ -66,6 +68,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private var resetInProgress = false
     private var launchInProgress = false
     private var pendingResetSpaceEstimate: String?
+    private weak var startMenuScrollView: NSScrollView?
+    private(set) var portForwardingEditor: PortForwardingEditor?
 
     init(
         accessibilityStatus: @escaping () -> Bool,
@@ -80,6 +84,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         sharedFolderStatus: @escaping () -> SharedFolderMenuState,
         chooseSharedFolder: @escaping (String) -> String?,
         setSharedFolderEnabled: @escaping (Bool) -> Void,
+        portForwardingStatus: @escaping () -> [PortForwardMapping] = { [] },
+        savePortForwarding: @escaping ([PortForwardMapping]) -> String? = { _ in nil },
         launch: @escaping () -> Void
     ) {
         self.accessibilityStatus = accessibilityStatus
@@ -94,10 +100,12 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         self.sharedFolderStatus = sharedFolderStatus
         self.chooseSharedFolder = chooseSharedFolder
         self.setSharedFolderEnabled = setSharedFolderEnabled
+        self.portForwardingStatus = portForwardingStatus
+        self.savePortForwarding = savePortForwarding
         self.launch = launch
 
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 590),
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 690),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -114,6 +122,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
 
     func show() {
         render()
+        if let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame {
+            let availableHeight = max(480, visibleFrame.height - 32)
+            window.setContentSize(NSSize(width: 600, height: min(690, availableHeight)))
+        }
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -131,6 +143,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     func dismiss() {
+        portForwardingEditor?.dismiss()
+        portForwardingEditor = nil
         window.orderOut(nil)
     }
 
@@ -171,12 +185,27 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         alert.beginSheetModal(for: window)
     }
 
+    func launchDidFail(errorMessage: String) {
+        guard launchInProgress else { return }
+        launchInProgress = false
+        render()
+
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Try Omarchy couldn’t start"
+        alert.informativeText = errorMessage
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window)
+    }
+
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         NSApp.terminate(nil)
         return false
     }
 
     private func render() {
+        let preservedScrollOffset = startMenuScrollView?.contentView.bounds.minY ?? 0
+        startMenuScrollView = nil
         content.subviews.forEach { $0.removeFromSuperview() }
 
         let icon = NSImageView()
@@ -277,14 +306,55 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             minimumHeight: 100
         )
 
+        let portMappings = portForwardingStatus()
+        let portForwardingDetail: String
+        let portForwardingDetailLines: [String]?
+        if portMappings.isEmpty {
+            portForwardingDetail = "Optional. Reach services running in Omarchy at localhost on this Mac."
+            portForwardingDetailLines = nil
+        } else if portMappings.count == 1, let mapping = portMappings.first {
+            portForwardingDetail = "localhost:\(mapping.hostPort) → Omarchy:\(mapping.guestPort) · \(mapping.protocol.displayName)"
+            portForwardingDetailLines = [
+                "Mac: localhost:\(mapping.hostPort)",
+                "Omarchy: port \(mapping.guestPort) · \(mapping.protocol.displayName)",
+            ]
+        } else {
+            portForwardingDetail = "\(portMappings.count) localhost mappings. Available only on this Mac."
+            portForwardingDetailLines = [
+                "\(portMappings.count) localhost mappings",
+                "Available only on this Mac",
+            ]
+        }
+        let portForwardingRow = permissionRow(
+            symbolName: "network",
+            title: "Port forwarding",
+            detail: portForwardingDetail,
+            compactDetailLines: portForwardingDetailLines,
+            granted: !portMappings.isEmpty,
+            statusLabels: (
+                "●  \(portMappings.count) \(portMappings.count == 1 ? "Port" : "Ports")",
+                "○  Off"
+            ),
+            actions: [("Configure…", #selector(beginPortForwardingConfiguration))],
+            minimumHeight: 90
+        )
+
         let permissionRows = NSStackView(
-            views: [accessibilityRow, separator(), microphoneRow, separator(), sharedFolderRow]
+            views: [
+                accessibilityRow,
+                separator(),
+                microphoneRow,
+                separator(),
+                sharedFolderRow,
+                separator(),
+                portForwardingRow,
+            ]
         )
         permissionRows.orientation = .vertical
         permissionRows.alignment = .leading
         permissionRows.spacing = 0
         permissionRows.translatesAutoresizingMaskIntoConstraints = false
-        for row in [accessibilityRow, microphoneRow, sharedFolderRow] {
+        for row in [accessibilityRow, microphoneRow, sharedFolderRow, portForwardingRow] {
             row.widthAnchor.constraint(equalTo: permissionRows.widthAnchor).isActive = true
         }
 
@@ -456,18 +526,53 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         stack.setCustomSpacing(20, after: resetSection)
         stack.setCustomSpacing(10, after: launchButton)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(stack)
+
+        let document = StartMenuDocumentView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(stack)
+
+        let scrollView = NSScrollView()
+        scrollView.documentView = document
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.horizontalScrollElasticity = .none
+        scrollView.identifier = NSUserInterfaceItemIdentifier("start-menu-scroll")
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(scrollView)
+        startMenuScrollView = scrollView
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 42),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -42),
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 48),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -30),
+            scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: content.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            document.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
+            document.heightAnchor.constraint(greaterThanOrEqualTo: scrollView.contentView.heightAnchor),
+            stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 42),
+            stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -42),
+            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 48),
+            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -30),
             permissionCard.widthAnchor.constraint(equalTo: stack.widthAnchor),
             resetSection.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
             launchButton.widthAnchor.constraint(equalTo: stack.widthAnchor),
             footerContainer.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
+
+        content.layoutSubtreeIfNeeded()
+        document.layoutSubtreeIfNeeded()
+        let maximumOffset = max(
+            0,
+            document.frame.height - scrollView.contentView.bounds.height
+        )
+        scrollView.contentView.scroll(
+            to: NSPoint(
+                x: 0,
+                y: min(max(0, preservedScrollOffset), maximumOffset)
+            )
+        )
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     private func permissionRow(
@@ -733,6 +838,26 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         render()
     }
 
+    @objc private func beginPortForwardingConfiguration() {
+        guard !launchInProgress, !resetInProgress, portForwardingEditor == nil else { return }
+        let editor = PortForwardingEditor(
+            mappings: portForwardingStatus(),
+            save: { [weak self] mappings in
+                guard let self else {
+                    return "Port forwarding could not be saved because the start menu is unavailable."
+                }
+                return self.savePortForwarding(mappings)
+            },
+            didClose: { [weak self] in
+                guard let self else { return }
+                self.portForwardingEditor = nil
+                self.render()
+            }
+        )
+        portForwardingEditor = editor
+        editor.beginSheet(for: window)
+    }
+
     private func confirmReset() {
         guard canResetStorage, !launchInProgress, !resetInProgress else { return }
         let estimate = storageSpaceEstimate()
@@ -760,4 +885,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         render()
         launch()
     }
+}
+
+private final class StartMenuDocumentView: NSView {
+    override var isFlipped: Bool { true }
 }

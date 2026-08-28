@@ -40,12 +40,7 @@ guest_input=${1:-"$resources_dir/guest"}
 qemu_bin="$resources_dir/runtime/bin/Try Omarchy"
 native_bridge="$contents_dir/MacOS/omarchy-vm-helper"
 storage_library="$script_dir/qemu-persistent-storage.sh"
-
-[[ -f $storage_library && ! -L $storage_library ]] || {
-  fail "persistent-storage library is missing or unsafe: $storage_library"
-}
-# shellcheck source=qemu-persistent-storage.sh
-source "$storage_library"
+port_forwarding_library="$script_dir/qemu-port-forwarding.sh"
 
 [[ $(uname -m) == arm64 ]] || fail "requires an ARM64 Mac"
 [[ $(uname -s) == Darwin ]] || fail "requires macOS"
@@ -56,11 +51,15 @@ for command in codesign file getconf id mktemp ps stat sysctl; do
   command -v "$command" >/dev/null || fail "$command is required"
 done
 
-if [[ ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} != 1 ]]; then
-  codesign --verify --deep --strict "$app_bundle" >/dev/null 2>&1 || {
-    fail "the installed app is damaged or has an invalid code signature"
-  }
-fi
+case ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} in
+  0)
+    codesign --verify --deep --strict "$app_bundle" >/dev/null 2>&1 || {
+      fail "the installed app is damaged or has an invalid code signature"
+    }
+    ;;
+  1) ;;
+  *) fail "OMARCHY_QEMU_GPU_INSPECT_ONLY must be 0 or 1" ;;
+esac
 
 [[ -f $qemu_bin && -x $qemu_bin ]] || {
   fail "missing bundled GPU QEMU runtime at $qemu_bin"
@@ -674,14 +673,31 @@ IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes compressed_d
 [[ $expanded_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated working-disk size is invalid"
 (( expanded_disk_bytes >= source_disk_bytes )) || fail "working disk cannot be smaller than its source"
 [[ -n $kernel_command_line ]] || fail "validated kernel command line is empty"
-case ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} in
-  1)
-    printf '%s\n' "$bundle_validation"
-    exit 0
-    ;;
-  0) ;;
-  *) fail "OMARCHY_QEMU_GPU_INSPECT_ONLY must be 0 or 1" ;;
-esac
+if [[ ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} == 1 ]]; then
+  printf '%s\n' "$bundle_validation"
+  exit 0
+fi
+
+[[ -f $storage_library && ! -L $storage_library ]] || {
+  fail "persistent-storage library is missing or unsafe: $storage_library"
+}
+[[ -f $port_forwarding_library && ! -L $port_forwarding_library ]] || {
+  fail "port-forwarding library is missing or unsafe: $port_forwarding_library"
+}
+
+# These libraries are sealed resources in normal app launches. The complete
+# app bundle was verified above before either file can execute. Inspect-only is
+# a build-time path and exits without sourcing any shell library.
+# shellcheck source=qemu-persistent-storage.sh
+source "$storage_library"
+# shellcheck source=qemu-port-forwarding.sh
+source "$port_forwarding_library"
+
+if ! qemu_port_forwarding_configure "${OMARCHY_QEMU_GPU_PORT_FORWARDS:-}"; then
+  fail "$QEMU_PORT_FORWARDING_ERROR"
+fi
+qemu_netdev=$QEMU_PORT_FORWARDING_NETDEV
+port_forwarding_summary=$QEMU_PORT_FORWARDING_SUMMARY
 
 host_cpu_count=$(
   sysctl -n hw.logicalcpu 2>/dev/null ||
@@ -930,7 +946,7 @@ qemu_args=(
   -m 4G
   -nodefaults
   -no-reboot
-  -netdev 'user,id=omarchy-net'
+  -netdev "$qemu_netdev"
   -device 'virtio-net-pci,netdev=omarchy-net,mac=52:54:00:12:34:56,romfile='
   -audiodev 'sdl,id=omarchy-audio'
   -device 'intel-hda,id=omarchy-hda,romfile='
@@ -998,6 +1014,7 @@ if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
   else
     printf '\n[qemu-gpu] shared folder: disabled' >&2
   fi
+  printf '\n[qemu-gpu] port forwarding: %s' "$port_forwarding_summary" >&2
   printf '\n' >&2
   exit 0
 fi
@@ -1014,6 +1031,7 @@ fi
 if [[ -n $shared_folder ]]; then
   echo "[qemu-gpu] Shared folder: $shared_folder (guest ~/$shared_folder_name)" >&2
 fi
+echo "[qemu-gpu] Port forwarding: $port_forwarding_summary" >&2
 "$qemu_bin" "${qemu_args[@]}" &
 qemu_pid=$!
 printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid"

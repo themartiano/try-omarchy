@@ -52,6 +52,12 @@ guest mounts the tag at `/mnt/mac` before the display manager starts, and a
 user unit links `~/<folder name>` to it at login; the name travels on the
 kernel command line as `omarchy.shared_folder_name=<base64url>`.
 
+Optional port mappings are stored as a versioned launcher preference, validated
+again at every Swift-to-shell boundary, and translated into QEMU user-network
+`hostfwd` rules. The host side is always bound explicitly to `127.0.0.1`; the
+launcher never creates wildcard or LAN-facing listeners. TCP and UDP occupy
+separate host-port namespaces, matching QEMU's socket behavior.
+
 ## The ARM64 image
 
 The guest image is built by this project; it is not an official prebuilt image

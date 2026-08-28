@@ -11,6 +11,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let supervisor: QEMUGPUProcessSupervisor
     private let preferenceStore: AudioRoutingPreferenceStore
     private let sharedFolderStore: SharedFolderPreferenceStore
+    private let portForwardingStore: PortForwardingPreferenceStore
     private let deviceProvider: HostAudioDeviceProviding
     private var startMenuWindow: StartMenuWindow?
 
@@ -28,6 +29,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         supervisor: QEMUGPUProcessSupervisor = QEMUGPUProcessSupervisor(),
         preferenceStore: AudioRoutingPreferenceStore = AudioRoutingPreferenceStore(),
         sharedFolderStore: SharedFolderPreferenceStore = SharedFolderPreferenceStore(),
+        portForwardingStore: PortForwardingPreferenceStore = PortForwardingPreferenceStore(),
         deviceProvider: HostAudioDeviceProviding = CoreAudioHostAudioDeviceProvider()
     ) {
         self.launcherURL = launcherURL
@@ -36,6 +38,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         self.supervisor = supervisor
         self.preferenceStore = preferenceStore
         self.sharedFolderStore = sharedFolderStore
+        self.portForwardingStore = portForwardingStore
         self.deviceProvider = deviceProvider
     }
 
@@ -91,6 +94,12 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             },
             setSharedFolderEnabled: { [weak self] enabled in
                 self?.setSharedFolderEnabled(enabled)
+            },
+            portForwardingStatus: { [weak self] in
+                self?.portForwardingStore.load() ?? []
+            },
+            savePortForwarding: { [weak self] mappings in
+                self?.savePortForwarding(mappings)
             },
             launch: { [weak self] in
                 self?.startVirtualMachine()
@@ -151,7 +160,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             try supervisor.start(
                 executableURL: launcherURL,
                 arguments: resetArguments(),
-                environment: baseEnvironment
+                environment: QEMUGPURuntimeEnvironment.sanitizedForReset(baseEnvironment)
             ) { [weak self] status in
                 self?.resetDidExit(status: status)
             }
@@ -203,7 +212,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         let preferences = preferenceStore.load()
         let catalog = deviceProvider.catalog()
         let configuration = AudioLaunchConfiguration.make(
-            baseEnvironment: baseEnvironment,
+            baseEnvironment: QEMUGPURuntimeEnvironment.sanitizedForLaunch(baseEnvironment),
             preferences: preferences,
             catalog: catalog
         )
@@ -212,11 +221,16 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             preference: sharedFolderStore.load(),
             homeDirectory: Self.homeDirectory
         )
+        let forwarding = PortForwardLaunchConfiguration.make(
+            baseEnvironment: sharing.environment,
+            mappings: portForwardingStore.load()
+        )
+        try PortForwardAvailability.validate(forwarding.mappings)
 
         try supervisor.start(
             executableURL: launcherURL,
             arguments: arguments,
-            environment: sharing.environment,
+            environment: forwarding.environment,
             launchEvent: { [weak self] event in
                 if event == .virtualMachineReady {
                     self?.virtualMachineDidStart()
@@ -264,6 +278,15 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         sharedFolderStore.save(preference)
     }
 
+    private func savePortForwarding(_ mappings: [PortForwardMapping]) -> String? {
+        do {
+            try portForwardingStore.save(mappings)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     private func requestOptionalAccessibilityPermission() {
         guard !AXIsProcessTrusted() else { return }
         // A replacement app can leave a disabled TCC row tied to the old
@@ -283,6 +306,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private func childDidExit(status: Int32) {
         guard childRunning else { return }
         childRunning = false
+        let recentStandardError = supervisor.recentStandardError
 
         let wasStopping = lifecycle.isStopping
         let presentation = VMExitPresentationDecision.make(
@@ -294,6 +318,15 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         if applicationTerminationPending {
             NSApp.reply(toApplicationShouldTerminate: true)
         } else {
+            if presentation.showsStartupFailure,
+               let startMenuWindow,
+               let portFailure = PortForwardStartupFailure.message(
+                   standardError: recentStandardError,
+                   mappings: portForwardingStore.load()
+               ) {
+                startMenuWindow.launchDidFail(errorMessage: portFailure)
+                return
+            }
             if presentation.requiresWorkspaceReset {
                 startMenuWindow?.launchRequiresReset()
                 return
@@ -314,15 +347,11 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
 
     private func failLaunch(_ error: Error) {
         fputs("omarchy-vm-helper: \(error.localizedDescription)\n", stderr)
-        startMenuWindow?.dismiss()
-        startMenuWindow = nil
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "Try Omarchy couldn’t start"
-        alert.informativeText = error.localizedDescription
-        alert.addButton(withTitle: "Close")
-        alert.runModal()
-        finish(status: 1)
+        guard let startMenuWindow else {
+            finish(status: 1)
+            return
+        }
+        startMenuWindow.launchDidFail(errorMessage: error.localizedDescription)
     }
 
     private func finish(status: Int32) {

@@ -8,6 +8,34 @@ enum QEMUGPUStorageOption: String, Equatable {
     case resetStorageOnly = "--reset-storage-only"
 }
 
+/// Build-only controls and user-facing integration values must never leak
+/// into an ordinary app launch or a storage reset through the parent process.
+enum QEMUGPURuntimeEnvironment {
+    static let inspectOnlyKey = "OMARCHY_QEMU_GPU_INSPECT_ONLY"
+    static let dryRunKey = "OMARCHY_QEMU_GPU_DRY_RUN"
+
+    static func sanitizedForLaunch(_ base: [String: String]) -> [String: String] {
+        var environment = base
+        environment.removeValue(forKey: inspectOnlyKey)
+        environment.removeValue(forKey: dryRunKey)
+        return environment
+    }
+
+    static func sanitizedForReset(_ base: [String: String]) -> [String: String] {
+        var environment = sanitizedForLaunch(base)
+        for key in [
+            AudioLaunchConfiguration.inheritedSDLDeviceNameKey,
+            AudioLaunchConfiguration.outputDeviceNameKey,
+            AudioLaunchConfiguration.inputDeviceNameKey,
+            SharedFolderPolicy.environmentKey,
+            PortForwardPolicy.environmentKey,
+        ] {
+            environment.removeValue(forKey: key)
+        }
+        return environment
+    }
+}
+
 enum QEMUGPUStorageSpaceEstimate {
     private static let stateRootEnvironmentKey = "OMARCHY_QEMU_GPU_STATE_ROOT"
 
@@ -437,7 +465,20 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
         case virtualMachineReady
     }
 
+    struct StandardErrorDrain {
+        let data: Data
+        let reachedEnd: Bool
+    }
+
+    private struct StandardErrorConsumption {
+        let reachedEnd: Bool
+        let reportsVirtualMachineStart: Bool
+    }
+
+    private static let standardErrorReadBudget = 64 * 1_024
+
     private let lock = NSLock()
+    private let standardErrorReadLock = NSLock()
     private var child: Process?
     private var errorPipe: Pipe?
     private var errorBuffer = ""
@@ -459,19 +500,32 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
         process.standardOutput = FileHandle.standardOutput
         process.standardError = pipe
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else {
+            guard let self else {
                 handle.readabilityHandler = nil
                 return
             }
-            try? FileHandle.standardError.write(contentsOf: data)
-            if self?.recordStandardError(data) == true {
+            let consumption = self.consumeAvailableStandardError(from: handle)
+            if consumption.reachedEnd {
+                handle.readabilityHandler = nil
+            }
+            if consumption.reportsVirtualMachineStart {
                 DispatchQueue.main.async {
                     launchEvent(.virtualMachineReady)
                 }
             }
         }
         process.terminationHandler = { [weak self] process in
+            pipe.fileHandleForReading.readabilityHandler = nil
+            // QEMU inherits this pipe from the shell launcher and can outlive
+            // it after a crash. Drain only bytes available now; waiting for
+            // EOF here could strand process completion for the QEMU lifetime.
+            if self?.consumeAvailableStandardError(
+                from: pipe.fileHandleForReading
+            ).reportsVirtualMachineStart == true {
+                DispatchQueue.main.async {
+                    launchEvent(.virtualMachineReady)
+                }
+            }
             self?.clear(process)
             let status = Self.status(for: process)
             // NSApplication owns a synchronous AppKit run loop. Dispatching a
@@ -507,6 +561,12 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
         return child?.isRunning == true
     }
 
+    var recentStandardError: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return errorBuffer
+    }
+
     func forward(signal: Int32) {
         lock.lock()
         defer { lock.unlock() }
@@ -522,6 +582,102 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
             errorPipe = nil
         }
         lock.unlock()
+    }
+
+    private func consumeAvailableStandardError(
+        from handle: FileHandle
+    ) -> StandardErrorConsumption {
+        standardErrorReadLock.lock()
+        defer { standardErrorReadLock.unlock() }
+
+        let drain = Self.drainAvailableStandardError(
+            from: handle,
+            maximumBytes: Self.standardErrorReadBudget
+        )
+        guard !drain.data.isEmpty else {
+            return StandardErrorConsumption(
+                reachedEnd: drain.reachedEnd,
+                reportsVirtualMachineStart: false
+            )
+        }
+        try? FileHandle.standardError.write(contentsOf: drain.data)
+        return StandardErrorConsumption(
+            reachedEnd: drain.reachedEnd,
+            reportsVirtualMachineStart: recordStandardError(drain.data)
+        )
+    }
+
+    static func drainAvailableStandardError(
+        from handle: FileHandle,
+        maximumBytes: Int
+    ) -> StandardErrorDrain {
+        guard maximumBytes > 0 else {
+            return StandardErrorDrain(data: Data(), reachedEnd: false)
+        }
+
+        let descriptor = handle.fileDescriptor
+        let originalFlags = fileStatusFlags(for: descriptor)
+        guard originalFlags >= 0 else {
+            return StandardErrorDrain(data: Data(), reachedEnd: false)
+        }
+
+        let changedFlags = originalFlags & O_NONBLOCK == 0
+        if changedFlags,
+           !setFileStatusFlags(originalFlags | O_NONBLOCK, for: descriptor) {
+            return StandardErrorDrain(data: Data(), reachedEnd: false)
+        }
+        defer {
+            if changedFlags {
+                _ = setFileStatusFlags(originalFlags, for: descriptor)
+            }
+        }
+
+        var data = Data()
+        var reachedEnd = false
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while data.count < maximumBytes {
+            let requestedBytes = min(buffer.count, maximumBytes - data.count)
+            let count = buffer.withUnsafeMutableBytes { bytes in
+                Darwin.read(descriptor, bytes.baseAddress, requestedBytes)
+            }
+            if count > 0 {
+                data.append(contentsOf: buffer.prefix(count))
+                continue
+            }
+            if count == 0 {
+                reachedEnd = true
+                break
+            }
+            if errno == EINTR {
+                continue
+            }
+            if errno == EAGAIN || errno == EWOULDBLOCK {
+                break
+            }
+            break
+        }
+        return StandardErrorDrain(data: data, reachedEnd: reachedEnd)
+    }
+
+    private static func fileStatusFlags(for descriptor: Int32) -> Int32 {
+        while true {
+            let result = Darwin.fcntl(descriptor, F_GETFL)
+            if result >= 0 || errno != EINTR {
+                return result
+            }
+        }
+    }
+
+    private static func setFileStatusFlags(_ flags: Int32, for descriptor: Int32) -> Bool {
+        while true {
+            let result = Darwin.fcntl(descriptor, F_SETFL, flags)
+            if result >= 0 {
+                return true
+            }
+            if errno != EINTR {
+                return false
+            }
+        }
     }
 
     private func recordStandardError(_ data: Data) -> Bool {

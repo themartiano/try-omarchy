@@ -15,6 +15,7 @@ Try Omarchy is not official or affiliated with Omarchy.
 - Mac audio input/output selection inside Omarchy, with live routing and system-default fallback
 - Two-way clipboard sharing for text and PNG images between macOS and Omarchy
 - One optional shared Mac folder, available inside Omarchy under the same name (`~/Work` stays `~/Work`)
+- Loopback-only TCP and UDP port forwarding from the Mac into Omarchy
 
 > **Current limitation:** Video decoding is CPU-only, so playback can be slow, especially at high resolutions. An improved video path is in development.
 
@@ -46,6 +47,18 @@ such as `~/Documents` that the link had taken over. The share belongs to the
 first Omarchy account created during
 provisioning. Additional guest accounts can reach the same share, with each
 entry's normal Unix permission bits deciding whether they can modify it.
+
+## Forwarding ports to Omarchy
+
+Use **Configure…** next to **Port forwarding** on the start menu to map a Mac
+localhost port to a service port in Omarchy. Each mapping can use TCP or UDP;
+the same Mac port may be used once for each protocol. Forwarded ports bind only
+to `127.0.0.1`, so other devices on the network cannot connect to them. The
+service inside Omarchy must listen on `0.0.0.0` or the guest network interface,
+not only on the guest's own localhost.
+
+The reverse direction does not need a mapping. From Omarchy, connect to
+`10.0.2.2:<Mac port>` to reach a service running on the Mac.
 
 ## Requirements
 
