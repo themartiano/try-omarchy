@@ -98,6 +98,12 @@ qemu_help=$("$qemu_bin" -help 2>&1) || fail "cannot inspect staged QEMU options"
 printf '%s\n' "$qemu_help" | grep -q -- '^-add-fd fd=fd,set=set' || {
   fail "staged QEMU cannot preserve the persistent-disk lock descriptor"
 }
+printf '%s\n' "$qemu_help" | grep -Fq -- '-action reboot=reset|shutdown' || {
+  fail "staged QEMU cannot apply the required reboot policy"
+}
+printf '%s\n' "$qemu_help" | grep -Fq -- '-action shutdown=poweroff|pause' || {
+  fail "staged QEMU cannot apply the required shutdown policy"
+}
 printf '%s\n' "$qemu_help" | grep -Fq 'full-grab=on|off' || {
   fail "staged QEMU cannot capture macOS system key combinations"
 }
@@ -935,7 +941,8 @@ qemu_args=(
   -smp "$vcpu_count,sockets=1,cores=$vcpu_count,threads=1"
   -m 4G
   -nodefaults
-  -no-reboot
+  # Reboot the guest inside this QEMU process, but let shutdown close the app.
+  -action 'reboot=reset,shutdown=poweroff'
   -netdev 'user,id=omarchy-net'
   -device 'virtio-net-pci,netdev=omarchy-net,mac=52:54:00:12:34:56,romfile='
   -audiodev 'sdl,id=omarchy-audio'

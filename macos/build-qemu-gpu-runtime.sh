@@ -47,7 +47,9 @@ display_patch="$native_dir/patches/qemu-cocoa-dynamic-display.patch"
 immersive_patch="$native_dir/patches/qemu-cocoa-immersive-mode.patch"
 audio_device_patch="$native_dir/patches/qemu-sdl-audio-device-selection.patch"
 shared_folder_patch="$native_dir/patches/qemu-9p-guest-owner.patch"
+strchrnul_patch="$native_dir/patches/qemu-darwin-strchrnul-compat.patch"
 prepare_runtime="$native_dir/prepare-qemu-gpu-runtime.sh"
+pinned_bottles="$native_dir/pinned-runtime-bottles.sh"
 
 qemu_commit=cf3e71d8fc8ba681266759bb6cb2e45a45983e3e
 qemu_root="qemu-$qemu_commit"
@@ -67,6 +69,8 @@ display_patch_sha256=19392fe5723829edea348b82a6b0a74f874724af243ed0fb9101007a22f
 immersive_patch_sha256=787b271b3c7260305f54f9d7ed5fbbf82d085347954977df6b12898c2efb5f0f
 audio_device_patch_sha256=20469691f4cdabcd6b9513d6bf00fab9f66983e17b1e8477cc2e5ac47416feed
 shared_folder_patch_sha256=585a5ed40cc7e4a155ca799d731e15354db9e75d4f517d0689be60200750f3e3
+strchrnul_patch_sha256=ec1048dd0e8ebe53bf7e8a3bca9bf2f5f4336cd607d4cd077437470e9a32094a
+macos_deployment_target=15.0
 
 keycodemap_commit=f5772a62ec52591ff6870b7e8ef32482371f22c6
 keycodemap_root="keycodemapdb-$keycodemap_commit"
@@ -100,9 +104,6 @@ epoxy_archive_name=libepoxy-1.0.4.arm64_sequoia.bottle.tar.gz
 epoxy_url="https://github.com/startergo/homebrew-libepoxy/releases/download/v1.0.4/$epoxy_archive_name"
 epoxy_sha256=8787cc8c34921834665262dff4941216dd6717edddf2c6d5cdfe04f03b24c517
 
-slirp_version=4.9.4
-sdl_version=2.32.70
-
 die() {
   echo "qemu-source-build: $*" >&2
   exit 1
@@ -112,8 +113,15 @@ log() {
   echo "[qemu-source-build] $*"
 }
 
-for tool in awk bash brew chmod curl ditto file install mkdir mktemp patch \
-  pkg-config rm sed shasum sw_vers tar uname; do
+[[ -f $pinned_bottles && ! -L $pinned_bottles ]] || {
+  echo "qemu-source-build: missing pinned bottle manifest: $pinned_bottles" >&2
+  exit 1
+}
+# shellcheck source=macos/pinned-runtime-bottles.sh
+source "$pinned_bottles"
+
+for tool in awk bash chmod curl ditto file grep install mkdir mktemp patch \
+  pkg-config python3 rm sed shasum sw_vers tar uname; do
   command -v "$tool" >/dev/null 2>&1 || die "required tool is unavailable: $tool"
 done
 
@@ -132,6 +140,8 @@ macos_major=$(sw_vers -productVersion | awk -F. '{ print $1 }')
   die "missing SDL audio-device patch: $audio_device_patch"
 [[ -f $shared_folder_patch && ! -L $shared_folder_patch ]] || \
   die "missing 9p shared-folder patch: $shared_folder_patch"
+[[ -f $strchrnul_patch && ! -L $strchrnul_patch ]] || \
+  die "missing Darwin strchrnul compatibility patch: $strchrnul_patch"
 [[ -x $prepare_runtime && ! -L $prepare_runtime ]] || \
   die "missing runtime preparation script: $prepare_runtime"
 if [[ -n $archive_cache ]]; then
@@ -139,26 +149,6 @@ if [[ -n $archive_cache ]]; then
   [[ -d $archive_cache && ! -L $archive_cache ]] || \
     die "--archive-dir must name a regular directory: $archive_cache"
 fi
-
-export HOMEBREW_NO_AUTO_UPDATE=1
-brew_prefix=$(brew --prefix) || die "Homebrew is required for build dependencies"
-[[ $brew_prefix == /* && -d $brew_prefix ]] || die "invalid Homebrew prefix: $brew_prefix"
-
-require_pkg_version() {
-  local package=$1
-  local expected=$2
-  local actual
-
-  actual=$(pkg-config --modversion "$package" 2>/dev/null) || \
-    die "missing Homebrew pkg-config dependency: $package $expected"
-  [[ $actual == "$expected" ]] || \
-    die "$package version mismatch: expected $expected, got $actual"
-}
-
-require_pkg_version slirp "$slirp_version"
-require_pkg_version sdl2 "$sdl_version"
-pkg-config --exists glib-2.0 pixman-1 || \
-  die "Homebrew glib and pixman development files are required"
 
 work_dir=
 remove_work_dir() {
@@ -278,6 +268,13 @@ obtain_and_verify "Ninja $ninja_version" "$ninja_url" "$ninja_sha256" "$ninja_ar
 obtain_and_verify "virglrenderer $virgl_version" "$virgl_url" "$virgl_sha256" "$virgl_archive"
 obtain_and_verify "ANGLE $angle_version" "$angle_url" "$angle_sha256" "$angle_archive"
 obtain_and_verify "libepoxy $epoxy_version" "$epoxy_url" "$epoxy_sha256" "$epoxy_archive"
+while IFS=$'\t' read -r formula version archive_name archive_root archive_sha; do
+  pinned_bottle_obtain \
+    "$formula" "$formula $version" "$archive_sha" \
+    "$archive_dir/$archive_name" "$archive_cache"
+  pinned_bottle_validate_archive \
+    "$formula $version" "$archive_dir/$archive_name" "$archive_root"
+done < <(pinned_core_bottle_manifest)
 
 validate_tar_root "QEMU $qemu_commit" "$qemu_archive" "$qemu_root" "$listing_dir/qemu.txt"
 validate_tar_root "startergo patches" "$startergo_archive" "$startergo_root" "$listing_dir/startergo.txt"
@@ -292,6 +289,9 @@ tar -xzf "$startergo_archive" -C "$source_parent"
 tar -xzf "$virgl_archive" -C "$dependency_root"
 tar -xzf "$angle_archive" -C "$dependency_root"
 tar -xzf "$epoxy_archive" -C "$dependency_root"
+while IFS=$'\t' read -r formula version archive_name archive_root archive_sha; do
+  tar -xzf "$archive_dir/$archive_name" -C "$dependency_root"
+done < <(pinned_core_bottle_manifest)
 
 source_dir="$source_parent/$qemu_root"
 startergo_dir="$source_parent/$startergo_root"
@@ -315,8 +315,10 @@ verify_file_sha "Try Omarchy SDL audio-device patch" \
   "$audio_device_patch" "$audio_device_patch_sha256"
 verify_file_sha "Try Omarchy 9p shared-folder patch" \
   "$shared_folder_patch" "$shared_folder_patch_sha256"
+verify_file_sha "Try Omarchy Darwin strchrnul compatibility patch" \
+  "$strchrnul_patch" "$strchrnul_patch_sha256"
 
-log "Applying the exact render, product-identity, dynamic-display, immersive-mode, audio-device, and shared-folder patches"
+log "Applying the exact render, identity, display, immersive, audio, folder, and Darwin compatibility patches"
 patch -d "$source_dir" -p1 -f -i "$texture_patch"
 patch -d "$source_dir" -p1 -f -i "$gpu_fix_patch"
 patch -d "$source_dir" -p1 -f -i "$identity_patch"
@@ -324,12 +326,26 @@ patch -d "$source_dir" -p1 -f -i "$display_patch"
 patch -d "$source_dir" -p1 -f -i "$immersive_patch"
 patch -d "$source_dir" -p1 -f -i "$audio_device_patch"
 patch -d "$source_dir" -p1 -f -i "$shared_folder_patch"
+patch -d "$source_dir" -p1 -f -i "$strchrnul_patch"
 
 virgl_root="$dependency_root/virglrenderer/$virgl_version"
 angle_root="$dependency_root/angle/$angle_version"
 epoxy_root="$dependency_root/libepoxy/$epoxy_version"
-for directory in "$virgl_root" "$angle_root" "$epoxy_root"; do
-  [[ -d $directory && ! -L $directory ]] || die "missing extracted GPU dependency: $directory"
+glib_root="$dependency_root/$PINNED_GLIB_ROOT"
+pixman_root="$dependency_root/$PINNED_PIXMAN_ROOT"
+slirp_root="$dependency_root/$PINNED_LIBSLIRP_ROOT"
+sdl2_root="$dependency_root/$PINNED_SDL2_ROOT"
+sdl3_root="$dependency_root/$PINNED_SDL3_ROOT"
+gettext_root="$dependency_root/$PINNED_GETTEXT_ROOT"
+pcre2_root="$dependency_root/$PINNED_PCRE2_ROOT"
+zstd_root="$dependency_root/$PINNED_ZSTD_ROOT"
+lz4_root="$dependency_root/$PINNED_LZ4_ROOT"
+xz_root="$dependency_root/$PINNED_XZ_ROOT"
+for directory in \
+  "$virgl_root" "$angle_root" "$epoxy_root" \
+  "$glib_root" "$pixman_root" "$slirp_root" "$sdl2_root" "$sdl3_root" \
+  "$gettext_root" "$pcre2_root" "$zstd_root" "$lz4_root" "$xz_root"; do
+  [[ -d $directory && ! -L $directory ]] || die "missing extracted dependency: $directory"
 done
 
 # Bottle pkg-config files contain Homebrew relocation placeholders. Point only
@@ -342,23 +358,69 @@ for pc_file in "$angle_root"/lib/pkgconfig/*.pc; do
   sed -i '' "s|^prefix=/opt/homebrew$|prefix=$angle_root|" "$pc_file"
 done
 
+for pc_file in "$glib_root"/lib/pkgconfig/*.pc; do
+  sed -i '' \
+    -e "s|@@HOMEBREW_CELLAR@@/$PINNED_GLIB_ROOT|$glib_root|g" \
+    -e "s|@@HOMEBREW_PREFIX@@/opt/gettext|$gettext_root|g" \
+    "$pc_file"
+done
+for pc_file in "$pixman_root"/lib/pkgconfig/*.pc; do
+  sed -i '' "s|@@HOMEBREW_CELLAR@@/$PINNED_PIXMAN_ROOT|$pixman_root|g" "$pc_file"
+done
+for pc_file in "$slirp_root"/lib/pkgconfig/*.pc; do
+  sed -i '' "s|@@HOMEBREW_CELLAR@@/$PINNED_LIBSLIRP_ROOT|$slirp_root|g" "$pc_file"
+done
+for pc_file in "$pcre2_root"/lib/pkgconfig/*.pc; do
+  sed -i '' "s|@@HOMEBREW_CELLAR@@/$PINNED_PCRE2_ROOT|$pcre2_root|g" "$pc_file"
+done
+sed -i '' \
+  -e "s|^prefix=@@HOMEBREW_PREFIX@@$|prefix=$sdl2_root|" \
+  -e "s|^libdir=@@HOMEBREW_PREFIX@@/lib$|libdir=$sdl2_root/lib|" \
+  -e "s|^includedir=@@HOMEBREW_PREFIX@@/include$|includedir=$sdl2_root/include|" \
+  "$sdl2_root/lib/pkgconfig/sdl2-compat.pc"
+
+# sdl2-compat loads SDL3 by this exact @loader_path name. Keeping a private
+# build-time copy beside SDL2 also makes any configure probes independent of
+# globally installed libraries.
+install -m 0755 "$sdl3_root/lib/libSDL3.0.dylib" "$sdl2_root/lib/libSDL3.dylib"
+
 ditto -x -k "$ninja_archive" "$tool_root"
 ninja="$tool_root/ninja-$ninja_version.data/scripts/ninja"
 [[ -f $ninja && ! -L $ninja ]] || die "pinned Ninja wheel is missing its executable"
 chmod 0755 "$ninja"
 
-slirp_pc_dir=$(pkg-config --variable=pcfiledir slirp)
-sdl_pc_dir=$(pkg-config --variable=pcfiledir sdl2)
-pkg_config_path="$virgl_root/lib/pkgconfig:$epoxy_root/lib/pkgconfig:$angle_root/lib/pkgconfig:$slirp_pc_dir:$sdl_pc_dir"
-fallback_libraries="$virgl_root/lib:$epoxy_root/lib:$angle_root/lib"
+pkg_config_libdir="$virgl_root/lib/pkgconfig:$epoxy_root/lib/pkgconfig:$angle_root/lib/pkgconfig:$glib_root/lib/pkgconfig:$pixman_root/lib/pkgconfig:$slirp_root/lib/pkgconfig:$sdl2_root/lib/pkgconfig:$pcre2_root/lib/pkgconfig"
+private_libraries="$virgl_root/lib:$epoxy_root/lib:$angle_root/lib:$glib_root/lib:$pixman_root/lib:$slirp_root/lib:$sdl2_root/lib:$gettext_root/lib:$pcre2_root/lib"
+
+require_private_pkg_version() {
+  local package=$1
+  local expected=$2
+  local actual
+
+  actual=$(env PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR="$pkg_config_libdir" \
+    pkg-config --modversion "$package" 2>/dev/null) || \
+    die "pinned bottle set is missing pkg-config dependency: $package $expected"
+  [[ $actual == "$expected" ]] || \
+    die "$package version mismatch: expected $expected, got $actual"
+}
+
+require_private_pkg_version glib-2.0 2.88.3
+require_private_pkg_version pixman-1 0.46.4
+require_private_pkg_version slirp 4.9.4
+require_private_pkg_version sdl2 2.32.70
+require_private_pkg_version virglrenderer 1.2.0
+require_private_pkg_version epoxy 1.5.11
 
 build_dir="$source_dir/build"
 mkdir "$build_dir"
-log "Configuring QEMU 10.2.50 (HVF-only, Cocoa/VirGL, SLIRP, SDL audio, virtio-9p)"
+log "Configuring QEMU 10.2.50 for macOS $macos_deployment_target and newer"
 (
   cd "$build_dir"
-  env PKG_CONFIG_PATH="$pkg_config_path" \
-    DYLD_FALLBACK_LIBRARY_PATH="$fallback_libraries" \
+  env MACOSX_DEPLOYMENT_TARGET="$macos_deployment_target" \
+    PKG_CONFIG_PATH= \
+    PKG_CONFIG_LIBDIR="$pkg_config_libdir" \
+    DYLD_LIBRARY_PATH="$private_libraries" \
+    DYLD_FALLBACK_LIBRARY_PATH="$private_libraries" \
     ../configure \
       --prefix="$work_dir/install" \
       --target-list=aarch64-softmmu \
@@ -378,11 +440,59 @@ log "Configuring QEMU 10.2.50 (HVF-only, Cocoa/VirGL, SLIRP, SDL audio, virtio-9
       --disable-debug-info \
       --disable-werror \
       --disable-download \
+      --extra-cflags="-mmacosx-version-min=$macos_deployment_target -Werror=unguarded-availability-new" \
+      --extra-ldflags="-mmacosx-version-min=$macos_deployment_target" \
       --ninja="$ninja"
 )
 
+config_host="$build_dir/config-host.h"
+[[ -f $config_host && ! -L $config_host ]] || die "QEMU configure did not create config-host.h"
+if grep -Eq '^[[:space:]]*#define[[:space:]]+HAVE_STRCHRNUL([[:space:]]+1)?[[:space:]]*$' \
+  "$config_host"; then
+  die "QEMU incorrectly enabled the macOS 15.4-only strchrnul API"
+fi
+python3 - \
+  "$build_dir/compile_commands.json" \
+  "-mmacosx-version-min=$macos_deployment_target" \
+  '-Werror=unguarded-availability-new' <<'PY'
+import json
+import shlex
+import sys
+
+path, deployment_flag, availability_flag = sys.argv[1:]
+try:
+    with open(path, encoding="utf-8") as source:
+        commands = json.load(source)
+except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    raise SystemExit(f"qemu-source-build: cannot audit compile commands: {error}")
+if not isinstance(commands, list) or not commands:
+    raise SystemExit("qemu-source-build: compile command database is empty")
+missing = []
+for record in commands:
+    if not isinstance(record, dict):
+        missing.append("<invalid record>")
+        continue
+    arguments = record.get("arguments")
+    if not isinstance(arguments, list):
+        command = record.get("command")
+        arguments = shlex.split(command) if isinstance(command, str) else []
+    if deployment_flag not in arguments or availability_flag not in arguments:
+        missing.append(str(record.get("file", "<unknown source>")))
+if missing:
+    examples = ", ".join(missing[:5])
+    raise SystemExit(
+        f"qemu-source-build: compatibility flags are missing from "
+        f"{len(missing)} compile commands ({examples})"
+    )
+print(f"[qemu-source-build] Audited compatibility flags in {len(commands)} compile commands")
+PY
+
 log "Building qemu-system-aarch64"
-env DYLD_FALLBACK_LIBRARY_PATH="$fallback_libraries" \
+env MACOSX_DEPLOYMENT_TARGET="$macos_deployment_target" \
+  PKG_CONFIG_PATH= \
+  PKG_CONFIG_LIBDIR="$pkg_config_libdir" \
+  DYLD_LIBRARY_PATH="$private_libraries" \
+  DYLD_FALLBACK_LIBRARY_PATH="$private_libraries" \
   "$ninja" -C "$build_dir" qemu-system-aarch64
 
 qemu_binary="$build_dir/qemu-system-aarch64"

@@ -1,0 +1,43 @@
+diff --git a/util/cutils.c b/util/cutils.c
+index f7ce1c570a..287c8b20c7 100644
+--- a/util/cutils.c
++++ b/util/cutils.c
+@@ -37,6 +37,7 @@
+ #endif
+ 
+ #ifdef __APPLE__
++#include <Availability.h>
+ #include <mach-o/dyld.h>
+ #endif
+ 
+@@ -768,6 +769,14 @@ static int do_strtosz(const char *nptr, const char **end,
+     return ret;
+ }
+ 
++#if defined(__APPLE__) && defined(__MAC_15_4) && \
++    defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && \
++    __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_15_4
++extern char *qemu_darwin_strchrnul(const char *, int)
++    __asm("_strchrnul") __attribute__((weak_import));
++#define QEMU_DARWIN_WEAK_STRCHRNUL 1
++#endif
++
+ /**
+  * Searches for the first occurrence of 'c' in 's', and returns a pointer
+  * to the trailing null byte if none was found.
+@@ -775,7 +784,14 @@ static int do_strtosz(const char *nptr, const char **end,
+ #ifndef HAVE_STRCHRNUL
+ const char *qemu_strchrnul(const char *s, int c)
+ {
+-    const char *e = strchr(s, c);
++    const char *e;
++
++#ifdef QEMU_DARWIN_WEAK_STRCHRNUL
++    if (qemu_darwin_strchrnul != NULL) {
++        return qemu_darwin_strchrnul(s, c);
++    }
++#endif
++    e = strchr(s, c);
+     if (!e) {
+         e = s + strlen(s);
+     }
