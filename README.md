@@ -26,6 +26,9 @@ Try Omarchy is not official or affiliated with Omarchy.
 
 Every launch begins at the start menu. Accessibility enables Mac Command-to-guest-Super shortcuts; microphone access is optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
 
+Restarting from inside Omarchy reboots the guest in the same Try Omarchy app.
+Shutting down Omarchy closes the app and leaves it closed.
+
 ## Clipboard sharing
 
 Copy and paste work in both directions as soon as you sign in to Omarchy: text
