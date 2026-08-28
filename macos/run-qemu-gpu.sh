@@ -946,8 +946,10 @@ qemu_args=(
   -device "$gpu_device"
   # Cocoa forwards its live backing-pixel dimensions and the current host
   # display refresh rate through Virtio GPU EDID. Its accessibility-backed
-  # full grab captures system/global Command chords before Spotlight or a
-  # launcher can consume them; Command remains guest Super and Option guest Alt.
+  # full grab captures application Command chords for as long as the window is
+  # key, so a launcher cannot consume them; Command remains guest Super and
+  # Option guest Alt. macOS symbolic hot keys (Spotlight's Command-Space,
+  # Command-Tab) are dispatched above any event tap and still reach the host.
   -display 'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,swap-opt-cmd=off'
   -device 'virtio-keyboard-pci,romfile='
   -device 'virtio-tablet-pci,romfile='
