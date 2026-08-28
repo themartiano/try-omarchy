@@ -45,6 +45,7 @@ native_dir=$(cd "$(dirname "$0")" && pwd -P)
 identity_patch="$native_dir/patches/qemu-cocoa-product-identity.patch"
 display_patch="$native_dir/patches/qemu-cocoa-dynamic-display.patch"
 immersive_patch="$native_dir/patches/qemu-cocoa-immersive-mode.patch"
+full_grab_patch="$native_dir/patches/qemu-cocoa-full-grab-focus.patch"
 audio_device_patch="$native_dir/patches/qemu-sdl-audio-device-selection.patch"
 shared_folder_patch="$native_dir/patches/qemu-9p-guest-owner.patch"
 strchrnul_patch="$native_dir/patches/qemu-darwin-strchrnul-compat.patch"
@@ -67,6 +68,7 @@ gpu_fix_patch_sha256=2b0a589d5821fbbfaa65177c97395ec50382373373e5c6860821279f07d
 identity_patch_sha256=5c9358c2858a74d6a678eacaae550a021f3e616c98c4e4e98c0e50bd869a0666
 display_patch_sha256=19392fe5723829edea348b82a6b0a74f874724af243ed0fb9101007a22fa5bbb
 immersive_patch_sha256=fd1cd1a619778bda5c0c4cf58001fa7053af70ac717153ed9da819d8511a2574
+full_grab_patch_sha256=a48fc375e53fd379bca958715b0d94802d3e17c6668f0b461800cf82839589fc
 audio_device_patch_sha256=20469691f4cdabcd6b9513d6bf00fab9f66983e17b1e8477cc2e5ac47416feed
 shared_folder_patch_sha256=585a5ed40cc7e4a155ca799d731e15354db9e75d4f517d0689be60200750f3e3
 strchrnul_patch_sha256=ec1048dd0e8ebe53bf7e8a3bca9bf2f5f4336cd607d4cd077437470e9a32094a
@@ -136,6 +138,8 @@ macos_major=$(sw_vers -productVersion | awk -F. '{ print $1 }')
   die "missing dynamic-display patch: $display_patch"
 [[ -f $immersive_patch && ! -L $immersive_patch ]] || \
   die "missing immersive-mode patch: $immersive_patch"
+[[ -f $full_grab_patch && ! -L $full_grab_patch ]] || \
+  die "missing Cocoa full-grab patch: $full_grab_patch"
 [[ -f $audio_device_patch && ! -L $audio_device_patch ]] || \
   die "missing SDL audio-device patch: $audio_device_patch"
 [[ -f $shared_folder_patch && ! -L $shared_folder_patch ]] || \
@@ -311,6 +315,8 @@ verify_file_sha "Try Omarchy Cocoa product-identity patch" \
 verify_file_sha "Try Omarchy dynamic-display patch" "$display_patch" "$display_patch_sha256"
 verify_file_sha "Try Omarchy Cocoa immersive-mode patch" \
   "$immersive_patch" "$immersive_patch_sha256"
+verify_file_sha "Try Omarchy Cocoa full-grab patch" \
+  "$full_grab_patch" "$full_grab_patch_sha256"
 verify_file_sha "Try Omarchy SDL audio-device patch" \
   "$audio_device_patch" "$audio_device_patch_sha256"
 verify_file_sha "Try Omarchy 9p shared-folder patch" \
@@ -324,6 +330,7 @@ patch -d "$source_dir" -p1 -f -i "$gpu_fix_patch"
 patch -d "$source_dir" -p1 -f -i "$identity_patch"
 patch -d "$source_dir" -p1 -f -i "$display_patch"
 patch -d "$source_dir" -p1 -f -i "$immersive_patch"
+patch -d "$source_dir" -p1 -f -i "$full_grab_patch"
 patch -d "$source_dir" -p1 -f -i "$audio_device_patch"
 patch -d "$source_dir" -p1 -f -i "$shared_folder_patch"
 patch -d "$source_dir" -p1 -f -i "$strchrnul_patch"
