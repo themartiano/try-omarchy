@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -16,7 +17,7 @@ import tempfile
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 GUEST_ARTIFACTS = {
     "LICENSE.omarchy",
     "build-spec.json",
@@ -28,13 +29,26 @@ GUEST_ARTIFACTS = {
     "vmlinuz-linux",
 }
 GUEST_FILES = GUEST_ARTIFACTS | {"guest-manifest.json", "SHA256SUMS"}
-RUNTIME_FILES = {
-    "bin/qemu-system-aarch64",
-    "lib/libEGL.dylib",
-    "lib/libGLESv2.dylib",
-    "lib/libepoxy.0.dylib",
-    "lib/libvirglrenderer.1.dylib",
-}
+
+
+def read_runtime_manifest(path: Path) -> frozenset[str]:
+    try:
+        entries = path.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError) as error:
+        raise RuntimeError(f"cannot read runtime file manifest: {error}") from error
+    if not entries:
+        raise RuntimeError("runtime file manifest is empty")
+    if len(entries) != len(set(entries)):
+        raise RuntimeError("runtime file manifest contains duplicate paths")
+    for entry in entries:
+        if re.fullmatch(r"(?:bin|lib)/[A-Za-z0-9][A-Za-z0-9._+-]*", entry) is None:
+            raise RuntimeError(f"runtime file manifest contains an unsafe path: {entry!r}")
+    return frozenset(entries)
+
+
+RUNTIME_FILES = read_runtime_manifest(
+    Path(__file__).resolve().parents[1] / "macos/runtime-files.txt"
+)
 
 
 class CacheError(RuntimeError):
@@ -89,8 +103,12 @@ def component_files(root: Path, component: str) -> list[Path]:
     if component == "runtime":
         paths = [
             root / "macos/build-qemu-gpu-runtime.sh",
+            root / "macos/bundle-macho-dependencies.sh",
+            root / "macos/pinned-runtime-bottles.sh",
             root / "macos/prepare-qemu-gpu-runtime.sh",
             root / "macos/qemu-hvf.entitlements",
+            root / "macos/runtime-files.txt",
+            root / "macos/verify-macos-compatibility.sh",
         ]
         paths.extend(regular_files(root / "macos/patches"))
         return sorted(paths)
@@ -137,64 +155,9 @@ def command_output(argv: list[str]) -> str:
     return f"exit={result.returncode}\n{result.stdout.strip()}"
 
 
-def executable_path(name: str) -> Path | None:
-    result = subprocess.run(
-        ["/usr/bin/which", name],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-    return Path(result.stdout.strip()).resolve()
-
-
-def macho_dependencies(image: Path) -> list[Path]:
-    result = subprocess.run(
-        ["/usr/bin/otool", "-L", str(image)],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-    if result.returncode != 0:
-        return []
-    dependencies: list[Path] = []
-    for line in result.stdout.splitlines()[1:]:
-        dependency = line.strip().split(" (", 1)[0]
-        if dependency.startswith(("/System/Library/", "/usr/lib/")):
-            continue
-        if dependency.startswith("/"):
-            dependencies.append(Path(dependency).resolve())
-    return dependencies
-
-
 def app_external_files(root: Path) -> list[Path]:
     runtime = root / "macos/.build/qemu-gpu-runtime"
-    pending = [runtime / relative for relative in sorted(RUNTIME_FILES)]
-    zstd = executable_path("zstd")
-    if zstd is not None:
-        pending.append(zstd)
-
-    discovered: dict[str, Path] = {}
-    while pending:
-        path = pending.pop()
-        key = str(path)
-        if key in discovered or not path.is_file() or path.is_symlink():
-            continue
-        discovered[key] = path
-        pending.extend(macho_dependencies(path))
-
-        # Homebrew's SDL2 compatibility library loads SDL3 dynamically, so it
-        # does not appear in otool output even though the app bundler copies it.
-        if path.name == "libSDL2-2.0.0.dylib":
-            brew_prefix = command_output(["brew", "--prefix"])
-            if brew_prefix.startswith("exit=0\n"):
-                prefix = Path(brew_prefix.split("\n", 1)[1])
-                pending.append(prefix / "opt/sdl3/lib/libSDL3.0.dylib")
-
-    return [discovered[key] for key in sorted(discovered)]
+    return [runtime / relative for relative in sorted(RUNTIME_FILES)]
 
 
 def context(component: str) -> dict[str, str]:
@@ -205,53 +168,26 @@ def context(component: str) -> dict[str, str]:
     if component == "runtime":
         values.update(
             {
-                "brew-prefix": command_output(["brew", "--prefix"]),
                 "clang": command_output(["xcrun", "clang", "--version"]),
-                "pkg-config": command_output(
-                    [
-                        "pkg-config",
-                        "--modversion",
-                        "slirp",
-                        "sdl2",
-                        "glib-2.0",
-                        "pixman-1",
-                    ]
-                ),
-                "slirp-prefix": command_output(
-                    ["pkg-config", "--variable=prefix", "slirp"]
-                ),
-                "sdl2-prefix": command_output(
-                    ["pkg-config", "--variable=prefix", "sdl2"]
-                ),
-                "glib-prefix": command_output(
-                    ["pkg-config", "--variable=prefix", "glib-2.0"]
-                ),
-                "pixman-prefix": command_output(
-                    ["pkg-config", "--variable=prefix", "pixman-1"]
-                ),
+                "pkg-config": command_output(["pkg-config", "--version"]),
             }
         )
     elif component == "app":
-        values.update(
-            {
-                "swift": command_output(["swift", "--version"]),
-                "zstd": command_output(["zstd", "--version"]),
-            }
-        )
+        values.update({"swift": command_output(["swift", "--version"])})
     environment_names = {
         "runtime": {
             "CC",
             "CFLAGS",
+            "CXX",
+            "CXXFLAGS",
             "CPPFLAGS",
             "DEVELOPER_DIR",
             "LDFLAGS",
-            "MACOSX_DEPLOYMENT_TARGET",
-            "PKG_CONFIG_PATH",
+            "OBJCFLAGS",
             "SDKROOT",
         },
         "app": {
             "DEVELOPER_DIR",
-            "MACOSX_DEPLOYMENT_TARGET",
             "OMARCHY_CODESIGN_IDENTITY",
             "SDKROOT",
             "SWIFTFLAGS",
@@ -437,6 +373,28 @@ def validate_runtime(root: Path, previous: dict[str, Any] | None) -> dict[str, A
         )
         if result.returncode != 0:
             raise CacheError(f"runtime artifact has an invalid code signature: {name}")
+    for command, label in (
+        (
+            [
+                str(root / "macos/bundle-macho-dependencies.sh"),
+                "--verify-only",
+                str(directory),
+            ],
+            "self-contained dependency closure",
+        ),
+        (
+            [str(root / "macos/verify-macos-compatibility.sh"), str(directory)],
+            "macOS 15 compatibility contract",
+        ),
+    ):
+        result = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            raise CacheError(f"runtime artifact violates its {label}")
     snapshot = runtime_snapshot(directory)
     if previous is not None and previous.get("outputs") != snapshot:
         raise CacheError("runtime artifact content changed since the successful build")
@@ -465,6 +423,14 @@ def validate_app(root: Path, previous: dict[str, Any] | None) -> dict[str, Any]:
     )
     if result.returncode != 0:
         raise CacheError("app bundle has an invalid code signature")
+    result = subprocess.run(
+        [str(root / "macos/verify-macos-compatibility.sh"), str(app)],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        raise CacheError("app bundle violates the macOS 15 compatibility contract")
     details = subprocess.run(
         ["codesign", "--display", "--verbose=4", str(app)],
         check=False,

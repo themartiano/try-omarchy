@@ -60,20 +60,23 @@ Normal launches keep one persistent VM under `~/Library/Application Support/Try 
 ## Development requirements
 
 - Xcode command-line tools with Swift 6
-- Homebrew
 - Python 3
+- `pkg-config` (Homebrew is the simplest way to install it)
 - A running Docker-compatible engine that supports privileged `linux/arm64`
   containers
-- `zstd`, `pkg-config`, GLib, Pixman, libslirp 4.9.4, and SDL2 2.32.70
 - Roughly 20 GB free for guest, runtime, caches, and assembled output
 
-Install the Homebrew dependencies with:
+Install the one Homebrew build tool with:
 
 ```sh
-brew install zstd pkg-config glib pixman libslirp sdl2
+brew install pkg-config
 ```
 
-`make doctor` performs the basic preflight. `make runtime` checks the exact libslirp and SDL2 versions against the pinned runtime contract.
+`make doctor` performs the basic preflight. `make runtime` downloads a
+checksum-pinned `arm64_sequoia` dependency set, builds QEMU for macOS 15.0,
+and rejects any runtime image that raises that minimum or strongly imports an
+API unavailable on the declared platform. Installed Homebrew library versions
+are never copied into the app.
 
 ## Build and run
 

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: macos/bundle-macho-dependencies.sh RUNTIME_DIR" >&2
+  echo "Usage: macos/bundle-macho-dependencies.sh [--verify-only] RUNTIME_DIR" >&2
   exit 64
 }
 
@@ -12,140 +12,158 @@ fail() {
   exit 1
 }
 
+verify_only=0
+if [[ ${1:-} == --verify-only ]]; then
+  verify_only=1
+  shift
+fi
 [[ $# == 1 ]] || usage
 runtime_dir=$1
 [[ $runtime_dir == /* && -d $runtime_dir && ! -L $runtime_dir ]] || \
   fail "runtime directory must be an absolute direct directory"
+runtime_dir=$(cd "$runtime_dir" && pwd -P)
 bin_dir="$runtime_dir/bin"
 lib_dir="$runtime_dir/lib"
 [[ -d $bin_dir && ! -L $bin_dir ]] || fail "runtime bin directory is missing or unsafe"
 [[ -d $lib_dir && ! -L $lib_dir ]] || fail "runtime lib directory is missing or unsafe"
 
-for tool in brew cmp file find install install_name_tool otool; do
+for tool in awk file find grep install_name_tool otool sed; do
   command -v "$tool" >/dev/null 2>&1 || fail "required tool is unavailable: $tool"
 done
-brew_prefix=$(brew --prefix)
-[[ $brew_prefix == /* && -d $brew_prefix/opt ]] || fail "cannot resolve the Homebrew build prefix"
-
-find_brew_library() {
-  local name=$1
-  local match=
-  local candidate=
-  while IFS= read -r candidate; do
-    [[ -n $candidate ]] || continue
-    if [[ -n $match && ! $candidate -ef $match ]]; then
-      fail "multiple Homebrew libraries match $name"
-    fi
-    match=$candidate
-  done < <(find -L "$brew_prefix/opt" -path "*/lib/$name" -type f -print 2>/dev/null)
-  [[ -n $match ]] || fail "cannot resolve Homebrew library: $name"
-  printf '%s\n' "$match"
-}
 
 macho_dependencies() {
   otool -L "$1" | sed -n '2,$p' | \
     sed -E 's/^[[:space:]]+//; s/ \(compatibility version.*$//'
 }
 
-queue=()
-for candidate in "$bin_dir"/* "$lib_dir"/*; do
-  [[ -f $candidate && ! -L $candidate ]] || continue
-  description=$(file -b "$candidate")
+macho_install_name() {
+  otool -D "$1" 2>/dev/null | sed -n '2p' || true
+}
+
+macho_rpaths() {
+  otool -l "$1" | awk '
+    $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
+    in_rpath && $1 == "path" { print $2; in_rpath = 0 }
+  '
+}
+
+images=()
+while IFS= read -r -d '' candidate; do
+  [[ -f $candidate && ! -L $candidate ]] || \
+    fail "runtime contains an unsafe file entry: $candidate"
+  description=$(file -b "$candidate") || fail "could not inspect file type: $candidate"
   [[ $description == *Mach-O* ]] || continue
-  queue+=("$candidate")
-done
-((${#queue[@]} > 0)) || fail "runtime has no Mach-O images"
+  images+=("$candidate")
+done < <(find "$bin_dir" "$lib_dir" -maxdepth 1 -type f -print0)
+((${#images[@]} > 0)) || fail "runtime has no Mach-O images"
 
-seen=$'\n'
-index=0
-while ((index < ${#queue[@]})); do
-  image=${queue[$index]}
-  ((index += 1))
-  case "$seen" in
-    *$'\n'"$image"$'\n'*) continue ;;
-  esac
-  seen+="$image"$'\n'
+canonical_dependency() {
+  local image=$1
+  local dependency_name=$2
+  if [[ $image == "$bin_dir"/* ]]; then
+    printf '@executable_path/../lib/%s\n' "$dependency_name"
+  else
+    printf '@loader_path/%s\n' "$dependency_name"
+  fi
+}
 
+canonical_rpath() {
+  if [[ $1 == "$bin_dir"/* ]]; then
+    printf '%s\n' '@executable_path/../lib'
+  else
+    printf '%s\n' '@loader_path'
+  fi
+}
+
+if (( ! verify_only )); then
+  for image in "${images[@]}"; do
+    if [[ $image == "$lib_dir"/* ]]; then
+      expected_id="@rpath/${image##*/}"
+      current_id=$(macho_install_name "$image")
+      [[ -n $current_id ]] || fail "dylib has no install name: $image"
+      [[ $current_id == "$expected_id" ]] || \
+        install_name_tool -id "$expected_id" "$image"
+    fi
+
+    install_name=$(macho_install_name "$image")
+    dependencies=$(macho_dependencies "$image") || \
+      fail "could not inspect Mach-O dependencies: $image"
+    while IFS= read -r dependency; do
+      [[ -n $dependency ]] || continue
+      [[ -n $install_name && $dependency == "$install_name" ]] && continue
+      case "$dependency" in
+        /System/Library/*|/usr/lib/*) continue ;;
+      esac
+
+      dependency_name=${dependency##*/}
+      [[ -n $dependency_name ]] || \
+        fail "invalid dependency in $(basename "$image"): $dependency"
+      local_library="$lib_dir/$dependency_name"
+      [[ -f $local_library && ! -L $local_library ]] || \
+        fail "$(basename "$image") needs an unstaged library: $dependency"
+      replacement=$(canonical_dependency "$image" "$dependency_name")
+      [[ $dependency == "$replacement" ]] || \
+        install_name_tool -change "$dependency" "$replacement" "$image"
+    done <<<"$dependencies"
+
+    expected_rpath=$(canonical_rpath "$image")
+    found_expected=0
+    rpaths=$(macho_rpaths "$image") || fail "could not inspect Mach-O rpaths: $image"
+    while IFS= read -r rpath; do
+      [[ -n $rpath ]] || continue
+      if [[ $rpath == "$expected_rpath" ]]; then
+        ((found_expected += 1))
+      else
+        install_name_tool -delete_rpath "$rpath" "$image"
+      fi
+    done <<<"$rpaths"
+    ((found_expected <= 1)) || fail "duplicate isolated rpath in $(basename "$image")"
+    ((found_expected == 1)) || install_name_tool -add_rpath "$expected_rpath" "$image"
+  done
+fi
+
+for image in "${images[@]}"; do
+  if [[ $image == "$lib_dir"/* ]]; then
+    expected_id="@rpath/${image##*/}"
+    [[ $(macho_install_name "$image") == "$expected_id" ]] || \
+      fail "unexpected dylib install name in $(basename "$image")"
+  fi
+
+  install_name=$(macho_install_name "$image")
+  dependencies=$(macho_dependencies "$image") || \
+    fail "could not inspect Mach-O dependencies: $image"
   while IFS= read -r dependency; do
     [[ -n $dependency ]] || continue
+    [[ -n $install_name && $dependency == "$install_name" ]] && continue
     case "$dependency" in
       /System/Library/*|/usr/lib/*) continue ;;
     esac
 
-    source_path=
     dependency_name=${dependency##*/}
-    case "$dependency" in
-      @rpath/*|@loader_path/*|@executable_path/*)
-        local_path="$lib_dir/$dependency_name"
-        if [[ ! -f $local_path || -L $local_path ]]; then
-          source_path=$(find_brew_library "$dependency_name")
-          install -m 0755 "$source_path" "$local_path"
-        fi
-        ;;
-      /*)
-        source_path=$dependency
-        [[ -f $source_path ]] || \
-          fail "$(basename "$image") references missing library: $dependency"
-        local_path="$lib_dir/$dependency_name"
-        if [[ -e $local_path || -L $local_path ]]; then
-          [[ -f $local_path && ! -L $local_path ]] || \
-            fail "unsafe bundled library target: $local_path"
-          cmp -s "$source_path" "$local_path" || \
-            fail "library basename collision for $dependency_name"
-        else
-          install -m 0755 "$source_path" "$local_path"
-        fi
-        ;;
-      *) fail "unsupported Mach-O dependency in $(basename "$image"): $dependency" ;;
-    esac
+    expected_dependency=$(canonical_dependency "$image" "$dependency_name")
+    [[ $dependency == "$expected_dependency" ]] || \
+      fail "external dependency remains in $(basename "$image"): $dependency"
+    [[ -f $lib_dir/$dependency_name && ! -L $lib_dir/$dependency_name ]] || \
+      fail "relocated dependency is missing for $(basename "$image"): $dependency"
+  done <<<"$dependencies"
 
-    if [[ $image == "$bin_dir"/* ]]; then
-      replacement="@executable_path/../lib/$dependency_name"
-    else
-      replacement="@loader_path/$dependency_name"
-    fi
-    [[ $dependency == "$replacement" ]] || \
-      install_name_tool -change "$dependency" "$replacement" "$image"
-    queue+=("$local_path")
-  done < <(macho_dependencies "$image")
-
-  # Homebrew's sdl2 formula is now sdl2-compat, which dlopens SDL3 at runtime
-  # (@loader_path/libSDL3.dylib). otool -L does not surface that dependency.
-  if [[ ${image##*/} == libSDL2-2.0.0.dylib ]] && \
-    LC_ALL=C grep -aFq '@loader_path/libSDL3.dylib' "$image"; then
-    local_sdl3="$lib_dir/libSDL3.dylib"
-    if [[ ! -f $local_sdl3 || -L $local_sdl3 ]]; then
-      if [[ -f $brew_prefix/opt/sdl3/lib/libSDL3.0.dylib ]]; then
-        install -m 0755 "$brew_prefix/opt/sdl3/lib/libSDL3.0.dylib" "$local_sdl3"
-      else
-        install -m 0755 "$(find_brew_library libSDL3.0.dylib)" "$local_sdl3"
-      fi
-    fi
-    queue+=("$local_sdl3")
-  fi
+  expected_rpath=$(canonical_rpath "$image")
+  rpaths=$(macho_rpaths "$image") || fail "could not inspect Mach-O rpaths: $image"
+  [[ $rpaths == "$expected_rpath" ]] || \
+    fail "$(basename "$image") has unexpected runtime search paths: ${rpaths:-<none>}"
 done
 
-for library in "$lib_dir"/*.dylib; do
-  [[ -f $library && ! -L $library ]] || continue
-  install_name_tool -id "@rpath/${library##*/}" "$library"
-done
+# sdl2-compat resolves SDL3 with dlopen, so it is intentionally absent from
+# otool output. Keep this explicit assertion alongside the generic closure.
+sdl2="$lib_dir/libSDL2-2.0.0.dylib"
+if [[ -f $sdl2 && ! -L $sdl2 ]] && \
+  LC_ALL=C grep -aFq '@loader_path/libSDL3.dylib' "$sdl2"; then
+  [[ -f $lib_dir/libSDL3.dylib && ! -L $lib_dir/libSDL3.dylib ]] || \
+    fail "sdl2-compat needs the unstaged runtime library libSDL3.dylib"
+fi
 
-for image in "${queue[@]}"; do
-  [[ -f $image ]] || continue
-  while IFS= read -r dependency; do
-    case "$dependency" in
-      /System/Library/*|/usr/lib/*) ;;
-      @loader_path/*)
-        [[ -f ${image%/*}/${dependency#@loader_path/} ]] || \
-          fail "relocated dependency is missing for $(basename "$image"): $dependency"
-        ;;
-      @executable_path/../lib/*|@rpath/*)
-        [[ -f $lib_dir/${dependency##*/} ]] || \
-          fail "relocated dependency is missing for $(basename "$image"): $dependency"
-        ;;
-      *) fail "external dependency remains in $(basename "$image"): $dependency" ;;
-    esac
-  done < <(macho_dependencies "$image")
-done
-
-echo "[native] Bundled ${#queue[@]} dependency references into $runtime_dir"
+if (( verify_only )); then
+  echo "[native] Verified ${#images[@]} self-contained runtime Mach-O images"
+else
+  echo "[native] Relocated ${#images[@]} self-contained runtime Mach-O images"
+fi

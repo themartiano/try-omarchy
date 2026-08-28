@@ -20,6 +20,11 @@ make test
 `make app` requires an existing `dist/guest/` and staged QEMU runtime. A full
 `make build` creates both first.
 
+The staged runtime is a complete, checksum-pinned Apple Silicon closure built
+for macOS 15.0. Runtime and app assembly do not resolve libraries or `zstd`
+from the host Homebrew prefix, so building on a newer macOS release cannot
+silently raise the app's deployment target.
+
 `make release` defaults to the maintainer's Developer ID Application identity
 and `try-omarchy` notarytool profile. The app builder is also directly usable
 for release signing and notarization:

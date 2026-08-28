@@ -153,11 +153,15 @@ identity_compressed=$(printf 'bundle-compressed' | shasum -a 256 | awk '{print $
 # A compressed app payload is expanded once into the private immutable-image
 # cache, verified against the raw manifest digest, and reused thereafter.
 compressed_disk="$test_root/source.ext4.zst"
-zstd_source=$(command -v zstd)
 zstd_test="$test_root/zstd"
-printf '#!/bin/bash\nexec %q "$@"\n' "$zstd_source" >"$zstd_test"
+cp "$source_disk" "$compressed_disk"
+cat >"$zstd_test" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+[[ $# == 5 && $1 == -d && $2 == -f && $4 == -o ]] || exit 64
+/bin/cp "$3" "$5"
+EOF
 chmod 700 "$zstd_test"
-zstd -q -f "$source_disk" -o "$compressed_disk"
 compressed_bytes=$(stat -f '%z' "$compressed_disk")
 qemu_persistent_storage_materialize_source \
   "$identity_compressed" "$compressed_disk" "$compressed_bytes" \
