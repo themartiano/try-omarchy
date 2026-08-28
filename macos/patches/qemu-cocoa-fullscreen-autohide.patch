@@ -1,0 +1,23 @@
+From: Try Omarchy contributors
+Subject: [PATCH] cocoa: allow the menu bar to auto-hide in fullscreen
+
+Upstream Cocoa removes the auto-hide presentation flags and permanently hides
+the menu bar whenever QEMU enters native fullscreen. That prevents the usual
+macOS hover-to-reveal behavior. Keep the dock immersive, but let the user
+reveal the menu bar by moving the pointer to the top of the screen.
+
+diff --git a/ui/cocoa.m b/ui/cocoa.m
+--- a/ui/cocoa.m
++++ b/ui/cocoa.m
+@@ -1407,8 +1407,9 @@ - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)theAppl
+ - (NSApplicationPresentationOptions) window:(NSWindow *)window
+                                      willUseFullScreenPresentationOptions:(NSApplicationPresentationOptions)proposedOptions;
+
+ {
+     return (proposedOptions & ~(NSApplicationPresentationAutoHideDock | NSApplicationPresentationAutoHideMenuBar)) |
+-           NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar;
++           NSApplicationPresentationHideDock |
++           NSApplicationPresentationAutoHideMenuBar;
+ }
+
+ /*
