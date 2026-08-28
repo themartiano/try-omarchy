@@ -50,6 +50,7 @@ polkit
 python
 qt6-imageformats
 qt6-wayland
+qemu-guest-agent
 quickshell
 ripgrep
 sddm

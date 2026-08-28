@@ -347,6 +347,7 @@ runtime = exact_keys(
         "devices",
         "disk",
         "graphics",
+        "guestAgent",
         "hypervisor",
         "initramfs",
         "initramfsSource",
@@ -382,6 +383,10 @@ clipboard = {
     "device": "virtserialport",
     "port": "dev.tryomarchy.clipboard",
     "formats": ["text/plain;charset=utf-8", "image/png"],
+}
+guest_agent = {
+    "device": "virtserialport",
+    "port": "org.qemu.guest_agent.0",
 }
 shared_folder = {
     "device": "virtio-9p-pci",
@@ -432,6 +437,7 @@ if (
     or runtime.get("audio") != audio
     or runtime.get("storage") != storage
     or runtime.get("clipboard") != clipboard
+    or runtime.get("guestAgent") != guest_agent
     or runtime.get("sharedFolder") != shared_folder
     or runtime.get("devices") != expected_devices
     or runtime.get("minimumMemoryMiB") != 2048
@@ -750,6 +756,14 @@ if [[ -n $shared_folder ]]; then
   shared_folder_kernel_argument=" omarchy.shared_folder_name=$shared_folder_name_encoded"
 fi
 
+# QGA is a root-capable guest command channel. Keep it disabled unless an
+# explicit developer launch requests the private per-boot Unix socket.
+case ${OMARCHY_QEMU_GUEST_AGENT:-0} in
+  1) guest_agent_enabled=1 ;;
+  0) guest_agent_enabled=0 ;;
+  *) fail "OMARCHY_QEMU_GUEST_AGENT must be 0 or 1" ;;
+esac
+
 work_dir=""
 owner_marker=""
 owner_token=""
@@ -880,6 +894,7 @@ chmod 600 "$owner_marker"
 qmp_socket="/tmp/${work_dir##*/}/qmp.sock"
 audio_bridge_socket="/tmp/${work_dir##*/}/audio.sock"
 clipboard_bridge_socket="/tmp/${work_dir##*/}/clipboard.sock"
+guest_agent_socket="/tmp/${work_dir##*/}/qga.sock"
 audio_route_dir="/tmp/${work_dir##*/}/audio-routes"
 mkdir -m 700 "$work_dir/audio-routes"
 
@@ -963,6 +978,13 @@ qemu_args=(
   -device 'virtserialport,bus=omarchy-serial.0,nr=2,chardev=omarchy-clipboard-bridge,name=dev.tryomarchy.clipboard'
 )
 
+if ((guest_agent_enabled)); then
+  qemu_args+=(
+    -chardev "socket,id=omarchy-guest-agent,path=$guest_agent_socket,server=on,wait=off"
+    -device 'virtserialport,bus=omarchy-serial.0,nr=3,chardev=omarchy-guest-agent,name=org.qemu.guest_agent.0'
+  )
+fi
+
 if [[ -n $shared_folder ]]; then
   # security_model=none performs every host operation as this Mac user and
   # ignores guest chown requests, so the Mac keeps real modes and ownership.
@@ -998,6 +1020,11 @@ if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
   else
     printf '\n[qemu-gpu] shared folder: disabled' >&2
   fi
+  if ((guest_agent_enabled)); then
+    printf '\n[qemu-gpu] guest agent socket: %q' "$guest_agent_socket" >&2
+  else
+    printf '\n[qemu-gpu] guest agent: disabled' >&2
+  fi
   printf '\n' >&2
   exit 0
 fi
@@ -1020,13 +1047,17 @@ printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid"
 chmod 600 "$work_dir/.qemu.pid"
 
 for ((attempt = 0; attempt < 100; attempt++)); do
-  [[ -S $qmp_socket && -S $audio_bridge_socket && -S $clipboard_bridge_socket ]] && break
+  [[ -S $qmp_socket && -S $audio_bridge_socket && -S $clipboard_bridge_socket ]] &&
+    { ((!guest_agent_enabled)) || [[ -S $guest_agent_socket ]]; } && break
   kill -0 "$qemu_pid" 2>/dev/null || fail "QEMU exited before creating its private QMP socket"
   sleep 0.05
 done
 [[ -S $qmp_socket ]] || fail "QEMU did not create its private QMP socket"
 [[ -S $audio_bridge_socket ]] || fail "QEMU did not create its private audio bridge socket"
 [[ -S $clipboard_bridge_socket ]] || fail "QEMU did not create its private clipboard bridge socket"
+if ((guest_agent_enabled)); then
+  [[ -S $guest_agent_socket ]] || fail "QEMU did not create its private guest-agent socket"
+fi
 echo "[qemu-gpu] Ready." >&2
 
 # FD 9 deliberately remains open only in QEMU. Letting the sibling audio

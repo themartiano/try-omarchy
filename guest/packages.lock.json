@@ -130,7 +130,7 @@
     "gupnp-igd": "1.6.0-2",
     "gvfs": "1.60.2-3",
     "gzip": "1.14-2",
-    "harfbuzz": "14.3.1-1",
+    "harfbuzz": "14.4.0-1",
     "hicolor-icon-theme": "0.18-1",
     "hidapi": "0.15.0-1",
     "highway": "1.4.0-1",
@@ -423,6 +423,7 @@
     "npth": "1.8-1",
     "nspr": "4.40-1",
     "nss": "3.128-1",
+    "numactl": "2.0.19-1",
     "ocl-icd": "2.3.5-1",
     "omarchy-keyring": "20251027-1",
     "onetbb": "2023.1.0-1",
@@ -472,6 +473,7 @@
     "python-gobject": "3.56.3-1",
     "python-pyxdg": "0.28-7",
     "python-yaml": "6.0.3-2",
+    "qemu-guest-agent": "11.1.0-1",
     "qoi": "r350.4461cc3-1",
     "qt6-base": "6.11.2-2",
     "qt6-declarative": "6.11.2-1",
@@ -595,6 +597,6 @@
     "zram-generator": "1.2.1-1",
     "zstd": "1.5.7-3"
   },
-  "requestedFileSha256": "c63acbf1a06b04b494bd65b38f1ee10847786fcbc3ff5cab4e8e0039c0582f30",
+  "requestedFileSha256": "8230ecd7405f07bf2c8e09246f426cc3397c2a05145197a03ffccfd3f4c62605",
   "schemaVersion": 1
 }
