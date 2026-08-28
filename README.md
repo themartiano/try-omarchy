@@ -73,6 +73,29 @@ The reverse direction does not need a mapping. From Omarchy, connect to
 
 Normal launches keep one persistent VM under `~/Library/Application Support/Try Omarchy/VM/v1`. Removing the app does not remove this data. The start menu can reset it, and requires confirmation before replacing a disk that is incompatible with a new factory guest build.
 
+### Choosing where the VM lives
+
+**Change…** next to **Data** on the start menu moves the VM to any folder you
+pick, including one on an external drive. Omarchy uses exactly the folder you
+choose — it never creates a folder inside it on your behalf.
+
+- The folder must be **empty**, or one Omarchy has already used. A folder with
+  other files in it, or a drive's top level, is turned away with an
+  explanation instead of being restructured; create or pick an empty folder
+  (for example, one named "Try Omarchy") to use instead.
+- The drive must be **APFS**. The VM disk grows as you use it, which only APFS
+  supports here: on exFAT, FAT, or NTFS the same disk would claim its full size
+  the moment it was created. Network volumes are refused because the VM's disk
+  lock is unreliable on them. Anything else is turned away when you pick it, with
+  the actual format named.
+- You need roughly 7 GB free to create the VM, and up to 30 GB as it fills. The
+  disk is sparse, so it only ever occupies what the guest has actually written.
+- **Changing the location does not move your existing VM.** It stays where it
+  is, and switching back reaches it again.
+- Do not disconnect the drive while Omarchy is running. macOS refuses a normal
+  eject while the VM holds the disk, but pulling the cable can damage it. If the
+  volume does disappear, Omarchy shuts the VM down instead of writing on.
+
 ## Development requirements
 
 - Xcode command-line tools with Swift 6

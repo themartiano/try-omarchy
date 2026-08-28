@@ -39,12 +39,22 @@ enum QEMUGPURuntimeEnvironment {
 enum QEMUGPUStorageSpaceEstimate {
     private static let stateRootEnvironmentKey = "OMARCHY_QEMU_GPU_STATE_ROOT"
 
+    /// Resolution order is the environment override, then the stored
+    /// preference, then Application Support. The override stays first because
+    /// it is the documented development and test knob, and the persistent
+    /// storage suite drives the whole library through it.
     static func dataDirectoryURL(
         environment: [String: String] = ProcessInfo.processInfo.environment,
+        preference: StorageLocationPreference = .default,
         fileManager: FileManager = .default
     ) -> URL? {
         if let configuredRoot = environment[stateRootEnvironmentKey], !configuredRoot.isEmpty {
             return validatedConfiguredRoot(configuredRoot)
+        }
+        if let container = preference.containerPath {
+            return validatedConfiguredRoot(
+                StorageLocationPolicy.stateRoot(forContainer: container)
+            )
         }
         guard let applicationSupport = fileManager.urls(
             for: .applicationSupportDirectory,
@@ -55,12 +65,21 @@ enum QEMUGPUStorageSpaceEstimate {
             .standardizedFileURL
     }
 
+    /// A chosen workspace is the state root itself, exactly as the launcher
+    /// script treats `OMARCHY_QEMU_GPU_STATE_ROOT`. Only the default location
+    /// carries the historical `VM/v1` suffix.
     static func storageRootURL(
         environment: [String: String] = ProcessInfo.processInfo.environment,
+        preference: StorageLocationPreference = .default,
         fileManager: FileManager = .default
     ) -> URL? {
         if let configuredRoot = environment[stateRootEnvironmentKey], !configuredRoot.isEmpty {
             return validatedConfiguredRoot(configuredRoot)
+        }
+        if let container = preference.containerPath {
+            return validatedConfiguredRoot(
+                StorageLocationPolicy.stateRoot(forContainer: container)
+            )
         }
         return dataDirectoryURL(environment: environment, fileManager: fileManager)?
             .appendingPathComponent("VM/v1", isDirectory: true)
@@ -69,10 +88,12 @@ enum QEMUGPUStorageSpaceEstimate {
 
     static func dataDirectoryDisplayPath(
         environment: [String: String] = ProcessInfo.processInfo.environment,
+        preference: StorageLocationPreference = .default,
         fileManager: FileManager = .default
     ) -> String? {
         guard let root = dataDirectoryURL(
             environment: environment,
+            preference: preference,
             fileManager: fileManager
         ) else { return nil }
         let path = root.path
@@ -99,11 +120,13 @@ enum QEMUGPUStorageSpaceEstimate {
     static func formattedReclaimableSpace(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         bundleIdentity: String? = nil,
+        preference: StorageLocationPreference = .default,
         fileManager: FileManager = .default
     ) -> String? {
         guard let bytes = reclaimableBytes(
             environment: environment,
             bundleIdentity: bundleIdentity,
+            preference: preference,
             fileManager: fileManager
         ) else { return nil }
         return format(bytes: bytes)
@@ -112,11 +135,13 @@ enum QEMUGPUStorageSpaceEstimate {
     static func reclaimableBytes(
         environment: [String: String],
         bundleIdentity: String?,
+        preference: StorageLocationPreference = .default,
         fileManager: FileManager = .default
     ) -> Int64? {
         guard let directories = resettableWorkspaceDirectories(
             environment: environment,
             bundleIdentity: bundleIdentity,
+            preference: preference,
             fileManager: fileManager
         ) else { return nil }
 
@@ -149,6 +174,13 @@ enum QEMUGPUStorageSpaceEstimate {
     }
 
     static func bundledIdentity(bundle: Bundle = .main) -> String? {
+        bundledMetrics(bundle: bundle)?.identity
+    }
+
+    /// Reads the guest identity and disk sizes that `build-app.sh` signs into
+    /// `Resources/guest/launch.plist`. The sizes drive the free-space guard, so
+    /// a plist missing either one yields nil rather than a guess.
+    static func bundledMetrics(bundle: Bundle = .main) -> BundledGuestMetrics? {
         guard let resourceURL = bundle.resourceURL,
               let data = try? Data(
                 contentsOf: resourceURL.appendingPathComponent("guest/launch.plist")
@@ -160,8 +192,16 @@ enum QEMUGPUStorageSpaceEstimate {
               ),
               let dictionary = propertyList as? [String: Any],
               let identity = dictionary["bundleIdentity"] as? String,
-              isIdentity(identity) else { return nil }
-        return identity
+              isIdentity(identity),
+              let sourceBytes = dictionary["sourceDiskBytes"] as? Int,
+              let workingBytes = dictionary["workingDiskBytes"] as? Int,
+              sourceBytes > 0,
+              workingBytes >= sourceBytes else { return nil }
+        return BundledGuestMetrics(
+            identity: identity,
+            sourceDiskBytes: Int64(sourceBytes),
+            workingDiskBytes: Int64(workingBytes)
+        )
     }
 
     static func storageKey(
@@ -182,6 +222,7 @@ enum QEMUGPUStorageSpaceEstimate {
     private static func resettableWorkspaceDirectories(
         environment: [String: String],
         bundleIdentity: String?,
+        preference: StorageLocationPreference,
         fileManager: FileManager
     ) -> [URL]? {
         guard let storageKey = storageKey(
@@ -190,6 +231,7 @@ enum QEMUGPUStorageSpaceEstimate {
         ) else { return nil }
         guard let root = storageRootURL(
             environment: environment,
+            preference: preference,
             fileManager: fileManager
         ) else { return nil }
         let disks = root.appendingPathComponent("disks", isDirectory: true)

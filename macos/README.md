@@ -58,6 +58,15 @@ unset. The disk's guest-build identity is immutable so an older root filesystem
 can never boot with incompatible bundled kernel modules. A changed guest build
 requires the user-facing, confirmed Reset Omarchy flow.
 
+The start menu can move that workspace to any APFS folder the user picks; the
+folder is used exactly as chosen, never with a folder created inside it — a
+folder with other files already in it, or a drive's top level, is refused
+instead of restructured. The choice is stored in `UserDefaults` and published
+to the launcher as `OMARCHY_QEMU_GPU_STATE_ROOT`. An inherited value of that
+variable still wins, so the development and test override keeps working
+unchanged. Reset composes its environment exactly as a launch does, so it
+always erases the workspace the user is actually running.
+
 Ad-hoc signing identifies one exact build, so macOS intentionally invalidates
 its privacy grants when that build is replaced. The app's **Open Settings**
 action repairs a stale Accessibility entry and registers the installed build,

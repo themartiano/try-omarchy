@@ -200,6 +200,39 @@ struct QEMUGPUStorageSpaceEstimateTests {
         }
     }
 
+    @Test("a chosen data folder replaces the default without the versioned suffix")
+    func honorsStoredPreference() throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("omarchy-launcher-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+        let preference = StorageLocationPreference(containerPath: container.path)
+
+        // A chosen workspace is the state root itself, exactly as the launcher
+        // script treats OMARCHY_QEMU_GPU_STATE_ROOT — the picked folder is
+        // used directly, with no folder nested inside it.
+        let expected = URL(fileURLWithPath: container.path, isDirectory: true)
+            .standardizedFileURL
+        #expect(QEMUGPUStorageSpaceEstimate.dataDirectoryURL(
+            environment: [:],
+            preference: preference
+        ) == expected)
+        #expect(QEMUGPUStorageSpaceEstimate.storageRootURL(
+            environment: [:],
+            preference: preference
+        ) == expected)
+    }
+
+    @Test("the development override still wins over a stored preference")
+    func overrideBeatsPreference() {
+        let configured = "/private/tmp/try-omarchy-override"
+        let expected = URL(fileURLWithPath: configured, isDirectory: true).standardizedFileURL
+        #expect(QEMUGPUStorageSpaceEstimate.storageRootURL(
+            environment: ["OMARCHY_QEMU_GPU_STATE_ROOT": configured],
+            preference: StorageLocationPreference(containerPath: "/Volumes/Ignored")
+        ) == expected)
+    }
+
     @Test("formats allocated bytes as a readable decimal gigabyte estimate")
     func formatsGigabytes() {
         #expect(QEMUGPUStorageSpaceEstimate.format(bytes: 0) == nil)

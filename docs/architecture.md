@@ -103,6 +103,21 @@ stops at the start menu; confirmed reset safely removes them before publishing
 one fresh workspace. Unrecognized host files are always left untouched.
 Ephemeral mode uses a disposable disk.
 
+The workspace does not have to live in Application Support. The start menu can
+put it in any folder the user picks, including one on an external drive, and the
+launcher receives that choice as `OMARCHY_QEMU_GPU_STATE_ROOT`. The chosen
+folder is used as-is: it is never restructured with a folder created inside
+it, so it must already be empty (or already be a workspace Omarchy has used)
+— a populated folder or a drive's top level is refused with an explanation
+instead. The volume must
+be APFS: the storage library clones the factory image with `cp -c` and expands
+the working disk sparsely, and it serializes launches with a `lockf` advisory
+lock. On exFAT the same expansion allocates the full working size immediately,
+and on a network share the lock is unreliable. Both layers check independently, the app
+when the folder is chosen and the shell library again at launch, because the
+volume can change in between. A location change never moves the existing VM;
+unrecognized host files stay untouched, as everywhere else here.
+
 ## Build layout
 
 - `guest/` reproducibly assembles the unprovisioned ARM64 image in a privileged

@@ -635,4 +635,48 @@ assert_fails qemu_persistent_storage_select \
   persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
 export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_state_root
 
+# A volume the workspace cannot live on is refused before anything is written.
+# exFAT ignores chmod, so the exact 0700 assertions could never pass there.
+unsupported_root="$test_root/unsupported-state"
+export OMARCHY_QEMU_GPU_STATE_ROOT=$unsupported_root
+export OMARCHY_QEMU_GPU_TEST_FS_TYPE=exfat
+assert_fails qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+assert_fails qemu_persistent_storage_materialize_source \
+  "$identity_compressed" "$compressed_disk" "$compressed_bytes" \
+  "$source_sha" "$source_bytes" "$zstd_test"
+unset OMARCHY_QEMU_GPU_TEST_FS_TYPE
+assert test ! -e "$unsupported_root/disks"
+assert test ! -e "$unsupported_root/images"
+export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_state_root
+
+# A volume without room fails before the multi-gigabyte decompression and before
+# a workspace is created, rather than part-way through either.
+cramped_root="$test_root/cramped-state"
+export OMARCHY_QEMU_GPU_STATE_ROOT=$cramped_root
+export OMARCHY_QEMU_GPU_TEST_FREE_BYTES=1024
+assert_fails qemu_persistent_storage_materialize_source \
+  "$identity_compressed" "$compressed_disk" "$compressed_bytes" \
+  "$source_sha" "$source_bytes" "$zstd_test"
+assert_fails qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+unset OMARCHY_QEMU_GPU_TEST_FREE_BYTES
+assert test ! -e "$cramped_root/disks/current"
+assert_eq "$(find "$cramped_root/images" -type f | wc -l | tr -d '[:space:]')" 0
+export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_state_root
+
+# The same volume succeeds once the room is there, proving the guard is what
+# rejected it rather than anything else about the location. Release behavior
+# keeps the single "current" workspace, so assert that rather than the
+# identity-keyed development layout the surrounding cases use.
+export OMARCHY_QEMU_GPU_STATE_ROOT=$cramped_root
+saved_cramped_multi_disk=$OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK
+export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=0
+qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+assert_eq "$QEMU_SELECTED_DISK" "$cramped_root/disks/current/rootfs.ext4"
+qemu_persistent_storage_release_lock
+export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=$saved_cramped_multi_disk
+export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_state_root
+
 printf 'qemu-persistent-storage.test: PASS\n'

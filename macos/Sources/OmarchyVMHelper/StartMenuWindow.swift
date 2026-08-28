@@ -63,8 +63,12 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let setImmersiveMode: (Bool) -> Void
     private let launch: () -> Void
     private let canResetStorage: Bool
-    private let storageLocation: String?
-    private let storageLocationURL: URL?
+    private let storageLocation: () -> String?
+    private let storageLocationURL: () -> URL?
+    private let storageLocationStatus: () -> StorageLocationMenuState
+    private let validateStorageLocation: (String) -> String?
+    private let chooseStorageLocation: (String) -> String?
+    private let useDefaultStorageLocation: () -> Void
 
     private var microphoneRequestInFlight = false
     private var resetInProgress = false
@@ -80,9 +84,13 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         requestAccessibility: @escaping () -> Void,
         requestMicrophone: @escaping (@escaping (Bool) -> Void) -> Void,
         canResetStorage: Bool,
-        storageLocation: String?,
-        storageLocationURL: URL?,
+        storageLocation: @escaping () -> String?,
+        storageLocationURL: @escaping () -> URL?,
         storageSpaceEstimate: @escaping () -> String?,
+        storageLocationStatus: @escaping () -> StorageLocationMenuState,
+        validateStorageLocation: @escaping (String) -> String?,
+        chooseStorageLocation: @escaping (String) -> String?,
+        useDefaultStorageLocation: @escaping () -> Void,
         resetStorage: @escaping () -> Void,
         sharedFolderStatus: @escaping () -> SharedFolderMenuState,
         chooseSharedFolder: @escaping (String) -> String?,
@@ -101,6 +109,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         self.storageLocation = storageLocation
         self.storageLocationURL = storageLocationURL
         self.storageSpaceEstimate = storageSpaceEstimate
+        self.storageLocationStatus = storageLocationStatus
+        self.validateStorageLocation = validateStorageLocation
+        self.chooseStorageLocation = chooseStorageLocation
+        self.useDefaultStorageLocation = useDefaultStorageLocation
         self.resetStorage = resetStorage
         self.sharedFolderStatus = sharedFolderStatus
         self.chooseSharedFolder = chooseSharedFolder
@@ -177,6 +189,14 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         pendingResetSpaceEstimate = nil
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window)
+    }
+
+    /// Clears the launching state when the controller stopped before the
+    /// launcher was ever started. The controller presents its own explanation.
+    func launchDidAbort() {
+        guard launchInProgress else { return }
+        launchInProgress = false
+        render()
     }
 
     func launchRequiresReset() {
@@ -395,46 +415,74 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             : "Reset is unavailable for a disposable VM"
 
         var resetViews: [NSView] = [reset]
-        if let storageLocation {
+        let storageStatus = storageLocationStatus()
+        if let storagePath = storageLocation() {
             let dataLabel = NSTextField(labelWithString: "Data:")
             dataLabel.font = .systemFont(ofSize: 10)
             dataLabel.textColor = .secondaryLabelColor
 
             let storage: NSView
-            if let storageLocationURL {
+            if let locationURL = storageLocationURL() {
                 let pathButton = PointingHandButton(
-                    title: storageLocation,
+                    title: storagePath,
                     target: self,
                     action: #selector(openStorageLocation)
                 )
                 pathButton.isBordered = false
                 pathButton.setAccessibilityLabel("Open data folder in Finder")
-                pathButton.setAccessibilityValue(storageLocation)
+                pathButton.setAccessibilityValue(storagePath)
                 pathButton.setAccessibilityHelp("Opens the Try Omarchy data folder in Finder")
                 pathButton.attributedTitle = NSAttributedString(
-                    string: storageLocation,
+                    string: storagePath,
                     attributes: [
                         .font: NSFont.systemFont(ofSize: 10),
                         .foregroundColor: NSColor.secondaryLabelColor,
                     ]
                 )
                 pathButton.alignment = .left
-                pathButton.toolTip = storageLocationURL.path
+                pathButton.toolTip = locationURL.path
                 pathButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 18).isActive = true
                 storage = pathButton
             } else {
-                let pathLabel = NSTextField(labelWithString: storageLocation)
+                let pathLabel = NSTextField(labelWithString: storagePath)
                 pathLabel.font = .systemFont(ofSize: 10)
                 pathLabel.textColor = .secondaryLabelColor
                 storage = pathLabel
             }
 
-            let storageRow = NSStackView(views: [dataLabel, storage])
+            var rowViews: [NSView] = [dataLabel, storage]
+            rowViews.append(
+                storageActionButton(
+                    title: "Change\u{2026}",
+                    action: #selector(beginStorageLocationSelection),
+                    identifier: "storage-location-change"
+                )
+            )
+            if !storageStatus.isDefault {
+                rowViews.append(
+                    storageActionButton(
+                        title: "Use Default",
+                        action: #selector(useDefaultStorageLocationAction),
+                        identifier: "storage-location-default"
+                    )
+                )
+            }
+
+            let storageRow = NSStackView(views: rowViews)
             storageRow.orientation = .horizontal
             storageRow.alignment = .centerY
-            storageRow.spacing = 3
+            storageRow.spacing = 6
+            storageRow.identifier = NSUserInterfaceItemIdentifier("storage-location-row")
             storage.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             resetViews.append(storageRow)
+
+            if let note = storageStatus.problem ?? storageStatus.warning {
+                let noteLabel = NSTextField(wrappingLabelWithString: note)
+                noteLabel.font = .systemFont(ofSize: 10)
+                noteLabel.textColor = storageStatus.problem == nil ? .secondaryLabelColor : .systemRed
+                noteLabel.identifier = NSUserInterfaceItemIdentifier("storage-location-note")
+                resetViews.append(noteLabel)
+            }
         }
         let resetSection = NSStackView(views: resetViews)
         resetSection.orientation = .vertical
@@ -845,12 +893,27 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func openStorageLocation() {
-        guard let storageLocationURL else { return }
+        guard let storageLocationURL = storageLocationURL() else { return }
         do {
             if !FileManager.default.fileExists(atPath: storageLocationURL.path) {
+                // Never create intermediate directories. With a chosen data
+                // folder the path can sit on a drive that is not mounted, and
+                // creating it would leave a shadow folder at the mount point on
+                // the boot volume that then hides the real drive.
+                let parent = storageLocationURL.deletingLastPathComponent()
+                guard FileManager.default.fileExists(atPath: parent.path) else {
+                    throw NSError(
+                        domain: "TryOmarchy.StorageLocation",
+                        code: 2,
+                        userInfo: [
+                            NSLocalizedDescriptionKey:
+                                "The drive that holds this folder is not connected.",
+                        ]
+                    )
+                }
                 try FileManager.default.createDirectory(
                     at: storageLocationURL,
-                    withIntermediateDirectories: true,
+                    withIntermediateDirectories: false,
                     attributes: [.posixPermissions: 0o700]
                 )
             }
@@ -873,6 +936,80 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
 
     @objc private func resetOmarchy() {
         confirmReset()
+    }
+
+    private func storageActionButton(
+        title: String,
+        action: Selector,
+        identifier: String
+    ) -> NSButton {
+        let button = NSButton(title: title, target: self, action: action)
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.isEnabled = canResetStorage && !launchInProgress && !resetInProgress
+        button.identifier = NSUserInterfaceItemIdentifier(identifier)
+        return button
+    }
+
+    @objc private func beginStorageLocationSelection() {
+        guard canResetStorage, !launchInProgress, !resetInProgress else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Choose where to keep the Omarchy VM"
+        panel.message = "Omarchy keeps its virtual machine in a \u{201C}Try Omarchy\u{201D} folder inside the folder you choose. The drive must be APFS."
+        panel.prompt = "Use Folder"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = true
+        if let current = storageLocationStatus().containerPath {
+            panel.directoryURL = URL(fileURLWithPath: current, isDirectory: true)
+        } else {
+            panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        // Reject before confirming: nobody should agree to a move that is about
+        // to be refused because the drive is the wrong format or too full.
+        if let problem = validateStorageLocation(url.path) {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "That folder can\u{2019}t hold the Omarchy VM"
+            alert.informativeText = problem
+            alert.addButton(withTitle: "OK")
+            alert.beginSheetModal(for: window)
+            return
+        }
+
+        let destination = StorageLocationPolicy.stateRoot(forContainer: url.path)
+        let confirmation = NSAlert()
+        confirmation.alertStyle = .warning
+        confirmation.messageText = "Keep the Omarchy VM here?"
+        confirmation.informativeText = """
+            Omarchy will use \(destination) from the next launch.
+
+            Your current VM is not moved. It stays where it is, and you can \
+            reach it again by switching this setting back.
+            """
+        confirmation.addButton(withTitle: "Cancel")
+        confirmation.addButton(withTitle: "Use This Folder")
+        guard confirmation.runModal() == .alertSecondButtonReturn else { return }
+
+        if let problem = chooseStorageLocation(url.path) {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "That folder can\u{2019}t hold the Omarchy VM"
+            alert.informativeText = problem
+            alert.addButton(withTitle: "OK")
+            alert.beginSheetModal(for: window)
+        }
+        render()
+    }
+
+    @objc private func useDefaultStorageLocationAction() {
+        guard canResetStorage, !launchInProgress, !resetInProgress else { return }
+        useDefaultStorageLocation()
+        render()
     }
 
     @objc private func beginSharedFolderSelection() {
@@ -963,6 +1100,13 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         alert.alertStyle = .critical
         alert.messageText = "Reset Omarchy to factory settings?"
         var detail = "This permanently erases everything in this Omarchy virtual machine, including apps, files, accounts, and settings. This cannot be undone or recovered."
+        // With a chosen data folder there can be more than one workspace on the
+        // Mac, so say which one is about to be erased.
+        let location = storageLocationStatus()
+        if !location.isDefault, let displayPath = location.displayPath {
+            let volume = location.volumeName.map { "\($0), " } ?? ""
+            detail += " The VM being erased is the one stored at \(volume)\(displayPath)."
+        }
         if let estimate {
             detail += " Resetting may free up to \(estimate) of disk space."
         }
