@@ -11,6 +11,11 @@ reveal and routes Command chords to the host even after the guest view grabs
 input. Both modes remain fullscreen and keep normal guest pointer handling.
 The View menu also follows the current state so its exit action stays obvious.
 
+`fullScreenMenuItem` is a file-scope static, matching `full_grab_enabled`
+above it, rather than a `QemuCocoaAppController` ivar: `create_initial_menus`
+is a plain C function with no `self`, so a bare ivar reference there does not
+compile.
+
 diff --git a/ui/cocoa.m b/ui/cocoa.m
 --- a/ui/cocoa.m
 +++ b/ui/cocoa.m
@@ -19,11 +24,11 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
  static int left_command_key_enabled = 1;
  static bool swap_opt_cmd;
 +static bool full_grab_enabled;
++static NSMenuItem *fullScreenMenuItem;
  
  static bool zoom_interpolation;
-+static NSMenuItem *fullScreenMenuItem;
  static NSTextField *pauseLabel;
-@@ -1013,7 +1015,8 @@
+@@ -1013,7 +1014,8 @@
  
                  /* Don't pass command key changes to guest unless mouse is grabbed */
                  case kVK_Command:
@@ -33,7 +38,7 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
                          !!(modifiers & NSEventModifierFlagCommand) &&
                          left_command_key_enabled) {
                          if (swap_opt_cmd) {
-@@ -1025,7 +1028,8 @@
+@@ -1025,7 +1027,8 @@
                      break;
  
                  case kVK_RightCommand:
@@ -43,7 +48,7 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
                          !!(modifiers & NSEventModifierFlagCommand)) {
                          if (swap_opt_cmd) {
                              [self toggleKey:Q_KEY_CODE_ALT_R];
-@@ -1039,8 +1043,10 @@
+@@ -1039,8 +1042,10 @@
          case NSEventTypeKeyDown:
              keycode = cocoa_keycode_to_qemu([event keyCode]);
  
@@ -56,7 +61,7 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
                  return false;
              }
  
-@@ -1077,7 +1083,8 @@
+@@ -1077,7 +1082,8 @@
  
              // don't pass the guest a spurious key-up if we treated this
              // command-key combo as a host UI action

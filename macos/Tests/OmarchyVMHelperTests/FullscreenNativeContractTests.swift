@@ -27,9 +27,11 @@ struct FullscreenNativeContractTests {
         #expect(patch.contains("[fullScreenMenuItem setTitle:@\"Enter Full Screen\"]"))
 
         #expect(patch.contains(
-            " static bool zoom_interpolation;\n" +
+            " static bool swap_opt_cmd;\n" +
+            "+static bool full_grab_enabled;\n" +
             "+static NSMenuItem *fullScreenMenuItem;\n" +
-            " static NSTextField *pauseLabel;"
+            " \n" +
+            " static bool zoom_interpolation;"
         ))
         #expect(!patch.contains("+    NSMenuItem *fullScreenMenuItem;"))
 
