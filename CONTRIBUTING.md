@@ -6,7 +6,7 @@ project-built ARM64 virtual machine image.
 
 ## Before opening a pull request
 
-1. Open an issue for large behavioral or architecture changes.
+1. Open an issue for large behavioral or architectural changes.
 2. Keep changes within the current Apple Silicon, QEMU/HVF, and ARM64 guest
    architecture unless an architecture change has been discussed first.
 3. Run `make test`.
