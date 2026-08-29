@@ -47,6 +47,17 @@ enum NativeCameraWireFormat {
     }
 }
 
+enum NativeCameraSessionLifecycle {
+    static let failureNotifications = [
+        AVCaptureSession.runtimeErrorNotification,
+        AVCaptureSession.didStopRunningNotification,
+    ]
+
+    static func shouldTerminateBridge(streaming: Bool, stopped: Bool) -> Bool {
+        streaming && !stopped
+    }
+}
+
 final class NativeCameraBridge: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let descriptor: Int32
     private let sessionQueue = DispatchQueue(label: "dev.tryomarchy.native.camera-session")
@@ -57,6 +68,7 @@ final class NativeCameraBridge: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     private let stateLock = NSLock()
     private let writeLock = NSLock()
     private var session: AVCaptureSession?
+    private var sessionObservers: [NSObjectProtocol] = []
     private var streaming = false
     private var stopped = false
     private var sequence: UInt32 = 0
@@ -112,6 +124,7 @@ final class NativeCameraBridge: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         Darwin.close(descriptor)
         sessionQueue.async { [weak self] in
             guard let self else { return }
+            removeSessionObservers()
             self.session?.stopRunning()
             self.session = nil
         }
@@ -157,6 +170,7 @@ final class NativeCameraBridge: NSObject, AVCaptureVideoDataOutputSampleBufferDe
                 captureSession = configured.session
                 cameraName = configured.cameraName
                 session = captureSession
+                observeSessionFailures(captureSession)
             }
             captureSession.startRunning()
             guard captureSession.isRunning else {
@@ -245,6 +259,49 @@ final class NativeCameraBridge: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         return (captureSession, device.localizedName)
     }
 
+    private func observeSessionFailures(_ captureSession: AVCaptureSession) {
+        removeSessionObservers()
+        let center = NotificationCenter.default
+        sessionObservers = NativeCameraSessionLifecycle.failureNotifications.map { name in
+            center.addObserver(
+                forName: name,
+                object: captureSession,
+                queue: nil
+            ) { [weak self] notification in
+                self?.captureSessionFailed(notification)
+            }
+        }
+    }
+
+    private func removeSessionObservers() {
+        let center = NotificationCenter.default
+        for observer in sessionObservers {
+            center.removeObserver(observer)
+        }
+        sessionObservers.removeAll()
+    }
+
+    private func captureSessionFailed(_ notification: Notification) {
+        stateLock.lock()
+        let shouldTerminate = NativeCameraSessionLifecycle.shouldTerminateBridge(
+            streaming: streaming,
+            stopped: stopped
+        )
+        if shouldTerminate {
+            streaming = false
+        }
+        stateLock.unlock()
+        guard shouldTerminate else { return }
+
+        let reason = notification.name == AVCaptureSession.runtimeErrorNotification
+            ? "reported a runtime error"
+            : "stopped unexpectedly"
+        fputs("[camera-bridge] The Mac camera session \(reason); reconnecting.\n", stderr)
+        // Closing the channel ends run(); the launcher then restarts this helper,
+        // while the guest service reopens its side of the virtio port.
+        stop()
+    }
+
     func captureOutput(
         _ output: AVCaptureOutput,
         didOutput sampleBuffer: CMSampleBuffer,
@@ -274,14 +331,7 @@ final class NativeCameraBridge: NSObject, AVCaptureVideoDataOutputSampleBufferDe
             stateLock.unlock()
             if shouldReport {
                 fputs("[camera-bridge] \(error.localizedDescription)\n", stderr)
-                sessionQueue.async { [weak self] in
-                    self?.session?.stopRunning()
-                }
-                do {
-                    try sendStatus(["reason": "capture", "status": "unavailable"])
-                } catch {
-                    stop()
-                }
+                stop()
             }
         }
     }

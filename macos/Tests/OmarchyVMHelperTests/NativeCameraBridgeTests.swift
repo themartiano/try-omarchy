@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreVideo
 import Foundation
 import Testing
@@ -37,6 +38,35 @@ struct NativeCameraBridgeTests {
         )
         #expect(settings[kCVPixelBufferWidthKey as String] as? Int == 1280)
         #expect(settings[kCVPixelBufferHeightKey as String] as? Int == 720)
+    }
+
+    @Test("active session failures reconnect the bridge")
+    func sessionFailureRecovery() {
+        #expect(
+            NativeCameraSessionLifecycle.failureNotifications
+                == [
+                    AVCaptureSession.runtimeErrorNotification,
+                    AVCaptureSession.didStopRunningNotification,
+                ]
+        )
+        #expect(
+            NativeCameraSessionLifecycle.shouldTerminateBridge(
+                streaming: true,
+                stopped: false
+            )
+        )
+        #expect(
+            !NativeCameraSessionLifecycle.shouldTerminateBridge(
+                streaming: false,
+                stopped: false
+            )
+        )
+        #expect(
+            !NativeCameraSessionLifecycle.shouldTerminateBridge(
+                streaming: true,
+                stopped: true
+            )
+        )
     }
 }
 

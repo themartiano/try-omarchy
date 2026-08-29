@@ -569,10 +569,11 @@ def main() -> None:
     camera_module = read(GUEST / "native-overlay/etc/modprobe.d/90-try-omarchy-camera.conf")
     check(
         "omarchy-native-camera-bridge" in camera_unit
+        and "Restart=always" in camera_unit
         and 'ATTR{name}=="dev.tryomarchy.camera"' in camera_rule
         and 'KERNEL=="video42"' in camera_rule
         and "exclusive_caps=1" in camera_module,
-        "camera service binds its virtio port to an exclusive-capability V4L2 device",
+        "camera service reconnects its virtio port to an exclusive-capability V4L2 device",
     )
 
     clipboard_bridge = GUEST / "native-overlay/usr/local/bin/omarchy-native-clipboard-bridge"
