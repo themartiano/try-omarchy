@@ -412,6 +412,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             preference: storageLocationStore.load(),
             metrics: bundledMetrics,
             homeDirectory: Self.homeDirectory,
+            environmentOverride: storageEnvironmentOverride,
             probe: volumeProbe,
             volumeRootDetector: volumeRootDetector
         )
@@ -473,7 +474,22 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     /// their chosen drive is missing. Silently falling back would create — or
     /// destroy — a second VM they never asked about, which is exactly the
     /// multi-workspace confusion the storage library works to avoid.
+    /// The state root forced by the environment, if any.
+    ///
+    /// `StorageLocationLaunchConfiguration` lets this beat the stored
+    /// preference, so anything that reports or gates on "the location" has to
+    /// read it too. Otherwise the reset sheet names the folder the user picked
+    /// while the launcher erases the one the environment chose.
+    private var storageEnvironmentOverride: String? {
+        let configured = baseEnvironment[StorageLocationPolicy.environmentKey]
+        return (configured?.isEmpty == false) ? configured : nil
+    }
+
     private func resolveStorageLocationAvailability() -> StorageAvailability {
+        // An override wins over the preference on the way to the launcher, so
+        // the preference's reachability says nothing about this run. The
+        // launcher validates the override itself and fails loudly.
+        if storageEnvironmentOverride != nil { return .available }
         let preference = storageLocationStore.load()
         guard let container = preference.containerPath else { return .available }
         do {

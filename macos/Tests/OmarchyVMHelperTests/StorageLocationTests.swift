@@ -604,6 +604,94 @@ struct StorageLocationLaunchConfigurationTests {
     }
 }
 
+@Suite("Storage location effective configuration")
+struct StorageLocationEffectiveConfigurationTests {
+    /// What the menu reports and what the launcher receives must be the same
+    /// workspace. When they diverge, the reset sheet names one VM and the
+    /// launcher erases another — the environment override made exactly that
+    /// possible, because the launch configuration honored it and the menu did
+    /// not.
+    @Test("the menu and the launcher resolve the same workspace in every case")
+    func menuMatchesLaunchConfiguration() throws {
+        let usable = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: usable) }
+        let absent = usable.appendingPathComponent("gone", isDirectory: true)
+        let override = "/Volumes/Scratch/override-root"
+
+        let cases: [(name: String, preference: StorageLocationPreference, override: String?)] = [
+            ("default, no override", .default, nil),
+            ("chosen folder, no override", StorageLocationPreference(containerPath: usable.path), nil),
+            ("unreachable folder, no override", StorageLocationPreference(containerPath: absent.path), nil),
+            ("default, override set", .default, override),
+            ("chosen folder, override set", StorageLocationPreference(containerPath: usable.path), override),
+            ("unreachable folder, override set", StorageLocationPreference(containerPath: absent.path), override),
+        ]
+
+        for scenario in cases {
+            var environment: [String: String] = [:]
+            if let value = scenario.override {
+                environment[StorageLocationPolicy.environmentKey] = value
+            }
+
+            let launch = StorageLocationLaunchConfiguration.make(
+                baseEnvironment: environment,
+                preference: scenario.preference,
+                metrics: metrics,
+                probe: FakeVolumeProbe(result: volume())
+            )
+            let menu = StorageLocationMenuState.make(
+                preference: scenario.preference,
+                metrics: metrics,
+                homeDirectory: "/Users/example",
+                environmentOverride: scenario.override,
+                probe: FakeVolumeProbe(result: volume())
+            )
+
+            #expect(
+                menu.stateRoot == launch.stateRoot,
+                "\(scenario.name): menu shows \(menu.stateRoot ?? "default") but the launcher uses \(launch.stateRoot ?? "default")"
+            )
+        }
+    }
+
+    @Test("an override is reported as the effective location, not the stored choice")
+    func overrideIsReported() throws {
+        let chosen = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: chosen) }
+
+        let menu = StorageLocationMenuState.make(
+            preference: StorageLocationPreference(containerPath: chosen.path),
+            metrics: metrics,
+            homeDirectory: "/Users/example",
+            environmentOverride: "/Volumes/Scratch/override-root",
+            probe: FakeVolumeProbe(result: volume())
+        )
+        #expect(menu.isEnvironmentOverride)
+        #expect(menu.stateRoot == "/Volumes/Scratch/override-root")
+        #expect(menu.displayPath == "/Volumes/Scratch/override-root")
+        #expect(menu.isDefault == false)
+        // Nothing to fix, so nothing to warn about: the launcher owns validating
+        // the override and fails loudly if it is unusable.
+        #expect(menu.problem == nil)
+    }
+
+    @Test("an empty override is ignored so the stored choice still applies")
+    func emptyOverrideIsIgnored() throws {
+        let chosen = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: chosen) }
+
+        let menu = StorageLocationMenuState.make(
+            preference: StorageLocationPreference(containerPath: chosen.path),
+            metrics: metrics,
+            homeDirectory: "/Users/example",
+            environmentOverride: "",
+            probe: FakeVolumeProbe(result: volume())
+        )
+        #expect(menu.isEnvironmentOverride == false)
+        #expect(menu.stateRoot == chosen.path)
+    }
+}
+
 @Suite("Storage location menu state")
 struct StorageLocationMenuStateTests {
     @Test("the default location reports itself as default")

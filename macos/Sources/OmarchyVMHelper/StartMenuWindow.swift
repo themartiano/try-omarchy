@@ -393,7 +393,12 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 let volumeInfo = [storageStatus.volumeName, storageStatus.isExternal ? "External drive" : nil]
                     .compactMap { $0 }
                     .joined(separator: " · ")
-                let secondLine = storageStatus.warning ?? (volumeInfo.isEmpty ? nil : volumeInfo)
+                // Say so when the environment picked this workspace, otherwise
+                // the row reads as the user's own choice while the buttons that
+                // would change it quietly do nothing.
+                let secondLine = storageStatus.isEnvironmentOverride
+                    ? "Set by \(StorageLocationPolicy.environmentKey)"
+                    : storageStatus.warning ?? (volumeInfo.isEmpty ? nil : volumeInfo)
                 if let secondLine {
                     storageDetail = "\(storagePath) · \(secondLine)"
                     storageDetailLines = [storagePath, secondLine]
@@ -422,7 +427,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 granted: !storageStatus.isDefault && storageStatus.problem == nil,
                 statusLabels: ("\u{25cf}  Custom", "\u{25cb}  Default"),
                 actions: storageActions,
-                actionsEnabled: canResetStorage,
+                actionsEnabled: canResetStorage && !storageStatus.isEnvironmentOverride,
                 minimumHeight: storageDetailLines != nil || storageActions.count > 1 ? 90 : 68
             )
         }

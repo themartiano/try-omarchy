@@ -198,11 +198,20 @@ enum StorageLocationPolicy {
         guard Darwin.lstat(marker.path, &information) == 0 else { return false }
         guard (information.st_mode & S_IFMT) == S_IFREG else { return false }
         guard information.st_uid == getuid() else { return false }
+        // `_qps_permissions` is `stat -f '%Lp'`, which reports only the nine
+        // permission bits — a setuid marker prints 600 there — so masking with
+        // 0o777 is the exact mirror, not a laxer one.
         guard (information.st_mode & 0o777) == 0o600 else { return false }
 
-        guard let contents = try? String(contentsOf: marker, encoding: .utf8) else { return false }
-        // `$(<file)` on the shell side strips trailing newlines before comparing.
-        return contents.trimmingCharacters(in: .newlines) == rootMarkerContent
+        guard let data = try? Data(contentsOf: marker),
+              let contents = String(data: data, encoding: .utf8) else { return false }
+        // Command substitution strips trailing newlines and nothing else, so a
+        // marker that *starts* with one is content the shell would reject.
+        // Trimming both ends here would accept it and defer the failure to
+        // launch, which is the mismatch this check exists to prevent.
+        var body = Substring(contents)
+        while body.hasSuffix("\n") { body = body.dropLast() }
+        return body == rootMarkerContent
     }
 
     /// Whether anything at all occupies the marker path, valid or not. A folder
@@ -432,6 +441,10 @@ struct StorageLocationMenuState: Equatable {
     let isExternal: Bool
     let problem: String?
     let warning: String?
+    /// True when OMARCHY_QEMU_GPU_STATE_ROOT decided this location, overriding
+    /// whatever the user picked. The menu must report the workspace a launch or
+    /// reset will actually act on, not the one merely stored in preferences.
+    let isEnvironmentOverride: Bool
 
     static let defaultLocation = Self(
         containerPath: nil,
@@ -441,17 +454,49 @@ struct StorageLocationMenuState: Equatable {
         isDefault: true,
         isExternal: false,
         problem: nil,
-        warning: nil
+        warning: nil,
+        isEnvironmentOverride: false
     )
+
+    /// The workspace an override points at.
+    ///
+    /// The override is the documented development and test escape hatch and it
+    /// beats the stored preference in `StorageLocationLaunchConfiguration`, so
+    /// the launcher — not this policy — owns validating it. Reporting it
+    /// unvalidated is deliberate: the alternative is a confirmation sheet that
+    /// names one workspace while reset erases another.
+    static func overriding(
+        stateRoot: String,
+        homeDirectory: String
+    ) -> Self {
+        Self(
+            containerPath: stateRoot,
+            stateRoot: stateRoot,
+            displayPath: StorageLocationPolicy.displayPath(
+                stateRoot,
+                homeDirectory: homeDirectory
+            ),
+            volumeName: nil,
+            isDefault: false,
+            isExternal: false,
+            problem: nil,
+            warning: nil,
+            isEnvironmentOverride: true
+        )
+    }
 
     static func make(
         preference: StorageLocationPreference,
         metrics: BundledGuestMetrics?,
         homeDirectory: String,
+        environmentOverride: String? = nil,
         probe: VolumeProbing = URLVolumeProbe(),
         volumeRootDetector: VolumeRootDetecting = FileManagerVolumeRootDetector(),
         fileManager: FileManager = .default
     ) -> Self {
+        if let environmentOverride, !environmentOverride.isEmpty {
+            return .overriding(stateRoot: environmentOverride, homeDirectory: homeDirectory)
+        }
         guard let container = preference.containerPath else { return .defaultLocation }
         do {
             let resolution = try StorageLocationPolicy.validate(
@@ -472,7 +517,8 @@ struct StorageLocationMenuState: Equatable {
                 isDefault: false,
                 isExternal: !resolution.capabilities.isInternal,
                 problem: nil,
-                warning: resolution.spaceWarning
+                warning: resolution.spaceWarning,
+                isEnvironmentOverride: false
             )
         } catch {
             return Self(
@@ -486,7 +532,8 @@ struct StorageLocationMenuState: Equatable {
                 isDefault: false,
                 isExternal: false,
                 problem: error.localizedDescription,
-                warning: nil
+                warning: nil,
+                isEnvironmentOverride: false
             )
         }
     }
