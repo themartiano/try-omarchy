@@ -367,24 +367,72 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         )
         let immersiveRow = immersiveSettingRow(isEnabled: immersiveMode())
 
-        let permissionRows = NSStackView(
-            views: [
-                accessibilityRow,
-                separator(),
-                microphoneRow,
-                separator(),
-                sharedFolderRow,
-                separator(),
-                portForwardingRow,
-                separator(),
-                immersiveRow,
-            ]
-        )
+        let storageStatus = storageLocationStatus()
+        var storageRow: NSView?
+        if let storagePath = storageLocation() {
+            let storageDetail: String
+            let storageDetailLines: [String]?
+            if let problem = storageStatus.problem {
+                storageDetail = problem
+                storageDetailLines = nil
+            } else if !storageStatus.isDefault {
+                let volumeInfo = [storageStatus.volumeName, storageStatus.isExternal ? "External drive" : nil]
+                    .compactMap { $0 }
+                    .joined(separator: " · ")
+                let secondLine = storageStatus.warning ?? (volumeInfo.isEmpty ? nil : volumeInfo)
+                if let secondLine {
+                    storageDetail = "\(storagePath) · \(secondLine)"
+                    storageDetailLines = [storagePath, secondLine]
+                } else {
+                    storageDetail = storagePath
+                    storageDetailLines = nil
+                }
+            } else {
+                storageDetail = storagePath
+                storageDetailLines = nil
+            }
+
+            var storageActions: [(String, Selector)] = [("Change\u{2026}", #selector(beginStorageLocationSelection))]
+            if !storageStatus.isDefault {
+                storageActions.append(("Use Default", #selector(useDefaultStorageLocationAction)))
+            }
+
+            storageRow = permissionRow(
+                symbolName: "externaldrive",
+                title: "VM Location",
+                detail: storageDetail,
+                compactDetailLines: storageDetailLines,
+                detailAction: storageStatus.problem == nil && storageLocationURL() != nil
+                    ? #selector(openStorageLocation)
+                    : nil,
+                granted: !storageStatus.isDefault && storageStatus.problem == nil,
+                statusLabels: ("\u{25cf}  Custom", "\u{25cb}  Default"),
+                actions: storageActions,
+                actionsEnabled: canResetStorage,
+                minimumHeight: storageDetailLines != nil || storageActions.count > 1 ? 90 : 68
+            )
+        }
+
+        var permissionRowViews = [accessibilityRow, microphoneRow, sharedFolderRow]
+        if let storageRow {
+            permissionRowViews.append(storageRow)
+        }
+        permissionRowViews.append(contentsOf: [portForwardingRow, immersiveRow])
+
+        var permissionRowsAndSeparators: [NSView] = []
+        for (index, row) in permissionRowViews.enumerated() {
+            if index > 0 {
+                permissionRowsAndSeparators.append(separator())
+            }
+            permissionRowsAndSeparators.append(row)
+        }
+
+        let permissionRows = NSStackView(views: permissionRowsAndSeparators)
         permissionRows.orientation = .vertical
         permissionRows.alignment = .leading
         permissionRows.spacing = 0
         permissionRows.translatesAutoresizingMaskIntoConstraints = false
-        for row in [accessibilityRow, microphoneRow, sharedFolderRow, portForwardingRow, immersiveRow] {
+        for row in permissionRowViews {
             row.widthAnchor.constraint(equalTo: permissionRows.widthAnchor).isActive = true
         }
 
@@ -414,76 +462,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             ? "Erase this VM and return it to factory settings"
             : "Reset is unavailable for a disposable VM"
 
-        var resetViews: [NSView] = [reset]
-        let storageStatus = storageLocationStatus()
-        if let storagePath = storageLocation() {
-            let dataLabel = NSTextField(labelWithString: "Data:")
-            dataLabel.font = .systemFont(ofSize: 10)
-            dataLabel.textColor = .secondaryLabelColor
-
-            let storage: NSView
-            if let locationURL = storageLocationURL() {
-                let pathButton = PointingHandButton(
-                    title: storagePath,
-                    target: self,
-                    action: #selector(openStorageLocation)
-                )
-                pathButton.isBordered = false
-                pathButton.setAccessibilityLabel("Open data folder in Finder")
-                pathButton.setAccessibilityValue(storagePath)
-                pathButton.setAccessibilityHelp("Opens the Try Omarchy data folder in Finder")
-                pathButton.attributedTitle = NSAttributedString(
-                    string: storagePath,
-                    attributes: [
-                        .font: NSFont.systemFont(ofSize: 10),
-                        .foregroundColor: NSColor.secondaryLabelColor,
-                    ]
-                )
-                pathButton.alignment = .left
-                pathButton.toolTip = locationURL.path
-                pathButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 18).isActive = true
-                storage = pathButton
-            } else {
-                let pathLabel = NSTextField(labelWithString: storagePath)
-                pathLabel.font = .systemFont(ofSize: 10)
-                pathLabel.textColor = .secondaryLabelColor
-                storage = pathLabel
-            }
-
-            var rowViews: [NSView] = [dataLabel, storage]
-            rowViews.append(
-                storageActionButton(
-                    title: "Change\u{2026}",
-                    action: #selector(beginStorageLocationSelection),
-                    identifier: "storage-location-change"
-                )
-            )
-            if !storageStatus.isDefault {
-                rowViews.append(
-                    storageActionButton(
-                        title: "Use Default",
-                        action: #selector(useDefaultStorageLocationAction),
-                        identifier: "storage-location-default"
-                    )
-                )
-            }
-
-            let storageRow = NSStackView(views: rowViews)
-            storageRow.orientation = .horizontal
-            storageRow.alignment = .centerY
-            storageRow.spacing = 6
-            storageRow.identifier = NSUserInterfaceItemIdentifier("storage-location-row")
-            storage.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            resetViews.append(storageRow)
-
-            if let note = storageStatus.problem ?? storageStatus.warning {
-                let noteLabel = NSTextField(wrappingLabelWithString: note)
-                noteLabel.font = .systemFont(ofSize: 10)
-                noteLabel.textColor = storageStatus.problem == nil ? .secondaryLabelColor : .systemRed
-                noteLabel.identifier = NSUserInterfaceItemIdentifier("storage-location-note")
-                resetViews.append(noteLabel)
-            }
-        }
+        let resetViews: [NSView] = [reset]
         let resetSection = NSStackView(views: resetViews)
         resetSection.orientation = .vertical
         resetSection.alignment = .leading
@@ -656,9 +635,11 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         title: String,
         detail: String,
         compactDetailLines: [String]? = nil,
+        detailAction: Selector? = nil,
         granted: Bool,
         statusLabels: (granted: String, denied: String),
         actions: [(String, Selector)],
+        actionsEnabled: Bool = true,
         minimumHeight: CGFloat = 68
     ) -> NSView {
         let symbol = NSImageView()
@@ -676,20 +657,33 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         name.font = .systemFont(ofSize: 14, weight: .semibold)
         name.identifier = NSUserInterfaceItemIdentifier("permission-title-\(symbolName)")
 
-        let explanations: [NSTextField]
+        var explanations: [NSView] = []
         if let compactDetailLines {
-            explanations = compactDetailLines.enumerated().map { index, line in
-                let explanation = NSTextField(labelWithString: line)
-                explanation.font = .systemFont(ofSize: 12)
-                explanation.textColor = .secondaryLabelColor
-                explanation.maximumNumberOfLines = 1
-                explanation.lineBreakMode = .byTruncatingMiddle
-                explanation.toolTip = line
-                explanation.identifier = NSUserInterfaceItemIdentifier(
-                    "permission-detail-\(symbolName)-\(index)"
-                )
-                return explanation
+            for (index, line) in compactDetailLines.enumerated() {
+                let identifier = "permission-detail-\(symbolName)-\(index)"
+                if index == 0, let detailAction {
+                    explanations.append(
+                        clickableDetailField(line, action: detailAction, identifier: identifier)
+                    )
+                } else {
+                    let explanation = NSTextField(labelWithString: line)
+                    explanation.font = .systemFont(ofSize: 12)
+                    explanation.textColor = .secondaryLabelColor
+                    explanation.maximumNumberOfLines = 1
+                    explanation.lineBreakMode = .byTruncatingMiddle
+                    explanation.toolTip = line
+                    explanation.identifier = NSUserInterfaceItemIdentifier(identifier)
+                    explanations.append(explanation)
+                }
             }
+        } else if let detailAction {
+            explanations = [
+                clickableDetailField(
+                    detail,
+                    action: detailAction,
+                    identifier: "permission-detail-\(symbolName)"
+                ),
+            ]
         } else {
             let explanation = NSTextField(wrappingLabelWithString: detail)
             explanation.font = .systemFont(ofSize: 12)
@@ -734,7 +728,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             let (actionTitle, action) = actionDescription
             let button = PermissionActionButton(title: actionTitle, target: self, action: action)
             button.controlSize = .regular
-            button.isEnabled = !microphoneRequestInFlight && !launchInProgress && !resetInProgress
+            button.isEnabled = actionsEnabled && !microphoneRequestInFlight && !launchInProgress && !resetInProgress
             let identifier = actions.count == 1
                 ? "permission-action-\(symbolName)"
                 : "permission-action-\(symbolName)-\(index)"
@@ -793,6 +787,30 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
         labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return row
+    }
+
+    private func clickableDetailField(
+        _ text: String,
+        action: Selector,
+        identifier: String
+    ) -> NSView {
+        let button = PointingHandButton(title: text, target: self, action: action)
+        button.isBordered = false
+        button.alignment = .left
+        button.setAccessibilityLabel("Open in Finder")
+        button.setAccessibilityValue(text)
+        button.attributedTitle = NSAttributedString(
+            string: text,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 12),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        )
+        button.toolTip = text
+        button.identifier = NSUserInterfaceItemIdentifier(identifier)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.heightAnchor.constraint(greaterThanOrEqualToConstant: 16).isActive = true
+        return button
     }
 
     private func separator() -> NSView {
@@ -936,19 +954,6 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
 
     @objc private func resetOmarchy() {
         confirmReset()
-    }
-
-    private func storageActionButton(
-        title: String,
-        action: Selector,
-        identifier: String
-    ) -> NSButton {
-        let button = NSButton(title: title, target: self, action: action)
-        button.bezelStyle = .rounded
-        button.controlSize = .small
-        button.isEnabled = canResetStorage && !launchInProgress && !resetInProgress
-        button.identifier = NSUserInterfaceItemIdentifier(identifier)
-        return button
     }
 
     @objc private func beginStorageLocationSelection() {
