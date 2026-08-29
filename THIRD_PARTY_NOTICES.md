@@ -11,6 +11,11 @@ code.
   build.
 - **Arch Linux ARM packages** — each package retains its own license. The
   generated package transaction is recorded in `packages.lock.txt`.
+- **Hyprland** — BSD-3-Clause; the reviewed v0.56.1 source and rounded-border
+  coverage backport are pinned in `guest/spec.json`. The guest package retains
+  Hyprland's upstream license and dependency metadata.
+- **Glaze** — MIT; the pinned v7.2.0 headers are used by the Hyprland build, and
+  their verified upstream license is retained in the rebuilt guest package.
 - **ANGLE, VirGLRenderer, libepoxy, SDL, libslirp, GLib, Pixman, and other QEMU
   dependencies** — retain their respective upstream licenses.
 - **mise** — MIT; the reviewed ARM64 release is pinned in `guest/spec.json`.

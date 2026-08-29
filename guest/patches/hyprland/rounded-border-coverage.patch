@@ -1,0 +1,455 @@
+diff --git a/src/render/ElementRenderer.cpp b/src/render/ElementRenderer.cpp
+index 50b5a79..c6daecf 100644
+--- a/src/render/ElementRenderer.cpp
++++ b/src/render/ElementRenderer.cpp
+@@ -285,14 +285,24 @@ void IElementRenderer::drawSurface(WP<CSurfacePassElement> element, const CRegio
+     float rounding      = m_data.rounding;
+     float roundingPower = m_data.roundingPower;
+ 
+-    rounding -= 1; // to fix a border issue
++    const bool WINDOWOPAQUE = m_data.pWindow && m_data.pWindow->wlSurface()->resource() == m_data.surface ? m_data.pWindow->opaque() : false;
++
++    const auto SCALED_BORDER_SIZE = m_data.pWindow ? std::round(m_data.pWindow->getRealBorderSize() * m_data.pMonitor->m_scale) : 0;
++    const auto RENDERED_BORDER_SIZE = std::round(SCALED_BORDER_SIZE * m_renderData.renderModif.combinedScale());
++
++    // Surface and border are separate source-over passes. Extend an opaque main surface's AA under
++    // a thick border's inner edge. It ends before the outer edge, including for translucent borders.
++    const bool ROUNDING_OVERLAPS_BORDER = m_data.mainSurface && !m_data.popup && m_data.decorate && RENDERED_BORDER_SIZE >= 3 && WINDOWOPAQUE &&
++        TEXTURE->m_type != TEXTURE_EXTERNAL && ALPHA >= 1.F && OVERALL_ALPHA >= 1.F;
++
++    if (!ROUNDING_OVERLAPS_BORDER)
++        rounding -= 1;
+ 
+     if (m_data.dontRound) {
+         rounding      = 0;
+         roundingPower = 2.0f;
+     }
+ 
+-    const bool WINDOWOPAQUE    = m_data.pWindow && m_data.pWindow->wlSurface()->resource() == m_data.surface ? m_data.pWindow->opaque() : false;
+     const bool CANDISABLEBLEND = ALPHA >= 1.f && OVERALL_ALPHA >= 1.f && rounding <= 0 && WINDOWOPAQUE;
+ 
+     if (CANDISABLEBLEND)
+@@ -306,81 +316,85 @@ void IElementRenderer::drawSurface(WP<CSurfacePassElement> element, const CRegio
+     if (m_data.surfaceCounter == 0 && !m_data.popup) {
+         if (BLUR)
+             drawElement(makeShared<CTexPassElement>(CTexPassElement::SRenderData{
+-                            .tex                   = TEXTURE,
+-                            .box                   = windowBox,
+-                            .a                     = ALPHA,
+-                            .blurA                 = m_data.fadeAlpha,
+-                            .overallA              = OVERALL_ALPHA,
+-                            .round                 = rounding,
+-                            .roundingPower         = roundingPower,
+-                            .blur                  = true,
+-                            .blockBlurOptimization = m_data.blockBlurOptimization,
+-                            .allowCustomUV         = true,
+-                            .surface               = m_data.surface,
+-                            .wrapX                 = m_data.wrapX,
+-                            .wrapY                 = m_data.wrapY,
+-                            .discardMode           = m_data.discardMode,
+-                            .discardOpacity        = m_data.discardOpacity,
+-                            .clipRegion            = clipRegion,
+-                            .currentLS             = m_data.pLS,
++                            .tex                    = TEXTURE,
++                            .box                    = windowBox,
++                            .a                      = ALPHA,
++                            .blurA                  = m_data.fadeAlpha,
++                            .overallA               = OVERALL_ALPHA,
++                            .round                  = rounding,
++                            .roundingPower          = roundingPower,
++                            .roundingOverlapsBorder = ROUNDING_OVERLAPS_BORDER,
++                            .blur                   = true,
++                            .blockBlurOptimization  = m_data.blockBlurOptimization,
++                            .allowCustomUV          = true,
++                            .surface                = m_data.surface,
++                            .wrapX                  = m_data.wrapX,
++                            .wrapY                  = m_data.wrapY,
++                            .discardMode            = m_data.discardMode,
++                            .discardOpacity         = m_data.discardOpacity,
++                            .clipRegion             = clipRegion,
++                            .currentLS              = m_data.pLS,
+                         }),
+                         m_renderData.damage.copy().intersect(windowBox));
+         else
+             drawElement(makeShared<CTexPassElement>(CTexPassElement::SRenderData{
+-                            .tex            = TEXTURE,
+-                            .box            = windowBox,
+-                            .a              = ALPHA * OVERALL_ALPHA,
+-                            .round          = rounding,
+-                            .roundingPower  = roundingPower,
+-                            .discardActive  = false,
+-                            .allowCustomUV  = true,
+-                            .surface        = m_data.surface,
+-                            .wrapX          = m_data.wrapX,
+-                            .wrapY          = m_data.wrapY,
+-                            .discardMode    = m_data.discardMode,
+-                            .discardOpacity = m_data.discardOpacity,
+-                            .clipRegion     = clipRegion,
+-                            .currentLS      = m_data.pLS,
++                            .tex                    = TEXTURE,
++                            .box                    = windowBox,
++                            .a                      = ALPHA * OVERALL_ALPHA,
++                            .round                  = rounding,
++                            .roundingPower          = roundingPower,
++                            .roundingOverlapsBorder = ROUNDING_OVERLAPS_BORDER,
++                            .discardActive          = false,
++                            .allowCustomUV          = true,
++                            .surface                = m_data.surface,
++                            .wrapX                  = m_data.wrapX,
++                            .wrapY                  = m_data.wrapY,
++                            .discardMode            = m_data.discardMode,
++                            .discardOpacity         = m_data.discardOpacity,
++                            .clipRegion             = clipRegion,
++                            .currentLS              = m_data.pLS,
+                         }),
+                         m_renderData.damage.copy().intersect(windowBox));
+     } else {
+         if (BLUR && m_data.popup)
+             drawElement(makeShared<CTexPassElement>(CTexPassElement::SRenderData{
+-                            .tex                   = TEXTURE,
+-                            .box                   = windowBox,
+-                            .a                     = ALPHA,
+-                            .blurA                 = m_data.fadeAlpha,
+-                            .overallA              = OVERALL_ALPHA,
+-                            .round                 = rounding,
+-                            .roundingPower         = roundingPower,
+-                            .blur                  = true,
+-                            .blockBlurOptimization = true,
+-                            .allowCustomUV         = true,
+-                            .surface               = m_data.surface,
+-                            .wrapX                 = m_data.wrapX,
+-                            .wrapY                 = m_data.wrapY,
+-                            .discardMode           = m_data.discardMode,
+-                            .discardOpacity        = m_data.discardOpacity,
+-                            .clipRegion            = clipRegion,
+-                            .currentLS             = m_data.pLS,
++                            .tex                    = TEXTURE,
++                            .box                    = windowBox,
++                            .a                      = ALPHA,
++                            .blurA                  = m_data.fadeAlpha,
++                            .overallA               = OVERALL_ALPHA,
++                            .round                  = rounding,
++                            .roundingPower          = roundingPower,
++                            .roundingOverlapsBorder = ROUNDING_OVERLAPS_BORDER,
++                            .blur                   = true,
++                            .blockBlurOptimization  = true,
++                            .allowCustomUV          = true,
++                            .surface                = m_data.surface,
++                            .wrapX                  = m_data.wrapX,
++                            .wrapY                  = m_data.wrapY,
++                            .discardMode            = m_data.discardMode,
++                            .discardOpacity         = m_data.discardOpacity,
++                            .clipRegion             = clipRegion,
++                            .currentLS              = m_data.pLS,
+                         }),
+                         m_renderData.damage.copy().intersect(windowBox));
+         else
+             drawElement(makeShared<CTexPassElement>(CTexPassElement::SRenderData{
+-                            .tex            = TEXTURE,
+-                            .box            = windowBox,
+-                            .a              = ALPHA * OVERALL_ALPHA,
+-                            .round          = rounding,
+-                            .roundingPower  = roundingPower,
+-                            .discardActive  = false,
+-                            .allowCustomUV  = true,
+-                            .surface        = m_data.surface,
+-                            .wrapX          = m_data.wrapX,
+-                            .wrapY          = m_data.wrapY,
+-                            .discardMode    = m_data.discardMode,
+-                            .discardOpacity = m_data.discardOpacity,
+-                            .clipRegion     = clipRegion,
+-                            .currentLS      = m_data.pLS,
++                            .tex                    = TEXTURE,
++                            .box                    = windowBox,
++                            .a                      = ALPHA * OVERALL_ALPHA,
++                            .round                  = rounding,
++                            .roundingPower          = roundingPower,
++                            .roundingOverlapsBorder = ROUNDING_OVERLAPS_BORDER,
++                            .discardActive          = false,
++                            .allowCustomUV          = true,
++                            .surface                = m_data.surface,
++                            .wrapX                  = m_data.wrapX,
++                            .wrapY                  = m_data.wrapY,
++                            .discardMode            = m_data.discardMode,
++                            .discardOpacity         = m_data.discardOpacity,
++                            .clipRegion             = clipRegion,
++                            .currentLS              = m_data.pLS,
+                         }),
+                         m_renderData.damage.copy().intersect(windowBox));
+     }
+diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
+index 29e0d76..f04b55c 100644
+--- a/src/render/OpenGL.cpp
++++ b/src/render/OpenGL.cpp
+@@ -1447,6 +1447,7 @@ WP<CShader> CHyprOpenGLImpl::renderToFBInternal(SP<ITexture> tex, const STexture
+     shader->setUniformFloat2(SHADER_FULL_SIZE, FULLSIZE.x, FULLSIZE.y);
+     shader->setUniformFloat(SHADER_RADIUS, data.round);
+     shader->setUniformFloat(SHADER_ROUNDING_POWER, data.roundingPower);
++    shader->setUniformInt(SHADER_ROUNDING_OVERLAPS_BORDER, data.roundingOverlapsBorder);
+ 
+     if (data.motionBlur.enabled) {
+         CBox motionPrev   = data.motionBlur.previous;
+@@ -2032,6 +2033,7 @@ void CHyprOpenGLImpl::renderTextureWithBlurInternal(SP<ITexture> tex, const CBox
+                               .a                           = data.a,
+                               .round                       = data.round,
+                               .roundingPower               = data.roundingPower,
++                              .roundingOverlapsBorder      = data.roundingOverlapsBorder,
+                               .discardActive               = true,
+                               .allowCustomUV               = true,
+                               .wrapX                       = data.wrapX,
+@@ -2084,19 +2086,20 @@ void CHyprOpenGLImpl::renderTextureWithBlurInternal(SP<ITexture> tex, const CBox
+ 
+         renderTextureInternal(data.blurredBG, box,
+                               STextureRenderData{
+-                                  .damage         = data.damage,
+-                                  .a              = (*PBLURIGNOREOPACITY ? data.blurA : data.a * data.blurA) * data.overallA,
+-                                  .round          = data.round,
+-                                  .roundingPower  = data.roundingPower,
+-                                  .discardActive  = false,
+-                                  .allowCustomUV  = true,
+-                                  .noAA           = false,
+-                                  .wrapX          = data.wrapX,
+-                                  .wrapY          = data.wrapY,
+-                                  .discardMode    = data.discardMode,
+-                                  .discardOpacity = data.discardOpacity,
+-                                  .clipRegion     = blurClipRegion,
+-                                  .currentLS      = data.currentLS,
++                                  .damage                 = data.damage,
++                                  .a                      = (*PBLURIGNOREOPACITY ? data.blurA : data.a * data.blurA) * data.overallA,
++                                  .round                  = data.round,
++                                  .roundingPower          = data.roundingPower,
++                                  .roundingOverlapsBorder = data.roundingOverlapsBorder,
++                                  .discardActive          = false,
++                                  .allowCustomUV          = true,
++                                  .noAA                   = false,
++                                  .wrapX                  = data.wrapX,
++                                  .wrapY                  = data.wrapY,
++                                  .discardMode            = data.discardMode,
++                                  .discardOpacity         = data.discardOpacity,
++                                  .clipRegion             = blurClipRegion,
++                                  .currentLS              = data.currentLS,
+ 
+                                   .primarySurfaceUVTopLeft     = monitorSpaceBox.pos() / m_renderData.pMonitor->m_transformedSize,
+                                   .primarySurfaceUVBottomRight = (monitorSpaceBox.pos() + monitorSpaceBox.size()) / m_renderData.pMonitor->m_transformedSize,
+@@ -2112,23 +2115,24 @@ void CHyprOpenGLImpl::renderTextureWithBlurInternal(SP<ITexture> tex, const CBox
+     // draw window
+     renderTextureInternal(tex, box,
+                           STextureRenderData{
+-                              .blur           = *PBLEND,
+-                              .blurredBG      = data.blurredBG,
+-                              .blurAlphaMatte = data.blurAlphaMatte,
+-                              .damage         = data.damage,
+-                              .a              = data.a * data.overallA,
+-                              .round          = data.round,
+-                              .roundingPower  = data.roundingPower,
+-                              .discardActive  = *PBLEND && NEEDS_STENCIL,
+-                              .allowCustomUV  = true,
+-                              .allowDim       = true,
+-                              .noAA           = false,
+-                              .wrapX          = data.wrapX,
+-                              .wrapY          = data.wrapY,
+-                              .discardMode    = data.discardMode,
+-                              .discardOpacity = data.discardOpacity,
+-                              .clipRegion     = data.clipRegion,
+-                              .currentLS      = data.currentLS,
++                              .blur                   = *PBLEND,
++                              .blurredBG              = data.blurredBG,
++                              .blurAlphaMatte         = data.blurAlphaMatte,
++                              .damage                 = data.damage,
++                              .a                      = data.a * data.overallA,
++                              .round                  = data.round,
++                              .roundingPower          = data.roundingPower,
++                              .roundingOverlapsBorder = data.roundingOverlapsBorder,
++                              .discardActive          = *PBLEND && NEEDS_STENCIL,
++                              .allowCustomUV          = true,
++                              .allowDim               = true,
++                              .noAA                   = false,
++                              .wrapX                  = data.wrapX,
++                              .wrapY                  = data.wrapY,
++                              .discardMode            = data.discardMode,
++                              .discardOpacity         = data.discardOpacity,
++                              .clipRegion             = data.clipRegion,
++                              .currentLS              = data.currentLS,
+ 
+                               .primarySurfaceUVTopLeft     = g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft,
+                               .primarySurfaceUVBottomRight = g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight,
+diff --git a/src/render/OpenGL.hpp b/src/render/OpenGL.hpp
+index fc0e345..0e80e55 100644
+--- a/src/render/OpenGL.hpp
++++ b/src/render/OpenGL.hpp
+@@ -164,15 +164,16 @@ namespace Render::GL {
+             SP<ITexture>           blurredBG;
+             SP<ITexture>           blurAlphaMatte;
+ 
+-            const CRegion*         damage        = nullptr;
+-            SP<CWLSurfaceResource> surface       = nullptr;
+-            float                  a             = 1.F;
+-            int                    round         = 0;
+-            float                  roundingPower = 2.F;
+-            bool                   discardActive = false;
+-            bool                   allowCustomUV = false;
+-            bool                   allowDim      = true;
+-            bool                   noAA          = false; // unused
++            const CRegion*         damage                 = nullptr;
++            SP<CWLSurfaceResource> surface                = nullptr;
++            float                  a                      = 1.F;
++            int                    round                  = 0;
++            float                  roundingPower          = 2.F;
++            bool                   roundingOverlapsBorder = false;
++            bool                   discardActive          = false;
++            bool                   allowCustomUV          = false;
++            bool                   allowDim               = true;
++            bool                   noAA                   = false; // unused
+             uint8_t                wrapX = WRAP_CLAMP_TO_EDGE, wrapY = WRAP_CLAMP_TO_EDGE;
+             bool                   cmBackToSRGB   = false;
+             bool                   finalMonitorCM = false;
+diff --git a/src/render/Shader.cpp b/src/render/Shader.cpp
+index ab15ca8..9613b78 100644
+--- a/src/render/Shader.cpp
++++ b/src/render/Shader.cpp
+@@ -187,6 +187,7 @@ void CShader::getUniformLocations() {
+     m_uniformLocations[SHADER_RADIUS]                    = getUniform("radius");
+     m_uniformLocations[SHADER_RADIUS_OUTER]              = getUniform("radiusOuter");
+     m_uniformLocations[SHADER_ROUNDING_POWER]            = getUniform("roundingPower");
++    m_uniformLocations[SHADER_ROUNDING_OVERLAPS_BORDER]  = getUniform("roundingOverlapsBorder");
+     m_uniformLocations[SHADER_THICK]                     = getUniform("thick");
+     m_uniformLocations[SHADER_HALFPIXEL]                 = getUniform("halfpixel");
+     m_uniformLocations[SHADER_RANGE]                     = getUniform("range");
+diff --git a/src/render/Shader.hpp b/src/render/Shader.hpp
+index 5b1de39..8997167 100644
+--- a/src/render/Shader.hpp
++++ b/src/render/Shader.hpp
+@@ -41,6 +41,7 @@ enum eShaderUniform : uint8_t {
+     SHADER_RADIUS,
+     SHADER_RADIUS_OUTER,
+     SHADER_ROUNDING_POWER,
++    SHADER_ROUNDING_OVERLAPS_BORDER,
+     SHADER_THICK,
+     SHADER_HALFPIXEL,
+     SHADER_RANGE,
+diff --git a/src/render/gl/GLElementRenderer.cpp b/src/render/gl/GLElementRenderer.cpp
+index a92391d..d49ad45 100644
+--- a/src/render/gl/GLElementRenderer.cpp
++++ b/src/render/gl/GLElementRenderer.cpp
+@@ -116,20 +116,21 @@ void CGLElementRenderer::draw(WP<CTexPassElement> element, const CRegion& damage
+             .blurAlphaMatte        = m_data.blurAlphaMatte,
+ 
+             // common settings
+-            .damage         = m_data.damage.empty() ? &damage : &m_data.damage,
+-            .surface        = m_data.surface,
+-            .a              = m_data.a,
+-            .round          = m_data.round,
+-            .roundingPower  = m_data.roundingPower,
+-            .discardActive  = m_data.discardActive,
+-            .allowCustomUV  = m_data.allowCustomUV,
+-            .wrapX          = m_data.wrapX,
+-            .wrapY          = m_data.wrapY,
+-            .cmBackToSRGB   = m_data.cmBackToSRGB,
+-            .discardMode    = m_data.ignoreAlpha.has_value() ? sc<uint32_t>(DISCARD_ALPHA) : m_data.discardMode,
+-            .discardOpacity = m_data.ignoreAlpha.has_value() ? *m_data.ignoreAlpha : m_data.discardOpacity,
+-            .clipRegion     = m_data.clipRegion,
+-            .currentLS      = m_data.currentLS,
++            .damage                 = m_data.damage.empty() ? &damage : &m_data.damage,
++            .surface                = m_data.surface,
++            .a                      = m_data.a,
++            .round                  = m_data.round,
++            .roundingPower          = m_data.roundingPower,
++            .roundingOverlapsBorder = m_data.roundingOverlapsBorder,
++            .discardActive          = m_data.discardActive,
++            .allowCustomUV          = m_data.allowCustomUV,
++            .wrapX                  = m_data.wrapX,
++            .wrapY                  = m_data.wrapY,
++            .cmBackToSRGB           = m_data.cmBackToSRGB,
++            .discardMode            = m_data.ignoreAlpha.has_value() ? sc<uint32_t>(DISCARD_ALPHA) : m_data.discardMode,
++            .discardOpacity         = m_data.ignoreAlpha.has_value() ? *m_data.ignoreAlpha : m_data.discardOpacity,
++            .clipRegion             = m_data.clipRegion,
++            .currentLS              = m_data.currentLS,
+ 
+             .primarySurfaceUVTopLeft     = g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft,
+             .primarySurfaceUVBottomRight = g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight,
+diff --git a/src/render/pass/TexPassElement.hpp b/src/render/pass/TexPassElement.hpp
+index 30a264c..ad9b079 100644
+--- a/src/render/pass/TexPassElement.hpp
++++ b/src/render/pass/TexPassElement.hpp
+@@ -38,10 +38,11 @@ class CTexPassElement : public IPassElement {
+         float                  blurA    = 1.F;
+         float                  overallA = 1.F;
+         CRegion                damage;
+-        int                    round               = 0;
+-        float                  roundingPower       = 2.0f;
+-        bool                   flipEndFrame        = false;
+-        bool                   useMirrorProjection = false;
++        int                    round                  = 0;
++        float                  roundingPower          = 2.0f;
++        bool                   roundingOverlapsBorder = false;
++        bool                   flipEndFrame           = false;
++        bool                   useMirrorProjection    = false;
+         CBox                   clipBox;
+         bool                   blur           = false;
+         bool                   forceBlurBlend = false;
+diff --git a/src/render/shaders/glsl/rounding.glsl b/src/render/shaders/glsl/rounding.glsl
+index 64c6bcb..aa069d9 100644
+--- a/src/render/shaders/glsl/rounding.glsl
++++ b/src/render/shaders/glsl/rounding.glsl
+@@ -8,7 +8,7 @@ float distanceWithRounding(vec2 coords, float roundingPower) {
+     return pow(pow(coords.x, roundingPower) + pow(coords.y, roundingPower), 1.0 / roundingPower);
+ }
+ 
+-vec4 rounding(vec4 color, float radius, float roundingPower, vec2 topLeft, vec2 fullSize) {
++vec4 roundingWithEdgeBias(vec4 color, float radius, float roundingPower, vec2 topLeft, vec2 fullSize, float edgeBias) {
+     vec2 pixCoord = vec2(gl_FragCoord);
+     pixCoord -= topLeft + fullSize * 0.5;
+     pixCoord *= vec2(lessThan(pixCoord, vec2(0.0))) * -2.0 + 1.0;
+@@ -18,14 +18,18 @@ vec4 rounding(vec4 color, float radius, float roundingPower, vec2 topLeft, vec2
+     if (pixCoord.x + pixCoord.y > radius) {
+         float dist = distanceWithRounding(pixCoord, roundingPower);
+ 
+-        if (dist > radius + SMOOTHING_CONSTANT)
++        if (dist > radius + edgeBias + SMOOTHING_CONSTANT)
+             discard;
+ 
+-        float normalized = 1.0 - smoothstep(0.0, 1.0, (dist - radius + SMOOTHING_CONSTANT) / (SMOOTHING_CONSTANT * 2.0));
++        float normalized = 1.0 - smoothstep(0.0, 1.0, (dist - radius - edgeBias + SMOOTHING_CONSTANT) / (SMOOTHING_CONSTANT * 2.0));
+ 
+         color *= normalized;
+     }
+ 
+     return color;
+ }
++
++vec4 rounding(vec4 color, float radius, float roundingPower, vec2 topLeft, vec2 fullSize) {
++    return roundingWithEdgeBias(color, radius, roundingPower, topLeft, fullSize, 0.0);
++}
+ #endif
+\ No newline at end of file
+diff --git a/src/render/shaders/glsl/surface.frag b/src/render/shaders/glsl/surface.frag
+index db7b8a9..8095186 100644
+--- a/src/render/shaders/glsl/surface.frag
++++ b/src/render/shaders/glsl/surface.frag
+@@ -34,6 +34,7 @@ uniform float radius;
+ uniform float roundingPower;
+ uniform vec2  topLeft;
+ uniform vec2  fullSize;
++uniform bool  roundingOverlapsBorder;
+ #include "rounding.glsl"
+ #else
+ const float radius        = 0.0;
+@@ -131,7 +132,8 @@ void main() {
+ #endif
+ 
+ #if USE_ROUNDING && !USE_MOTION_BLUR
+-    pixColor = rounding(pixColor, radius, roundingPower, topLeft, fullSize);
++    float roundingEdgeBias = roundingOverlapsBorder ? SMOOTHING_CONSTANT * 2.0 : 0.0;
++    pixColor = roundingWithEdgeBias(pixColor, radius, roundingPower, topLeft, fullSize, roundingEdgeBias);
+ #endif
+ #if !USE_CM
+     pixColor *= alpha;
+@@ -166,7 +168,7 @@ void main() {
+ #endif
+ 
+ #if USE_ROUNDING && !USE_MOTION_BLUR
+-    mirrorColor = rounding(mirrorColor, radius, roundingPower, topLeft, fullSize);
++    mirrorColor = roundingWithEdgeBias(mirrorColor, radius, roundingPower, topLeft, fullSize, roundingEdgeBias);
+ #endif
+ #if !USE_CM
+     mirrorColor *= alpha;

@@ -460,6 +460,7 @@ if (
 supply_chain_keys = {
     "archLinuxArmPackagesCommit",
     "archLinuxArmPackagesRepository",
+    "hyprland",
     "mise",
     "omarchyPackagesCommit",
     "omarchyPackagesRepository",
@@ -474,6 +475,55 @@ if (
     or supply_chain.get("archLinuxArmPackagesCommit") != "0b5418fc3f62860b191cd872cb2f933f9fc77841"
 ):
     fail("ARM package supply chain is not pinned")
+hyprland = exact_keys(
+    supply_chain.get("hyprland"),
+    {
+        "binarySha256",
+        "buildPackages",
+        "commit",
+        "glazeCommit",
+        "glazeLicenseSha256",
+        "glazeSha256",
+        "glazeUrl",
+        "glazeVersion",
+        "issue",
+        "license",
+        "patch",
+        "patchSha256",
+        "pkgrel",
+        "repository",
+        "sha256",
+        "upstreamPackageSha256",
+        "upstreamPackageVersion",
+        "url",
+        "version",
+    },
+    "build spec hyprland component",
+)
+exact_keys(
+    hyprland.get("buildPackages"),
+    {
+        "base-devel",
+        "binutils",
+        "cmake",
+        "gcc",
+        "gcc-libs",
+        "glibc",
+        "hyprland",
+        "hyprland-protocols",
+        "make",
+        "meson",
+        "ninja",
+        "pkgconf",
+        "xorgproto",
+    },
+    "build spec hyprland build packages",
+)
+hyprland_identity = hashlib.sha256(
+    json.dumps(hyprland, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+if hyprland_identity != "4fef14771061922597f6f51b05ec18fa9fd2bdacb05428c4925d46410f2d443f":
+    fail("factory Hyprland component is not the reviewed rounded-border build")
 mise = exact_keys(
     supply_chain.get("mise"),
     {"binarySha256", "license", "reportedVersion", "sha256", "url", "version"},

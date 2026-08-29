@@ -117,8 +117,8 @@ def main() -> None:
         "factory pacman retains the ARM Omarchy keyring repository",
     )
     check(
-        "IgnorePkg = linux-aarch64" in pacman_conf,
-        "factory pacman holds the QEMU-booted kernel",
+        "IgnorePkg = linux-aarch64 hyprland" in pacman_conf,
+        "factory pacman holds the QEMU-booted kernel and patched compositor",
     )
     arm_mirrorlist = read(GUEST / "mirrorlist.aarch64")
     check(
@@ -195,6 +195,81 @@ def main() -> None:
         },
         "official ttfx ARM64 source build and package recipe are fully pinned",
     )
+    hyprland = spec.get("supplyChain", {}).get("hyprland", {})
+    check(
+        hyprland
+        == {
+            "version": "0.56.1",
+            "pkgrel": "3.1",
+            "upstreamPackageVersion": "0.56.1-3",
+            "repository": "https://github.com/hyprwm/Hyprland",
+            "commit": "5c9377c15f85c50648f35ca5a213754f95b93ca0",
+            "url": "https://github.com/hyprwm/Hyprland/releases/download/v0.56.1/source-v0.56.1.tar.gz",
+            "sha256": "c5b26eb377360358d01839a1de43fdc004a33e56d6a5d442fdad69b9f3a10549",
+            "upstreamPackageSha256": "4fcb1b5efe019e184a85b234f75151e68fd8f60ace9b06ff59e7ffbd8a280f7a",
+            "patch": "patches/hyprland/rounded-border-coverage.patch",
+            "patchSha256": "0edaf034b16849e4364d2a6524319416c65e811d96b7bf5ea17d3d0e2ae9c472",
+            "glazeVersion": "7.2.0",
+            "glazeCommit": "b518eec7a22e56ffa238b072c07f47efa7cea97f",
+            "glazeUrl": "https://github.com/stephenberry/glaze/archive/refs/tags/v7.2.0.tar.gz",
+            "glazeSha256": "17dba19ae63ae48f94994f00d49d5cb3c8f1306db1046c534c4828662490b7d4",
+            "glazeLicenseSha256": "5d49e66411a0807a7c8d6b911b9a26b59e940c71aebe561a3ad8b0b80ac4b7b6",
+            "binarySha256": "dace45cd963209dcd6560c333b9fdd23624c635e88811caa147a3b0d384dc6a8",
+            "license": "BSD-3-Clause",
+            "issue": "https://github.com/themartiano/try-omarchy/issues/5",
+            "buildPackages": {
+                "base-devel": "1-2",
+                "binutils": "2.46+r70+g155188ea10a7-1",
+                "cmake": "4.4.2-1",
+                "gcc": "16.1.1+r12+g301eb08fa2c5-1",
+                "gcc-libs": "16.1.1+r12+g301eb08fa2c5-1",
+                "glibc": "2.43+r22+g8362e8ce10b2-2",
+                "hyprland": "0.56.1-3",
+                "hyprland-protocols": "0.7.0-1",
+                "make": "4.4.1-3",
+                "meson": "1.12.0-1",
+                "ninja": "1.13.2-3",
+                "pkgconf": "3.0.5-1",
+                "xorgproto": "2025.1-1",
+            },
+        }
+        and packages.get("hyprland") == hyprland["upstreamPackageVersion"],
+        "rounded-border Hyprland source, toolchain, and upstream package are fully pinned",
+    )
+    hyprland_patch = GUEST / hyprland["patch"]
+    check(
+        hyprland_patch.is_file()
+        and hashlib.sha256(hyprland_patch.read_bytes()).hexdigest() == hyprland["patchSha256"],
+        "rounded-border Hyprland patch digest matches the build spec",
+    )
+    launcher = read(REPO / "macos/run-qemu-gpu.sh")
+    hyprland_identity = hashlib.sha256(
+        json.dumps(
+            hyprland,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    check(
+        'supply_chain.get("hyprland")' in launcher
+        and '"build spec hyprland component"' in launcher
+        and '"build spec hyprland build packages"' in launcher
+        and hyprland_identity in launcher,
+        "native launcher accepts and pins the patched Hyprland component",
+    )
+    hyprland_patch_text = read(hyprland_patch)
+    check(
+        "roundingWithEdgeBias" in hyprland_patch_text
+        and "SMOOTHING_CONSTANT * 2.0" in hyprland_patch_text
+        and "RENDERED_BORDER_SIZE >= 3 && WINDOWOPAQUE &&" in hyprland_patch_text
+        and "m_data.mainSurface" in hyprland_patch_text
+        and "including for translucent borders" in hyprland_patch_text
+        and "BORDEROPAQUE" not in hyprland_patch_text
+        and "+    if (!ROUNDING_OVERLAPS_BORDER)" in hyprland_patch_text
+        and "-    rounding -= 1; // to fix a border issue" in hyprland_patch_text,
+        "Hyprland backport guards the two-pass rounded-border coverage overlap",
+    )
 
     container = read(GUEST / "build-container.sh")
     check("linux/arm64" in container and '"$guest_dir/Containerfile"' in container, "container builder targets ARM64")
@@ -261,17 +336,21 @@ def main() -> None:
     )
     local_repository = read(GUEST / "scripts/register-local-repository.sh")
     check(
-        'install -m 0644 "$root/etc/pacman.conf" "$root/usr/share/try-omarchy/pacman.conf"'
+        'install -m 0644 "$pacman_conf" "$root/usr/share/try-omarchy/pacman.conf"'
         in local_repository
         and 'install -m 0644 "$root/etc/pacman.d/mirrorlist" "$root/usr/share/try-omarchy/mirrorlist"'
         in local_repository,
         "pacman recovery files snapshot the final local-repository configuration",
     )
     check(
-        "expected_archive_count=4" in local_repository
+        "expected_archive_count=5" in local_repository
         and "factory repository is missing pinned ttfx" in local_repository
-        and "factory repository is missing pinned yay" in local_repository,
-        "immutable local repository requires the pinned ttfx and yay packages",
+        and "factory repository is missing pinned yay" in local_repository
+        and "factory repository is missing patched Hyprland" in local_repository
+        and "immutable local repository does not have priority" in local_repository
+        and "resolves the patched Hyprland package locally" in local_repository
+        and "refusing canonical unsafe root" in local_repository,
+        "immutable local repository requires and prioritizes the patched Hyprland",
     )
     shared_folder = spec["runtime"]["sharedFolder"]
     check(
@@ -366,6 +445,28 @@ def main() -> None:
         and 'arch-chroot "$root" /usr/bin/ttfx --version' in register_ttfx,
         "guest builds and packages verified ttfx before sealing its local repository",
     )
+    register_hyprland = read(GUEST / "scripts/register-patched-hyprland.sh")
+    check(
+        "register-patched-hyprland.sh" in build
+        and build.index("register-patched-hyprland.sh")
+        < build.index("register-local-repository.sh")
+        and "Hyprland source archive has an unsafe member set" in register_hyprland
+        and "Hyprland patch digest mismatch" in register_hyprland
+        and "git apply --check" in register_hyprland
+        and "FETCHCONTENT_SOURCE_DIR_GLAZE" in register_hyprland
+        and "reproducible binary digest mismatch" in register_hyprland
+        and "upstream package digest mismatch" in register_hyprland
+        and "installed Hyprland binary digest mismatch" in register_hyprland
+        and "could not generate patched Hyprland mtree" in register_hyprland
+        and "pacman -Qkk" in register_hyprland
+        and "Glaze license digest mismatch" in register_hyprland
+        and "LICENSE.glaze" in register_hyprland
+        and "build_package_records[@]} == 13" in register_hyprland
+        and "builder_pacman_config" in register_hyprland
+        and "could not derive the Hyprland builder pacman configuration" in register_hyprland
+        and "refusing canonical unsafe root" in register_hyprland,
+        "guest builds and packages the verified Hyprland rounded-border backport",
+    )
     third_party_notices = read(REPO / "THIRD_PARTY_NOTICES.md")
     check(
         "**yay**" in third_party_notices and "GPL-3.0-or-later" in third_party_notices,
@@ -376,6 +477,14 @@ def main() -> None:
         and "TerminalTextEffects" in third_party_notices
         and "MIT" in third_party_notices,
         "third-party notices cover ttfx and its TerminalTextEffects attribution",
+    )
+    check(
+        "**Hyprland**" in third_party_notices and "BSD-3-Clause" in third_party_notices,
+        "third-party notices cover the patched Hyprland redistribution",
+    )
+    check(
+        "**Glaze**" in third_party_notices and "MIT" in third_party_notices,
+        "third-party notices cover the Hyprland build's bundled Glaze headers",
     )
 
     finalizer = read(GUEST / "scripts/finalize-rootfs.sh")
@@ -388,6 +497,12 @@ def main() -> None:
         and "pacman -Qoq /usr/local/bin/omarchy-native-cursor-restore" in finalizer
         and "Obsolete ttfx compatibility command shadows" in finalizer,
         "finalizer requires packaged ttfx without a shadowing compatibility command",
+    )
+    check(
+        "pacman -Q hyprland" in finalizer
+        and "Rounded-border Hyprland backport is missing" in finalizer
+        and "Rounded-border Hyprland binary digest mismatch" in finalizer,
+        "finalizer requires the exact rounded-border Hyprland package",
     )
 
     manifest_writer = read(GUEST / "scripts/write-guest-manifest.py")

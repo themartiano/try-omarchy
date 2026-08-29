@@ -76,6 +76,10 @@ creates the account on first boot.
   artifact provenance. Guest overlays add the QEMU and ARM64 integration around
   them, including narrowly audited command replacements for host-backed audio
   selection and VM-aware cursor restoration after the screensaver exits.
+- The guest normally consumes upstream Arch Linux ARM packages. Hyprland is the
+  documented exception: an upstream package is reproducibly rebuilt with a
+  guarded rounded-border coverage patch for the VM graphics path, then held in
+  the guest's immutable local repository.
 - The final Arch Linux ARM pacman files live under `/usr/share/try-omarchy/`.
   An Omarchy-supported `pre-refresh-pacman` hook restores them after a channel
   refresh writes its x86_64 templates to `/etc`; the upstream templates remain
