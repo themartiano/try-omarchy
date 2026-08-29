@@ -65,6 +65,45 @@ buffer made this worse, and raising the QEMU main loop to
 `QOS_CLASS_USER_INTERACTIVE` changed nothing, which rules out both buffer
 depth and priority inversion.
 
+### Graphics chain
+
+Rendering reaches the GPU through Metal, but nothing in QEMU speaks Metal.
+virglrenderer replays the guest's commands as OpenGL ES, and ANGLE translates
+those into Metal, which is why the display is started with `gl=es`.
+
+```
+Hyprland / Omarchy
+  |  OpenGL
+  v
+Mesa virgl driver                       guest
+  |  command stream
+  v
+virtio-gpu-gl-pci  ─────────────────────────── VM boundary
+  |
+  v
+virglrenderer                           host, replays as OpenGL ES
+  |
+  v
+ANGLE  (libGLESv2.dylib, libEGL.dylib)  translates GL ES -> Metal
+  |
+  v
+Metal.framework                         Apple silicon GPU
+```
+
+Two things this makes explicit. The guest sees a plain virtio GPU and needs no
+Apple-specific driver. And the acceleration is real rather than a software
+rasteriser: `libGLESv2.dylib` and `libEGL.dylib` link `Metal.framework`
+directly, and the guest reports the renderer as
+`ANGLE (Apple, ANGLE Metal Renderer: <chip>)`.
+
+This chain is unchanged by the QEMU 11.1.1 move. That work touched the
+interrupt controller and the GL scanout plumbing — how a rendered texture is
+handed to the Cocoa window — not the rendering backend.
+
+Note that the upstream tap this builds from is named
+`homebrew-qemu-virgl-kosmickrisp`, but KosmicKrisp, Mesa's Vulkan-to-Metal
+driver, is not part of this path.
+
 ### Not yet verified
 
 Window resize across a HiDPI boundary, Mac output-device switching mid-session,
