@@ -11,14 +11,20 @@ reveal and routes Command chords to the host even after the guest view grabs
 input. Both modes remain fullscreen and keep normal guest pointer handling.
 The View menu also follows the current state so its exit action stays obvious.
 
+`fullScreenMenuItem` is a file-scope static, matching `full_grab_enabled`
+above it, rather than a `QemuCocoaAppController` ivar: `create_initial_menus`
+is a plain C function with no `self`, so a bare ivar reference there does not
+compile.
+
 diff --git a/ui/cocoa.m b/ui/cocoa.m
 --- a/ui/cocoa.m
 +++ b/ui/cocoa.m
-@@ -89,6 +89,7 @@
+@@ -89,6 +89,8 @@
  static int cursor_hide = 1;
  static int left_command_key_enabled = 1;
  static bool swap_opt_cmd;
 +static bool full_grab_enabled;
++static NSMenuItem *fullScreenMenuItem;
  
  static bool zoom_interpolation;
  static NSTextField *pauseLabel;
@@ -65,13 +71,6 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
                  return true;
              }
  
-@@ -1301,5 +1307,6 @@
- @interface QemuCocoaAppController : NSObject
-                                        <NSWindowDelegate, NSApplicationDelegate>
- {
-+    NSMenuItem *fullScreenMenuItem;
- }
- - (void)doToggleFullScreen:(id)sender;
 @@ -1458,12 +1465,14 @@
  - (void)windowDidEnterFullScreen:(NSNotification *)notification
  {
