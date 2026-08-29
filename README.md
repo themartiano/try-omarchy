@@ -19,6 +19,58 @@ Try Omarchy is not official or affiliated with Omarchy.
 
 > **Current limitation:** Video decoding is CPU-only, so playback can be slow, especially at high resolutions. An improved video path is in development.
 
+## Changes in this fork
+
+This fork moves the runtime to QEMU 11.1.1 to pick up Apple's in-hypervisor
+GIC, and fixes two audio problems found along the way.
+
+### Component versions
+
+| Component | Upstream | This fork | Reason |
+| --- | --- | --- | --- |
+| QEMU | `cf3e71d8` — 10.2.50, 2026-01-13 | `c3d48b7d` — 11.1.1, 2026-08-26 | First release carrying `hw/intc/arm_gicv3_hvf.c` |
+| ARM GIC | GICv2, emulated in QEMU userspace | GICv3 via Hypervisor.framework | Removes the interrupt path from the big QEMU lock |
+| Render patch | startergo mega-patch, 29 files | Vendored and trimmed to 18, forward-ported | Upstream is unmaintained since 2026-01-14 and QEMU's display API moved |
+| Python build deps | Host interpreter | Pinned `setuptools`, `wheel`, `pip` wheels | QEMU 11.1 builds `qemu.qmp`, and Python 3.12+ dropped `setuptools` |
+| dtc source | `git.kernel.org` | GitHub mirror, **temporary** | kernel.org cgit is returning 404 for every repository; both sources hash identically |
+
+### What it fixes
+
+**Idle CPU.** QEMU emulated GICv2 in userspace under the big QEMU lock, so
+every guest interrupt cost about four lock acquisitions and every IPI about
+five across two vCPU threads. The cost scaled with vCPU count and was
+independent of what the guest was doing.
+
+| Measured at idle | Before | After |
+| --- | --- | --- |
+| QEMU | ~65% of a core | ~22% |
+| `coreaudiod` attributable to the VM | 6.4% | 0.3% |
+| Total | ~71% | ~22% |
+
+Under HVF, QEMU 11.1.1 also rejects GICv2 outright, so this is now the only
+supported configuration rather than an optimisation.
+
+**A host audio device held open forever.** `sdl_enable_out` only paused the
+device, and QEMU links sdl2-compat over SDL3 where pausing a logical device
+leaves the physical one running. The device being held was not even from
+playback — `sdl_init_out` opens one at startup purely to negotiate a format,
+and nothing released it. The host resampled silence for the life of the VM.
+
+**Audio dropouts.** PipeWire reported continuous xruns on a ring 682 ms deep,
+with the guest driver using 17 us against a 42 ms deadline. QEMU advances the
+emulated Intel HDA DMA position from a 100 Hz timer, so the counter moves in
+coarse jumps and ALSA concludes it has missed. Raising the guest's quantum
+gives the emulated counter fewer and larger checks to satisfy. A deeper SDL
+buffer made this worse, and raising the QEMU main loop to
+`QOS_CLASS_USER_INTERACTIVE` changed nothing, which rules out both buffer
+depth and priority inversion.
+
+### Not yet verified
+
+Window resize across a HiDPI boundary, Mac output-device switching mid-session,
+the shared folder, and clipboard sharing have not been exercised since the
+port. The `dtc` mirror should be reverted once kernel.org returns.
+
 ## Quick start
 
 1. Open [Releases](https://github.com/themartiano/try-omarchy/releases) and download the latest signed and notarized `.dmg`.
