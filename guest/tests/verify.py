@@ -200,7 +200,7 @@ def main() -> None:
         hyprland
         == {
             "version": "0.56.1",
-            "pkgrel": "3.1",
+            "pkgrel": "3.2",
             "upstreamPackageVersion": "0.56.1-3",
             "repository": "https://github.com/hyprwm/Hyprland",
             "commit": "5c9377c15f85c50648f35ca5a213754f95b93ca0",
@@ -208,13 +208,13 @@ def main() -> None:
             "sha256": "c5b26eb377360358d01839a1de43fdc004a33e56d6a5d442fdad69b9f3a10549",
             "upstreamPackageSha256": "4fcb1b5efe019e184a85b234f75151e68fd8f60ace9b06ff59e7ffbd8a280f7a",
             "patch": "patches/hyprland/rounded-border-coverage.patch",
-            "patchSha256": "0edaf034b16849e4364d2a6524319416c65e811d96b7bf5ea17d3d0e2ae9c472",
+            "patchSha256": "5da431cbca37bdd9a66edeb77c3d677b7033d5f91449158e3ffa58a4eb515828",
             "glazeVersion": "7.2.0",
             "glazeCommit": "b518eec7a22e56ffa238b072c07f47efa7cea97f",
             "glazeUrl": "https://github.com/stephenberry/glaze/archive/refs/tags/v7.2.0.tar.gz",
             "glazeSha256": "17dba19ae63ae48f94994f00d49d5cb3c8f1306db1046c534c4828662490b7d4",
             "glazeLicenseSha256": "5d49e66411a0807a7c8d6b911b9a26b59e940c71aebe561a3ad8b0b80ac4b7b6",
-            "binarySha256": "dace45cd963209dcd6560c333b9fdd23624c635e88811caa147a3b0d384dc6a8",
+            "binarySha256": "c668b05275f2d5cbff66fdb8f4ea4cbbfb7d5a7f9e682f358f3fbcff8494c68a",
             "license": "BSD-3-Clause",
             "issue": "https://github.com/themartiano/try-omarchy/issues/5",
             "buildPackages": {
@@ -260,15 +260,19 @@ def main() -> None:
     )
     hyprland_patch_text = read(hyprland_patch)
     check(
-        "roundingWithEdgeBias" in hyprland_patch_text
-        and "SMOOTHING_CONSTANT * 2.0" in hyprland_patch_text
-        and "RENDERED_BORDER_SIZE >= 3 && WINDOWOPAQUE &&" in hyprland_patch_text
+        "roundingWithBorderCoverage" in hyprland_patch_text
+        and "0.985/0.96 compositor opacity" in hyprland_patch_text
+        and "SURFACE_CONTENT_OPAQUE" in hyprland_patch_text
+        and "inverseOpaque.empty()" in hyprland_patch_text
+        and "RENDERED_BORDER_SIZE >= 2" in hyprland_patch_text
+        and "SHADER_ROUNDING_BORDER_SIZE" in hyprland_patch_text
         and "m_data.mainSurface" in hyprland_patch_text
-        and "including for translucent borders" in hyprland_patch_text
-        and "BORDEROPAQUE" not in hyprland_patch_text
-        and "+    if (!ROUNDING_OVERLAPS_BORDER)" in hyprland_patch_text
+        and "innerCoverage * outerCoverage" in hyprland_patch_text
+        and "src/render/shaders/glsl/ext.frag" in hyprland_patch_text
+        and "roundingWithEdgeBias" not in hyprland_patch_text
+        and "+    if (ROUNDING_BORDER_SIZE <= 0.F)" in hyprland_patch_text
         and "-    rounding -= 1; // to fix a border issue" in hyprland_patch_text,
-        "Hyprland backport guards the two-pass rounded-border coverage overlap",
+        "Hyprland backport handles Omarchy opacity and branchless rounded-border coverage",
     )
 
     container = read(GUEST / "build-container.sh")

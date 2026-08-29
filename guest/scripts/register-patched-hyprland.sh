@@ -193,7 +193,7 @@ build_packages_json=${metadata[21]}
 [[ $architecture == aarch64 ]] || fail "patched Hyprland supports only aarch64"
 [[ $(uname -m) == aarch64 ]] || fail "patched Hyprland must be built natively on aarch64"
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "invalid Hyprland version: $version"
-[[ $pkgrel == 3.1 ]] || fail "unexpected Hyprland package release: $pkgrel"
+[[ $pkgrel == 3.2 ]] || fail "unexpected Hyprland package release: $pkgrel"
 [[ $upstream_package_version == "$version-3" ]] || fail "unexpected upstream Hyprland package version"
 [[ $repository == https://github.com/hyprwm/Hyprland ]] || fail "unexpected Hyprland repository"
 [[ $url == "$repository/releases/download/v$version/source-v$version.tar.gz" ]] ||
@@ -524,6 +524,8 @@ required_files = {
     "usr/include/hyprland/src/render/OpenGL.hpp",
     "usr/include/hyprland/src/render/Shader.hpp",
     "usr/include/hyprland/src/render/pass/TexPassElement.hpp",
+    "usr/include/hyprland/src/render/shaders/border.glsl.inc",
+    "usr/include/hyprland/src/render/shaders/ext.frag.inc",
     "usr/include/hyprland/src/render/shaders/rounding.glsl.inc",
     "usr/include/hyprland/src/render/shaders/surface.frag.inc",
     "usr/share/licenses/hyprland/LICENSE",
@@ -600,6 +602,8 @@ header_paths=(
   src/render/OpenGL.hpp
   src/render/Shader.hpp
   src/render/pass/TexPassElement.hpp
+  src/render/shaders/border.glsl.inc
+  src/render/shaders/ext.frag.inc
   src/render/shaders/rounding.glsl.inc
   src/render/shaders/surface.frag.inc
 )
