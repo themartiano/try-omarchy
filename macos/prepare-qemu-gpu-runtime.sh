@@ -369,7 +369,7 @@ verify_runtime_tree() {
     unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FRAMEWORK_PATH
     "$qemu" --version 2>&1
   ) || die "relocated QEMU cannot load its pinned dependencies: $version_output"
-  [[ $version_output == QEMU\ emulator\ version\ 10.2.50* ]] || \
+  [[ $version_output == QEMU\ emulator\ version\ 11.1.1* ]] || \
     die "relocated QEMU returned an unexpected version string: $version_output"
 
   zstd_version=$(

@@ -66,7 +66,7 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
 +    decoded = g_base64_decode(contents, &decoded_length);
 +    if (!decoded_length || memchr(decoded, '\0', decoded_length) ||
 +        !g_utf8_validate((const char *)decoded, decoded_length, NULL)) {
-+        AUD_log(AUDIO_CAP, "Ignoring invalid Omarchy SDL route file\n");
++        warn_report("Ignoring invalid Omarchy SDL route file");
 +        *present = false;
 +        return NULL;
 +    }
@@ -108,8 +108,8 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
 +    devid = SDL_OpenAudioDevice(device_name, rec, req, obt, 0);
 +    *route_matches = devid || !device_name;
 +    if (!devid && device_name) {
-+        AUD_log(AUDIO_CAP,
-+                "Requested SDL %s device disappeared; using system default\n",
++        warn_report(
++                "Requested SDL %s device disappeared; using system default",
 +                rec ? "recording" : "playback");
 +        SDL_ClearError();
 +        devid = SDL_OpenAudioDevice(NULL, rec, req, obt, 0);
@@ -163,8 +163,8 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
 +        return false;
 +    }
 +    if (!sdl_audio_specs_match(&sdl->reopen_spec, &obtained)) {
-+        AUD_log(AUDIO_CAP,
-+                "Requested SDL playback route has an incompatible format\n");
++        warn_report(
++                "Requested SDL playback route has an incompatible format");
 +        SDL_CloseAudioDevice(devid);
 +        return false;
 +    }
@@ -203,8 +203,8 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
 +        return;
 +    }
 +    if (!sdl_audio_specs_match(&sdl->reopen_spec, &obtained)) {
-+        AUD_log(AUDIO_CAP,
-+                "Requested SDL playback route has an incompatible format\n");
++        warn_report(
++                "Requested SDL playback route has an incompatible format");
 +        SDL_CloseAudioDevice(replacement);
 +        return;
 +    }
@@ -248,8 +248,8 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
 +        return false;
 +    }
 +    if (!sdl_audio_specs_match(&sdl->reopen_spec, &obtained)) {
-+        AUD_log(AUDIO_CAP,
-+                "Requested SDL recording route has an incompatible format\n");
++        warn_report(
++                "Requested SDL recording route has an incompatible format");
 +        SDL_CloseAudioDevice(devid);
 +        return false;
 +    }
@@ -288,8 +288,8 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
 +        return;
 +    }
 +    if (!sdl_audio_specs_match(&sdl->reopen_spec, &obtained)) {
-+        AUD_log(AUDIO_CAP,
-+                "Requested SDL recording route has an incompatible format\n");
++        warn_report(
++                "Requested SDL recording route has an incompatible format");
 +        SDL_CloseAudioDevice(replacement);
 +        return;
 +    }

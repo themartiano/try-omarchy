@@ -42,6 +42,7 @@ while (($#)); do
 done
 
 native_dir=$(cd "$(dirname "$0")" && pwd -P)
+texture_patch="$native_dir/patches/qemu-texture-borrowing-11.1.patch"
 identity_patch="$native_dir/patches/qemu-cocoa-product-identity.patch"
 display_patch="$native_dir/patches/qemu-cocoa-dynamic-display.patch"
 immersive_patch="$native_dir/patches/qemu-cocoa-immersive-mode.patch"
@@ -52,25 +53,25 @@ strchrnul_patch="$native_dir/patches/qemu-darwin-strchrnul-compat.patch"
 prepare_runtime="$native_dir/prepare-qemu-gpu-runtime.sh"
 pinned_bottles="$native_dir/pinned-runtime-bottles.sh"
 
-qemu_commit=cf3e71d8fc8ba681266759bb6cb2e45a45983e3e
+qemu_commit=c3d48b7d1e89604920e5b81b91140c2ad39a1943
 qemu_root="qemu-$qemu_commit"
 qemu_archive_name="$qemu_root.tar.gz"
 qemu_url="https://gitlab.com/qemu-project/qemu/-/archive/$qemu_commit/$qemu_archive_name"
-qemu_sha256=72791c1fdbe20092990c6f36135ab5fe6890469b6b6b294fc97889395c6bfcea
+qemu_sha256=7563781d7dec46f11509801e027f852597235d29ca7afa44a07ed9d8b108b8cd
 
 startergo_commit=cbfb7641c933e8364dda0a035830603fd7455a4e
 startergo_root="homebrew-qemu-virgl-kosmickrisp-$startergo_commit"
 startergo_archive_name="$startergo_root.tar.gz"
 startergo_url="https://github.com/startergo/homebrew-qemu-virgl-kosmickrisp/archive/$startergo_commit.tar.gz"
 startergo_sha256=8b02c2bc4177047cb516f0cd5b510aa7a7aed2bdb3fb1d8507faf45fa5adc5a9
-texture_patch_sha256=428528d3203fe487e7aac21f313bc83e53ad22168e8fd39aa9eb1791bc157903
+texture_patch_sha256=b20bdf9a7d7ccda5b86366ad9d09a3bf95308b98a06b1ece281344405bcc7ab9
 gpu_fix_patch_sha256=2b0a589d5821fbbfaa65177c97395ec50382373373e5c6860821279f07d62bb2
 identity_patch_sha256=5c9358c2858a74d6a678eacaae550a021f3e616c98c4e4e98c0e50bd869a0666
-display_patch_sha256=19392fe5723829edea348b82a6b0a74f874724af243ed0fb9101007a22fa5bbb
+display_patch_sha256=d2b1ba0d8103640815b00a2bd02e59a7452bf79de524a33081011895101cf6ea
 immersive_patch_sha256=fd1cd1a619778bda5c0c4cf58001fa7053af70ac717153ed9da819d8511a2574
 full_grab_patch_sha256=a48fc375e53fd379bca958715b0d94802d3e17c6668f0b461800cf82839589fc
-audio_device_patch_sha256=4f46ae71aefc3e2c2101461f14e5f6980272e22410a7662f734e557e4756c46c
-shared_folder_patch_sha256=585a5ed40cc7e4a155ca799d731e15354db9e75d4f517d0689be60200750f3e3
+audio_device_patch_sha256=ccceaff1eabe5db54cbab03d5823c9ab73e922fc727702d3b790443d07f470a3
+shared_folder_patch_sha256=41247692501655393ae3a40f56915472ab29b6e89c5173e33db1f62cca56632f
 strchrnul_patch_sha256=ec1048dd0e8ebe53bf7e8a3bca9bf2f5f4336cd607d4cd077437470e9a32094a
 macos_deployment_target=15.0
 
@@ -83,7 +84,9 @@ keycodemap_sha256=d014b53382dbb17b8196ad12f50de7f20d0ef1b9f7d54b0be51a6cbb142091
 dtc_commit=b6910bec11614980a21e46fbccc35934b671bd81
 dtc_root="dtc-$dtc_commit"
 dtc_archive_name="$dtc_root.tar.gz"
-dtc_url="https://git.kernel.org/pub/scm/utils/dtc/dtc.git/snapshot/$dtc_archive_name"
+# TEMPORARY: git.kernel.org cgit is returning 404 for every repository.
+# Upstream mirror of the same commit; revert once kernel.org is back.
+dtc_url="https://codeload.github.com/dgibson/dtc/tar.gz/$dtc_commit"
 dtc_sha256=e115f987eec23a1ba25150a46ced1675de3716072d3b4905afb3a9cda0f007c7
 
 ninja_version=1.13.0
@@ -92,6 +95,18 @@ ninja_url="https://files.pythonhosted.org/packages/3c/74/d02409ed2aa865e051b7edd
 ninja_sha256=fa2a8bfc62e31b08f83127d1613d10821775a0eb334197154c4d6067b7068ff1
 
 virgl_version=1.0.33
+setuptools_archive_name=setuptools-84.0.0-py3-none-any.whl
+setuptools_url="https://files.pythonhosted.org/packages/95/9c/c510029fc6ef33a6275cd2c5d3cecd6613dfd6aa401d57c54f1c18852ccf/$setuptools_archive_name"
+setuptools_sha256=51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670
+
+wheel_archive_name=wheel-0.48.0-py3-none-any.whl
+wheel_url="https://files.pythonhosted.org/packages/2e/29/69cfbb602cd91690c55d38ba9fe53e6a7e76a6fa647bf38f19c138d25449/$wheel_archive_name"
+wheel_sha256=3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab
+
+pip_archive_name=pip-26.2.1-py3-none-any.whl
+pip_url="https://files.pythonhosted.org/packages/f3/6e/1736e5b4ae2b778ef2f81c47d797de9f891d4d8acb047a24ca37a60294dd/$pip_archive_name"
+pip_sha256=71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e
+
 virgl_archive_name=virglrenderer-1.0.33.arm64_sequoia.bottle.tar.gz
 virgl_url="https://github.com/startergo/homebrew-virglrenderer/releases/download/v1.0.33/$virgl_archive_name"
 virgl_sha256=26ad3e927d300587024cd92276d38bf813f6228d130a1800c97f1c18688b34ba
@@ -142,6 +157,8 @@ macos_major=$(sw_vers -productVersion | awk -F. '{ print $1 }')
   die "missing Cocoa full-grab patch: $full_grab_patch"
 [[ -f $audio_device_patch && ! -L $audio_device_patch ]] || \
   die "missing SDL audio-device patch: $audio_device_patch"
+[[ -f $texture_patch && ! -L $texture_patch ]] || \
+  die "missing texture-borrowing patch: $texture_patch"
 [[ -f $shared_folder_patch && ! -L $shared_folder_patch ]] || \
   die "missing 9p shared-folder patch: $shared_folder_patch"
 [[ -f $strchrnul_patch && ! -L $strchrnul_patch ]] || \
@@ -263,6 +280,9 @@ ninja_archive="$archive_dir/$ninja_archive_name"
 virgl_archive="$archive_dir/$virgl_archive_name"
 angle_archive="$archive_dir/$angle_archive_name"
 epoxy_archive="$archive_dir/$epoxy_archive_name"
+setuptools_archive="$archive_dir/$setuptools_archive_name"
+wheel_archive="$archive_dir/$wheel_archive_name"
+pip_archive="$archive_dir/$pip_archive_name"
 
 obtain_and_verify "QEMU $qemu_commit" "$qemu_url" "$qemu_sha256" "$qemu_archive"
 obtain_and_verify "startergo patches $startergo_commit" "$startergo_url" "$startergo_sha256" "$startergo_archive"
@@ -279,6 +299,10 @@ while IFS=$'\t' read -r formula version archive_name archive_root archive_sha; d
   pinned_bottle_validate_archive \
     "$formula $version" "$archive_dir/$archive_name" "$archive_root"
 done < <(pinned_core_bottle_manifest)
+
+obtain_and_verify "setuptools" "$setuptools_url" "$setuptools_sha256" "$setuptools_archive"
+obtain_and_verify "wheel" "$wheel_url" "$wheel_sha256" "$wheel_archive"
+obtain_and_verify "pip" "$pip_url" "$pip_sha256" "$pip_archive"
 
 validate_tar_root "QEMU $qemu_commit" "$qemu_archive" "$qemu_root" "$listing_dir/qemu.txt"
 validate_tar_root "startergo patches" "$startergo_archive" "$startergo_root" "$listing_dir/startergo.txt"
@@ -302,13 +326,15 @@ startergo_dir="$source_parent/$startergo_root"
 [[ -f $source_dir/configure && -f $source_dir/ui/cocoa.m ]] || \
   die "QEMU source archive is incomplete"
 
+install -m 0644 "$setuptools_archive" "$wheel_archive" "$pip_archive" \
+  "$source_dir/python/wheels/"
+
 mkdir -p "$source_dir/subprojects/keycodemapdb" "$source_dir/subprojects/dtc"
 tar -xzf "$keycodemap_archive" -C "$source_dir/subprojects/keycodemapdb" --strip-components=1
 tar -xzf "$dtc_archive" -C "$source_dir/subprojects/dtc" --strip-components=1
 
-texture_patch="$startergo_dir/patches/qemu-texture-borrowing.patch"
 gpu_fix_patch="$startergo_dir/patches/gpu-spike-resolution-fix.patch"
-verify_file_sha "startergo texture-borrowing patch" "$texture_patch" "$texture_patch_sha256"
+verify_file_sha "Try Omarchy texture-borrowing patch" "$texture_patch" "$texture_patch_sha256"
 verify_file_sha "startergo GPU-resolution patch" "$gpu_fix_patch" "$gpu_fix_patch_sha256"
 verify_file_sha "Try Omarchy Cocoa product-identity patch" \
   "$identity_patch" "$identity_patch_sha256"
@@ -420,7 +446,7 @@ require_private_pkg_version epoxy 1.5.11
 
 build_dir="$source_dir/build"
 mkdir "$build_dir"
-log "Configuring QEMU 10.2.50 for macOS $macos_deployment_target and newer"
+log "Configuring QEMU 11.1.1 (HVF-only, Cocoa/VirGL, SLIRP, SDL audio, virtio-9p) for macOS $macos_deployment_target and newer"
 (
   cd "$build_dir"
   env MACOSX_DEPLOYMENT_TARGET="$macos_deployment_target" \

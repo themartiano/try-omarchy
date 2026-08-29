@@ -1000,7 +1000,7 @@ qemu_args=(
   -name 'Try Omarchy'
   # HVF exposes the ARM virtual GICv2 interface on current Apple Silicon.
   # Eight vCPUs is the architectural GICv2 limit and matches our host cap.
-  -machine 'virt,accel=hvf,gic-version=2'
+  -machine 'virt,accel=hvf,gic-version=3'
   # HVF does not provide a usable guest PMU on Apple Silicon. Do not advertise
   # one: Linux otherwise probes the dead device and prints a misleading failure.
   -cpu 'host,pmu=off'
