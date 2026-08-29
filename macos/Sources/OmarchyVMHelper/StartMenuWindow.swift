@@ -199,6 +199,16 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         render()
     }
 
+    /// Clears the resetting state when the controller refused to start the
+    /// reset at all. Deliberately silent, and deliberately not
+    /// `resetDidFinish(errorMessage: nil)` — nothing was erased, so claiming
+    /// "Omarchy has been reset" would be a lie about a destructive action.
+    func resetDidAbort() {
+        guard resetInProgress else { return }
+        resetInProgress = false
+        render()
+    }
+
     func launchRequiresReset() {
         guard launchInProgress else { return }
         launchInProgress = false
@@ -914,18 +924,20 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         guard let storageLocationURL = storageLocationURL() else { return }
         do {
             if !FileManager.default.fileExists(atPath: storageLocationURL.path) {
-                // Never create intermediate directories. With a chosen data
-                // folder the path can sit on a drive that is not mounted, and
-                // creating it would leave a shadow folder at the mount point on
-                // the boot volume that then hides the real drive.
-                let parent = storageLocationURL.deletingLastPathComponent()
-                guard FileManager.default.fileExists(atPath: parent.path) else {
+                // Only the default folder is ever created from here. A chosen
+                // folder that has gone missing means its drive is not mounted,
+                // and "the parent exists" is not proof otherwise: a leftover
+                // /Volumes/<name> directory on the boot volume satisfies that
+                // test, so creating the folder would silently rebuild the
+                // workspace on the internal disk and the next launch would
+                // initialize a brand-new VM there.
+                guard storageLocationStatus().isDefault else {
                     throw NSError(
                         domain: "TryOmarchy.StorageLocation",
                         code: 2,
                         userInfo: [
                             NSLocalizedDescriptionKey:
-                                "The drive that holds this folder is not connected.",
+                                "The drive that holds this folder is not connected. Reconnect it, or switch back to the default folder.",
                         ]
                     )
                 }
@@ -960,7 +972,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         guard canResetStorage, !launchInProgress, !resetInProgress else { return }
         let panel = NSOpenPanel()
         panel.title = "Choose where to keep the Omarchy VM"
-        panel.message = "Omarchy keeps its virtual machine in a \u{201C}Try Omarchy\u{201D} folder inside the folder you choose. The drive must be APFS."
+        panel.message = "Omarchy puts its VM files straight into the folder you choose \u{2014} it does not create a folder inside it. Pick an empty folder, or one Omarchy already uses. The drive must be APFS."
         panel.prompt = "Use Folder"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -1108,6 +1120,17 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         // With a chosen data folder there can be more than one workspace on the
         // Mac, so say which one is about to be erased.
         let location = storageLocationStatus()
+        if !location.isDefault, location.problem != nil {
+            // The chosen folder cannot be reached, so which VM a reset would
+            // erase is exactly what is in doubt. Hand straight to the
+            // controller, which owns the preference and can explain and offer
+            // to switch, rather than asking the user to confirm erasing a
+            // workspace we would only be guessing the identity of.
+            resetInProgress = true
+            render()
+            resetStorage()
+            return
+        }
         if !location.isDefault, let displayPath = location.displayPath {
             let volume = location.volumeName.map { "\($0), " } ?? ""
             detail += " The VM being erased is the one stored at \(volume)\(displayPath)."

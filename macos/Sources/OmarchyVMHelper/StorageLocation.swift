@@ -103,6 +103,7 @@ enum StorageLocationPolicyError: LocalizedError, Equatable {
     case unsafeRoot(String)
     case isVolumeRoot(String)
     case notEmpty(String)
+    case invalidWorkspaceMarker(String)
     case volumeUnreadable(String)
     case notLocalVolume(String)
     case unsupportedFilesystem(filesystem: String, volume: String)
@@ -128,6 +129,8 @@ enum StorageLocationPolicyError: LocalizedError, Equatable {
             "Choose a folder inside \(path), not the drive itself. For example, create a folder named \"\(StorageLocationPolicy.workspaceDirectoryName)\" there and pick that."
         case .notEmpty(let path):
             "This folder already has files in it: \(path). Omarchy only uses an empty folder, so it never mixes its virtual machine with anything else stored there. Choose or create an empty folder instead."
+        case .invalidWorkspaceMarker(let path):
+            "This folder looks like an Omarchy workspace, but its \"\(StorageLocationPolicy.rootMarkerName)\" file is damaged, so the VM here cannot be opened safely: \(path). Delete that file to reuse the folder as an empty one, or choose a different folder."
         case .volumeUnreadable(let path):
             "Try Omarchy could not read the disk that holds \(path)."
         case .notLocalVolume(let volume):
@@ -159,6 +162,12 @@ enum StorageLocationPolicy {
     static let workspaceDirectoryName = "Try Omarchy"
     static let rootMarkerName = ".omarchy-qemu-storage"
 
+    /// The marker's only valid contents. Kept byte-identical to
+    /// `QEMU_PERSISTENT_STORAGE_ROOT_MARKER` in qemu-persistent-storage.sh,
+    /// which is the side that writes it. Change one and you must change both;
+    /// StorageLocationContractTests pins them together.
+    static let rootMarkerContent = "omarchy-qemu-storage-root-v1"
+
     /// Kept byte-identical to `validatedConfiguredRoot` in QEMUGPULauncher.swift
     /// and `_qps_assert_safe_root_path` in qemu-persistent-storage.sh. Change
     /// one and you must change all three.
@@ -174,6 +183,37 @@ enum StorageLocationPolicy {
     /// Finder- or filesystem-owned entries that don't count as real content
     /// when deciding whether a picked folder is empty enough to use directly.
     private static let ignorableEntries: Set<String> = [".DS_Store", ".localized", "Icon\r", rootMarkerName]
+
+    /// Whether the marker is one this app would itself have written.
+    ///
+    /// Mirrors `_qps_validate_root_marker` plus `_qps_assert_private_regular_file`
+    /// in qemu-persistent-storage.sh exactly. Checking only that *something*
+    /// named `.omarchy-qemu-storage` exists would let the picker accept a folder
+    /// the launcher then refuses, moving the failure from a message the user can
+    /// act on to one the shell script prints mid-launch.
+    static func hasValidRootMarker(in container: URL) -> Bool {
+        let marker = container.appendingPathComponent(rootMarkerName, isDirectory: false)
+
+        var information = stat()
+        guard Darwin.lstat(marker.path, &information) == 0 else { return false }
+        guard (information.st_mode & S_IFMT) == S_IFREG else { return false }
+        guard information.st_uid == getuid() else { return false }
+        guard (information.st_mode & 0o777) == 0o600 else { return false }
+
+        guard let contents = try? String(contentsOf: marker, encoding: .utf8) else { return false }
+        // `$(<file)` on the shell side strips trailing newlines before comparing.
+        return contents.trimmingCharacters(in: .newlines) == rootMarkerContent
+    }
+
+    /// Whether anything at all occupies the marker path, valid or not. A folder
+    /// carrying a damaged marker must be rejected outright rather than falling
+    /// through to the emptiness check, which ignores the marker name and would
+    /// wave the folder through with a misleading explanation.
+    private static func hasRootMarkerEntry(in container: URL) -> Bool {
+        let marker = container.appendingPathComponent(rootMarkerName, isDirectory: false)
+        var information = stat()
+        return Darwin.lstat(marker.path, &information) == 0
+    }
 
     private static func isEffectivelyEmpty(_ container: URL, fileManager: FileManager) -> Bool {
         guard let entries = try? fileManager.contentsOfDirectory(
@@ -222,8 +262,12 @@ enum StorageLocationPolicy {
         }
 
         let containerURL = URL(fileURLWithPath: container, isDirectory: true)
-        let marker = containerURL.appendingPathComponent(rootMarkerName, isDirectory: false)
-        let isExistingWorkspace = fileManager.fileExists(atPath: marker.path)
+        let isExistingWorkspace = hasValidRootMarker(in: containerURL)
+        if !isExistingWorkspace, hasRootMarkerEntry(in: containerURL) {
+            // The launcher would refuse this folder too, but only after the user
+            // committed to it. Say so now, while they can still pick another.
+            throw StorageLocationPolicyError.invalidWorkspaceMarker(container)
+        }
         if !isExistingWorkspace {
             // Never restructure a folder the user picked: use it exactly as
             // given, or explain why not and let them pick again. A bare
@@ -326,6 +370,15 @@ struct StorageLocationLaunchConfiguration: Equatable {
     let stateRoot: String?
     let environment: [String: String]
 
+    /// Why the stored choice could not be honored, when there was one.
+    ///
+    /// A chosen folder that fails validation must never quietly become the
+    /// default: reset would then erase the default workspace while reporting
+    /// success, and the VM the user meant to act on would sit untouched on a
+    /// drive that is not plugged in. Callers refuse to start the launcher while
+    /// this is set, so the fallback cannot happen behind the user's back.
+    let unavailableReason: String?
+
     /// Publishes the chosen workspace to the launcher script.
     ///
     /// Unlike the shared folder, an inherited value is *kept*:
@@ -342,11 +395,11 @@ struct StorageLocationLaunchConfiguration: Equatable {
         fileManager: FileManager = .default
     ) -> Self {
         if let inherited = baseEnvironment[StorageLocationPolicy.environmentKey], !inherited.isEmpty {
-            return Self(stateRoot: inherited, environment: baseEnvironment)
+            return Self(stateRoot: inherited, environment: baseEnvironment, unavailableReason: nil)
         }
         var environment = baseEnvironment
         guard let container = preference.containerPath else {
-            return Self(stateRoot: nil, environment: environment)
+            return Self(stateRoot: nil, environment: environment, unavailableReason: nil)
         }
         do {
             let resolution = try StorageLocationPolicy.validate(
@@ -357,10 +410,14 @@ struct StorageLocationLaunchConfiguration: Equatable {
                 fileManager: fileManager
             )
             environment[StorageLocationPolicy.environmentKey] = resolution.stateRoot
-            return Self(stateRoot: resolution.stateRoot, environment: environment)
+            return Self(stateRoot: resolution.stateRoot, environment: environment, unavailableReason: nil)
         } catch {
-            fputs("[storage] \(error.localizedDescription); using the default data folder for this launch\n", stderr)
-            return Self(stateRoot: nil, environment: environment)
+            fputs("[storage] \(error.localizedDescription); refusing to fall back to the default data folder\n", stderr)
+            return Self(
+                stateRoot: nil,
+                environment: environment,
+                unavailableReason: error.localizedDescription
+            )
         }
     }
 }

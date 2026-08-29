@@ -184,7 +184,9 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             guard microphoneDecision.allowsLaunch else {
                 throw HelperError.io("microphone policy unexpectedly prevented audio playback")
             }
-            guard confirmStorageLocationAvailable() else {
+            // Switching to the default is an acceptable way to start a VM, so
+            // both `.available` and `.switchedToDefault` proceed here.
+            guard resolveStorageLocationAvailability() != .cancelled else {
                 startMenuWindow?.launchDidAbort()
                 return
             }
@@ -213,8 +215,23 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     }
 
     private func resetVirtualMachine() {
+        // Unlike launch, a reset that lands on the default workspace after the
+        // chosen drive went missing would erase a VM the user never confirmed.
+        // Switching the setting is allowed; erasing on that same click is not,
+        // so the reset is abandoned and they get an accurate confirmation the
+        // next time they ask for one.
+        guard resolveStorageLocationAvailability() == .available else {
+            startMenuWindow?.resetDidAbort()
+            return
+        }
         do {
             let context = childLaunchContext()
+            guard context.storageUnavailableReason == nil else {
+                startMenuWindow?.resetDidFinish(
+                    errorMessage: context.storageUnavailableReason
+                )
+                return
+            }
             activeStateRoot = context.stateRoot
             try supervisor.start(
                 executableURL: launcherURL,
@@ -271,6 +288,9 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         let environment: [String: String]
         let stateRoot: String?
         let portForwardMappings: [PortForwardMapping]
+        /// Set when a chosen data folder could not be validated. Starting the
+        /// launcher anyway would silently retarget the default workspace.
+        let storageUnavailableReason: String?
     }
 
     /// The environment every launcher invocation receives.
@@ -312,12 +332,18 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         return ChildLaunchContext(
             environment: storage.environment,
             stateRoot: storage.stateRoot,
-            portForwardMappings: forwarding.mappings
+            portForwardMappings: forwarding.mappings,
+            storageUnavailableReason: storage.unavailableReason
         )
     }
 
     private func launch(arguments: [String]) throws {
         let context = childLaunchContext()
+        // The UI gate above normally resolves this first; failing closed here
+        // too keeps a silent fallback impossible for any future caller.
+        if let reason = context.storageUnavailableReason {
+            throw HelperError.io(reason)
+        }
         try PortForwardAvailability.validate(context.portForwardMappings)
         activeStateRoot = context.stateRoot
 
@@ -430,13 +456,26 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         storageLocationStore.save(.default)
     }
 
-    /// Refuses to launch into the default workspace behind the user's back when
-    /// their chosen drive is missing. Silently falling back would create a
-    /// second VM they never asked for, which is exactly the multi-workspace
-    /// confusion the storage library works to avoid.
-    private func confirmStorageLocationAvailable() -> Bool {
+    /// What the user decided once their chosen drive turned out to be missing.
+    ///
+    /// Launch and reset must react differently, which is why this reports the
+    /// choice instead of a bare yes/no. Switching to the default is a fine way
+    /// to *start* a VM, but it must never be a way to *erase* one: the user
+    /// confirmed erasing the workspace on their own drive, and the default
+    /// workspace is a different VM they were never asked about.
+    private enum StorageAvailability {
+        case available
+        case switchedToDefault
+        case cancelled
+    }
+
+    /// Refuses to act on the default workspace behind the user's back when
+    /// their chosen drive is missing. Silently falling back would create — or
+    /// destroy — a second VM they never asked about, which is exactly the
+    /// multi-workspace confusion the storage library works to avoid.
+    private func resolveStorageLocationAvailability() -> StorageAvailability {
         let preference = storageLocationStore.load()
-        guard let container = preference.containerPath else { return true }
+        guard let container = preference.containerPath else { return .available }
         do {
             _ = try StorageLocationPolicy.validate(
                 container,
@@ -444,7 +483,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
                 probe: volumeProbe,
                 volumeRootDetector: volumeRootDetector
             )
-            return true
+            return .available
         } catch {
             let alert = NSAlert()
             alert.alertStyle = .critical
@@ -457,9 +496,9 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
                 """
             alert.addButton(withTitle: "Cancel")
             alert.addButton(withTitle: "Use Default Folder")
-            guard alert.runModal() == .alertSecondButtonReturn else { return false }
+            guard alert.runModal() == .alertSecondButtonReturn else { return .cancelled }
             storageLocationStore.save(.default)
-            return true
+            return .switchedToDefault
         }
     }
 

@@ -75,9 +75,9 @@ Normal launches keep one persistent VM under `~/Library/Application Support/Try 
 
 ### Choosing where the VM lives
 
-**Change…** next to **Data** on the start menu moves the VM to any folder you
-pick, including one on an external drive. Omarchy uses exactly the folder you
-choose — it never creates a folder inside it on your behalf.
+**Change…** on the start menu's **VM Location** row moves the VM to any folder
+you pick, including one on an external drive. Omarchy uses exactly the folder
+you choose — it never creates a folder inside it on your behalf.
 
 - The folder must be **empty**, or one Omarchy has already used. A folder with
   other files in it, or a drive's top level, is turned away with an
@@ -95,6 +95,11 @@ choose — it never creates a folder inside it on your behalf.
 - Do not disconnect the drive while Omarchy is running. macOS refuses a normal
   eject while the VM holds the disk, but pulling the cable can damage it. If the
   volume does disappear, Omarchy shuts the VM down instead of writing on.
+- **If the drive is not connected, Omarchy will not quietly use the default VM
+  instead.** Launching offers to switch back to the default folder; resetting
+  refuses outright, so a reset can never erase a workspace other than the one
+  you confirmed. Opening the folder from the start menu will not recreate it on
+  your startup disk either.
 
 ## Development requirements
 

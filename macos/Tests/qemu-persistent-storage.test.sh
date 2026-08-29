@@ -679,4 +679,55 @@ qemu_persistent_storage_release_lock
 export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=$saved_cramped_multi_disk
 export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_state_root
 
+# The state-root marker is what tells the launcher a folder is one of ours, and
+# the start menu's picker mirrors these same rules so a bad marker is reported
+# while the user can still choose another folder. Pin the rules here so the two
+# sides cannot drift apart silently.
+marker_root="$test_root/marker-state"
+mkdir -p "$marker_root"
+chmod 700 "$marker_root"
+marker_file="$marker_root/.omarchy-qemu-storage"
+
+# A marker this library wrote itself validates.
+_qps_write_root_marker "$marker_file"
+assert _qps_validate_root_marker "$marker_file"
+assert_eq "$(stat -f '%Lp' "$marker_file")" 600
+assert_eq "$(<"$marker_file")" "$QEMU_PERSISTENT_STORAGE_ROOT_MARKER"
+
+# Empty, wrong-token, and wrong-mode markers are all refused.
+: >"$marker_file"
+chmod 600 "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+
+printf '%s\n' 'omarchy-qemu-storage-root-v2' >"$marker_file"
+chmod 600 "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+
+printf '%s\n' "$QEMU_PERSISTENT_STORAGE_ROOT_MARKER" >"$marker_file"
+chmod 644 "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+
+# A symlink pointing at otherwise-valid content is still refused: the check is
+# on the marker itself, not on whatever it happens to resolve to.
+rm -f "$marker_file"
+printf '%s\n' "$QEMU_PERSISTENT_STORAGE_ROOT_MARKER" >"$marker_root/real-marker"
+chmod 600 "$marker_root/real-marker"
+ln -s "$marker_root/real-marker" "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+rm -f "$marker_file" "$marker_root/real-marker"
+
+# A directory in the marker's place is refused rather than crashing the read.
+mkdir "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+rmdir "$marker_file"
+
+# A state root carrying a damaged marker refuses to prepare at all, so a launch
+# never proceeds against a workspace the app cannot vouch for.
+printf 'bogus\n' >"$marker_file"
+chmod 600 "$marker_file"
+saved_marker_state_root=$OMARCHY_QEMU_GPU_STATE_ROOT
+export OMARCHY_QEMU_GPU_STATE_ROOT=$marker_root
+assert_fails _qps_prepare_state_root
+export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_marker_state_root
+
 printf 'qemu-persistent-storage.test: PASS\n'

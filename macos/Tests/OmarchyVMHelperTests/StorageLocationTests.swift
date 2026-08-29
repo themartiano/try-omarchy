@@ -54,6 +54,21 @@ private func temporaryDirectory() throws -> URL {
     return url.standardizedFileURL.resolvingSymlinksInPath()
 }
 
+/// Writes the marker exactly as `_qps_write_root_marker` does: the token, one
+/// trailing newline, mode 0600. Fixtures must use this rather than an empty
+/// file — the launcher rejects anything else, so an empty marker would make a
+/// test pass on a folder the real app cannot use.
+@discardableResult
+private func writeValidRootMarker(in container: URL) throws -> URL {
+    let marker = container.appendingPathComponent(
+        StorageLocationPolicy.rootMarkerName,
+        isDirectory: false
+    )
+    try Data("\(StorageLocationPolicy.rootMarkerContent)\n".utf8).write(to: marker)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.path)
+    return marker
+}
+
 @Suite("Storage location policy")
 struct StorageLocationPolicyTests {
     @Test("accepts an owned, empty APFS folder and uses it directly")
@@ -119,8 +134,7 @@ struct StorageLocationPolicyTests {
     func reselectingAWorkspaceKeepsIt() throws {
         let container = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: container) }
-        let marker = container.appendingPathComponent(StorageLocationPolicy.rootMarkerName)
-        try Data().write(to: marker)
+        try writeValidRootMarker(in: container)
 
         let resolution = try StorageLocationPolicy.validate(
             container.path,
@@ -128,6 +142,79 @@ struct StorageLocationPolicyTests {
             probe: FakeVolumeProbe(result: volume())
         )
         #expect(resolution.stateRoot == container.path)
+    }
+
+    /// Each of these is a marker the launcher's `_qps_validate_root_marker`
+    /// refuses. The picker must refuse them too, or it hands the user a folder
+    /// that only fails once QEMU is already starting.
+    @Test(
+        "a damaged workspace marker is refused in the picker, not at launch",
+        arguments: [
+            "empty",
+            "wrong content",
+            "wrong mode",
+            "directory",
+            "symlink",
+        ]
+    )
+    func rejectsDamagedWorkspaceMarker(kind: String) throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let marker = container.appendingPathComponent(
+            StorageLocationPolicy.rootMarkerName,
+            isDirectory: false
+        )
+
+        switch kind {
+        case "empty":
+            try Data().write(to: marker)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: marker.path
+            )
+        case "wrong content":
+            try Data("omarchy-qemu-storage-root-v2\n".utf8).write(to: marker)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: marker.path
+            )
+        case "wrong mode":
+            // A marker restored from a backup or copied by Finder lands as 0644.
+            try writeValidRootMarker(in: container)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o644], ofItemAtPath: marker.path
+            )
+        case "directory":
+            try FileManager.default.createDirectory(at: marker, withIntermediateDirectories: true)
+        default:
+            let target = container.appendingPathComponent("elsewhere", isDirectory: false)
+            try Data("\(StorageLocationPolicy.rootMarkerContent)\n".utf8).write(to: target)
+            try FileManager.default.createSymbolicLink(at: marker, withDestinationURL: target)
+        }
+
+        #expect(throws: StorageLocationPolicyError.invalidWorkspaceMarker(container.path)) {
+            try StorageLocationPolicy.validate(
+                container.path,
+                metrics: metrics,
+                probe: FakeVolumeProbe(result: volume())
+            )
+        }
+    }
+
+    @Test("a damaged marker does not smuggle a volume root past the picker")
+    func damagedMarkerDoesNotBypassVolumeRootCheck() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        try Data().write(to: container.appendingPathComponent(StorageLocationPolicy.rootMarkerName))
+
+        // A valid marker skips both the volume-root and emptiness guards; an
+        // invalid one must not inherit that exemption.
+        #expect(throws: StorageLocationPolicyError.invalidWorkspaceMarker(container.path)) {
+            try StorageLocationPolicy.validate(
+                container.path,
+                metrics: metrics,
+                probe: FakeVolumeProbe(result: volume()),
+                volumeRootDetector: FakeVolumeRootDetector(result: true)
+            )
+        }
     }
 
     @Test("rejects a relative path")
@@ -301,7 +388,7 @@ struct StorageLocationPolicyTests {
         // The marker is always written before `images/` gains content — see
         // `_qps_prepare_state_root` in qemu-persistent-storage.sh — so a
         // realistic "already materialized" fixture carries both.
-        try Data().write(to: container.appendingPathComponent(StorageLocationPolicy.rootMarkerName))
+        try writeValidRootMarker(in: container)
         let images = container.appendingPathComponent("images", isDirectory: true)
         try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
         try Data().write(to: images.appendingPathComponent("\(metrics.identity).ext4"))
@@ -476,6 +563,44 @@ struct StorageLocationLaunchConfigurationTests {
         )
         #expect(configuration.stateRoot == nil)
         #expect(configuration.environment[StorageLocationPolicy.environmentKey] == nil)
+        // Absent the env var the launcher silently uses the default workspace,
+        // so a rejected preference must also carry the reason that makes
+        // callers refuse to start it at all. Reset depends on this: falling
+        // back would erase the default VM instead of the chosen one.
+        #expect(configuration.unavailableReason != nil)
+    }
+
+    @Test("an unreachable chosen folder reports why rather than falling back silently")
+    func unavailableChoiceIsReported() throws {
+        let parent = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        // Stands in for an external drive that is no longer mounted.
+        let missing = parent.appendingPathComponent("unplugged", isDirectory: true)
+
+        let configuration = StorageLocationLaunchConfiguration.make(
+            baseEnvironment: [:],
+            preference: StorageLocationPreference(containerPath: missing.path),
+            metrics: metrics,
+            probe: FakeVolumeProbe(result: volume())
+        )
+        #expect(configuration.stateRoot == nil)
+        #expect(configuration.environment[StorageLocationPolicy.environmentKey] == nil)
+        #expect(
+            configuration.unavailableReason
+                == StorageLocationPolicyError.missing(missing.path).localizedDescription
+        )
+    }
+
+    @Test("the default location is not an unavailable one")
+    func defaultChoiceIsAvailable() {
+        let configuration = StorageLocationLaunchConfiguration.make(
+            baseEnvironment: [:],
+            preference: .default,
+            metrics: metrics,
+            probe: FakeVolumeProbe(result: volume())
+        )
+        #expect(configuration.stateRoot == nil)
+        #expect(configuration.unavailableReason == nil)
     }
 }
 
