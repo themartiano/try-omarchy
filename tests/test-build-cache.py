@@ -102,6 +102,8 @@ class BuildCacheTests(unittest.TestCase):
         app = dry_run.index(" app --")
         self.assertLess(guest, runtime)
         self.assertLess(runtime, app)
+        self.assertIn("Build output:", dry_run)
+        self.assertIn(str(REPOSITORY / "dist/Try Omarchy.app"), dry_run)
 
         forced = subprocess.run(
             ["make", "-n", "build", "FORCE=1"],

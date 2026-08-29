@@ -81,6 +81,7 @@ app: guest runtime
 	  "$(ROOT)/macos/build-app.sh" --guest-dir "$(GUEST_DIST)"
 
 build: doctor app
+	@printf 'Build output: %s\n' "$(APP)"
 
 run: app
 	@$(ROOT)/macos/open-qemu-gpu.sh

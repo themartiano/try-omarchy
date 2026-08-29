@@ -413,6 +413,10 @@ for line in source:
 pathlib.Path(sys.argv[2]).write_text("\n".join(output).rstrip() + "\n")
 PY
 chmod 0600 "$builder_pacman_config"
+# Docker can reuse a builder layer whose sync databases predate a repository
+# move. Refresh them here so an unchanged pinned version is downloaded from its
+# current repository path instead of producing mirror-wide 404 responses.
+pacman -Syy --noconfirm --config "$builder_pacman_config"
 pacman --noconfirm --config "$builder_pacman_config" -S --needed "${build_package_specs[@]}"
 for command in cmake cmp readelf strip; do
   command -v "$command" >/dev/null || fail "$command is missing after installing Hyprland build packages"
