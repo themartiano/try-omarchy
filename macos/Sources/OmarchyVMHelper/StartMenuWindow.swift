@@ -124,7 +124,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         self.launch = launch
 
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 690),
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 760),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -142,8 +142,12 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     func show() {
         render()
         if let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame {
+            // The menu carries six rows once a resettable VM can choose where it
+            // lives. At 690 the launch button cleared the bottom edge by 15pt,
+            // which any difference in system font metrics turned into a button
+            // clipped off the window.
             let availableHeight = max(480, visibleFrame.height - 32)
-            window.setContentSize(NSSize(width: 600, height: min(690, availableHeight)))
+            window.setContentSize(NSSize(width: 600, height: min(760, availableHeight)))
         }
         window.center()
         window.makeKeyAndOrderFront(nil)

@@ -14,10 +14,11 @@ struct StartMenuWindowTests {
             requestAccessibility: {},
             requestMicrophone: { completion in completion(false) },
             canResetStorage: false,
-            storageLocation: { "~/Library/Application Support/Try Omarchy" },
-            storageLocationURL: {
-                URL(fileURLWithPath: "/Users/test/Library/Application Support/Try Omarchy")
-            },
+            // The controller reports no location for a disposable VM, so a
+            // fixture pairing `canResetStorage: false` with a path renders a
+            // row the app never shows.
+            storageLocation: { nil },
+            storageLocationURL: { nil },
             storageSpaceEstimate: { nil },
             storageLocationStatus: { .defaultLocation },
             validateStorageLocation: { _ in nil },

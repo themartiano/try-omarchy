@@ -691,7 +691,7 @@ marker_file="$marker_root/.omarchy-qemu-storage"
 # A marker this library wrote itself validates.
 _qps_write_root_marker "$marker_file"
 assert _qps_validate_root_marker "$marker_file"
-assert_eq "$(stat -f '%Lp' "$marker_file")" 600
+assert_eq "$(/usr/bin/stat -f '%Lp' "$marker_file")" 600
 assert_eq "$(<"$marker_file")" "$QEMU_PERSISTENT_STORAGE_ROOT_MARKER"
 
 # Empty, wrong-token, and wrong-mode markers are all refused.
