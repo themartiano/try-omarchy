@@ -14,15 +14,16 @@ The View menu also follows the current state so its exit action stays obvious.
 diff --git a/ui/cocoa.m b/ui/cocoa.m
 --- a/ui/cocoa.m
 +++ b/ui/cocoa.m
-@@ -89,6 +89,7 @@
+@@ -89,6 +89,8 @@
  static int cursor_hide = 1;
  static int left_command_key_enabled = 1;
  static bool swap_opt_cmd;
 +static bool full_grab_enabled;
  
  static bool zoom_interpolation;
++static NSMenuItem *fullScreenMenuItem;
  static NSTextField *pauseLabel;
-@@ -1013,7 +1014,8 @@
+@@ -1013,7 +1015,8 @@
  
                  /* Don't pass command key changes to guest unless mouse is grabbed */
                  case kVK_Command:
@@ -32,7 +33,7 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
                          !!(modifiers & NSEventModifierFlagCommand) &&
                          left_command_key_enabled) {
                          if (swap_opt_cmd) {
-@@ -1025,7 +1027,8 @@
+@@ -1025,7 +1028,8 @@
                      break;
  
                  case kVK_RightCommand:
@@ -42,7 +43,7 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
                          !!(modifiers & NSEventModifierFlagCommand)) {
                          if (swap_opt_cmd) {
                              [self toggleKey:Q_KEY_CODE_ALT_R];
-@@ -1039,8 +1042,10 @@
+@@ -1039,8 +1043,10 @@
          case NSEventTypeKeyDown:
              keycode = cocoa_keycode_to_qemu([event keyCode]);
  
@@ -55,7 +56,7 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
                  return false;
              }
  
-@@ -1077,7 +1082,8 @@
+@@ -1077,7 +1083,8 @@
  
              // don't pass the guest a spurious key-up if we treated this
              // command-key combo as a host UI action
@@ -65,13 +66,6 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
                  return true;
              }
  
-@@ -1301,5 +1307,6 @@
- @interface QemuCocoaAppController : NSObject
-                                        <NSWindowDelegate, NSApplicationDelegate>
- {
-+    NSMenuItem *fullScreenMenuItem;
- }
- - (void)doToggleFullScreen:(id)sender;
 @@ -1458,12 +1465,14 @@
  - (void)windowDidEnterFullScreen:(NSNotification *)notification
  {
