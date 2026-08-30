@@ -84,9 +84,7 @@ keycodemap_sha256=d014b53382dbb17b8196ad12f50de7f20d0ef1b9f7d54b0be51a6cbb142091
 dtc_commit=b6910bec11614980a21e46fbccc35934b671bd81
 dtc_root="dtc-$dtc_commit"
 dtc_archive_name="$dtc_root.tar.gz"
-# TEMPORARY: git.kernel.org cgit is returning 404 for every repository.
-# Upstream mirror of the same commit; revert once kernel.org is back.
-dtc_url="https://codeload.github.com/dgibson/dtc/tar.gz/$dtc_commit"
+dtc_url="https://git.kernel.org/pub/scm/utils/dtc/dtc.git/snapshot/$dtc_archive_name"
 dtc_sha256=e115f987eec23a1ba25150a46ced1675de3716072d3b4905afb3a9cda0f007c7
 
 ninja_version=1.13.0

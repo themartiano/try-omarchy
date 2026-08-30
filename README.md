@@ -32,7 +32,7 @@ GIC, and fixes two audio problems found along the way.
 | ARM GIC | GICv2, emulated in QEMU userspace | GICv3 via Hypervisor.framework | Removes the interrupt path from the big QEMU lock |
 | Render patch | startergo mega-patch, 29 files | Vendored and trimmed to 18, forward-ported | Upstream is unmaintained since 2026-01-14 and QEMU's display API moved |
 | Python build deps | Host interpreter | Pinned `setuptools`, `wheel`, `pip` wheels | QEMU 11.1 builds `qemu.qmp`, and Python 3.12+ dropped `setuptools` |
-| dtc source | `git.kernel.org` | GitHub mirror, **temporary** | kernel.org cgit is returning 404 for every repository; both sources hash identically |
+| Cocoa keyboard capture | Capture follows the mouse grab | Capture follows the key window | An absolute-pointing guest drops the grab as soon as virtio-tablet binds, leaking host Command chords mid-session |
 
 ### What it fixes
 
