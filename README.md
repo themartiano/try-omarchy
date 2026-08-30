@@ -32,6 +32,7 @@ GIC, and fixes two audio problems found along the way.
 | ARM GIC | GICv2, emulated in QEMU userspace | GICv3 via Hypervisor.framework | Removes the interrupt path from the big QEMU lock |
 | Render patch | startergo mega-patch, 29 files | Vendored and trimmed to 18, forward-ported | Upstream is unmaintained since 2026-01-14 and QEMU's display API moved |
 | Python build deps | Host interpreter | Pinned `setuptools`, `wheel`, `pip` wheels | QEMU 11.1 builds `qemu.qmp`, and Python 3.12+ dropped `setuptools` |
+| Render patch source | Downloaded from the startergo tarball | Vendored in `macos/patches/` | That tree is unmaintained since 2026-01-14; the archive is no longer fetched at all |
 | Cocoa keyboard capture | Capture follows the mouse grab | Capture follows the key window | An absolute-pointing guest drops the grab as soon as virtio-tablet binds, leaking host Command chords mid-session |
 
 ### What it fixes
@@ -43,9 +44,14 @@ independent of what the guest was doing.
 
 | Measured at idle | Before | After |
 | --- | --- | --- |
-| QEMU | ~65% of a core | ~22% |
+| QEMU | ~65% of a core | ~15% |
 | `coreaudiod` attributable to the VM | 6.4% | 0.3% |
-| Total | ~71% | ~22% |
+| Total | ~71% | ~15% |
+
+The QEMU figure moved twice: the GIC work took it to ~22%, and clearing the
+Cocoa GL dirty flag (below) took it to ~15%. The second measurement was taken
+on a freshly booted desktop rather than the same session, so treat the split
+between the two as approximate.
 
 Under HVF, QEMU 11.1.1 also rejects GICv2 outright, so this is now the only
 supported configuration rather than an optimisation.
@@ -55,6 +61,13 @@ device, and QEMU links sdl2-compat over SDL3 where pausing a logical device
 leaves the physical one running. The device being held was not even from
 playback — `sdl_init_out` opens one at startup purely to negotiate a format,
 and nothing released it. The host resampled silence for the life of the VM.
+
+**An unconditional re-render every refresh tick.** The vendored
+GPU-resolution patch cleared `gl_dirty` inside an `if (cocoa_gl_trace_enabled())`
+block, so in a normal build the flag was never cleared: it latched true on the
+first damage and `cocoa_gl_refresh` then blitted the scanout on every tick for
+the life of the VM, whether or not anything had changed. The clear now sits at
+function scope, where its own comment says it belongs.
 
 **Audio dropouts.** PipeWire reported continuous xruns on a ring 682 ms deep,
 with the guest driver using 17 us against a 42 ms deadline. QEMU advances the
