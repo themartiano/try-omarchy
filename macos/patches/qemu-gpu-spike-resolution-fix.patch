@@ -2,25 +2,35 @@ From: startergo <https://github.com/startergo/homebrew-qemu-virgl-kosmickrisp>
 Subject: [PATCH] cocoa: clear the GL dirty flag once the render completes
 
 Vendored from homebrew-qemu-virgl-kosmickrisp commit
-cbfb7641c933e8364dda0a035830603fd7455a4e, patches/gpu-spike-resolution-fix.patch,
-unchanged. That tree has been unmaintained since 2026-01-14 and this was the
-last file Try Omarchy still consumed from it, so it is carried here instead of
-downloading the whole archive for one two-hunk patch.
+cbfb7641c933e8364dda0a035830603fd7455a4e, patches/gpu-spike-resolution-fix.patch.
+That tree has been unmaintained since 2026-01-14 and this was the last file
+Try Omarchy still consumed from it, so it is carried here rather than
+downloading the whole archive for one small patch.
+
+Fixed while vendoring: the upstream patch moved the gl_dirty clear out of
+cocoa_gl_refresh and into cocoa_gl_render, but indented it inside the
+"if (cocoa_gl_trace_enabled())" block, so the flag was only ever cleared when
+GL tracing was switched on. In a normal build gl_dirty latched true on the
+first damage and stayed true, and cocoa_gl_refresh then re-rendered the
+scanout on every refresh tick for the life of the VM. The clear now sits at
+function scope, which is what the comment describes and what the code it
+replaced in cocoa_gl_refresh did.
 
 Applies after the texture-borrowing patch.
 
---- a/ui/cocoa.m	2026-01-13 20:17:13
-+++ b/ui/cocoa.m	2026-01-13 20:16:42
-@@ -2328,6 +2328,8 @@ static void cocoa_gl_render(void)
-     if (cocoa_gl_trace_enabled()) {
+--- a/ui/cocoa.m
++++ b/ui/cocoa.m
+@@ -2337,6 +2337,9 @@
          glFlush();
          cocoa_gl_log_error("render end");
+     }
++
 +    /* Clear dirty flag after render completes to ensure clean handoff */
 +    gl_dirty = false;
-     }
  }
  
-@@ -2336,7 +2338,6 @@ static void cocoa_gl_refresh(DisplayChangeListener *dcl)
+ static void cocoa_gl_refresh(DisplayChangeListener *dcl)
+@@ -2344,7 +2347,6 @@
      cocoa_refresh(dcl);
  
      if (gl_dirty) {
