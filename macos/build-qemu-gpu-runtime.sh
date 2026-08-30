@@ -6,7 +6,7 @@ usage() {
   cat <<'EOF'
 Usage: macos/build-qemu-gpu-runtime.sh [--archive-dir DIR]
 
-Build the pinned startergo QEMU/VirGL source stack with Try Omarchy's Cocoa
+Build the pinned QEMU/VirGL source stack with Try Omarchy's Cocoa
 identity, dynamic-display, and immersive-mode patches, then relocate, sign,
 validate, and
 atomically stage it at:
@@ -43,6 +43,7 @@ done
 
 native_dir=$(cd "$(dirname "$0")" && pwd -P)
 texture_patch="$native_dir/patches/qemu-texture-borrowing-11.1.patch"
+gpu_fix_patch="$native_dir/patches/qemu-gpu-spike-resolution-fix.patch"
 identity_patch="$native_dir/patches/qemu-cocoa-product-identity.patch"
 display_patch="$native_dir/patches/qemu-cocoa-dynamic-display.patch"
 immersive_patch="$native_dir/patches/qemu-cocoa-immersive-mode.patch"
@@ -59,13 +60,8 @@ qemu_archive_name="$qemu_root.tar.gz"
 qemu_url="https://gitlab.com/qemu-project/qemu/-/archive/$qemu_commit/$qemu_archive_name"
 qemu_sha256=7563781d7dec46f11509801e027f852597235d29ca7afa44a07ed9d8b108b8cd
 
-startergo_commit=cbfb7641c933e8364dda0a035830603fd7455a4e
-startergo_root="homebrew-qemu-virgl-kosmickrisp-$startergo_commit"
-startergo_archive_name="$startergo_root.tar.gz"
-startergo_url="https://github.com/startergo/homebrew-qemu-virgl-kosmickrisp/archive/$startergo_commit.tar.gz"
-startergo_sha256=8b02c2bc4177047cb516f0cd5b510aa7a7aed2bdb3fb1d8507faf45fa5adc5a9
 texture_patch_sha256=b20bdf9a7d7ccda5b86366ad9d09a3bf95308b98a06b1ece281344405bcc7ab9
-gpu_fix_patch_sha256=2b0a589d5821fbbfaa65177c97395ec50382373373e5c6860821279f07d62bb2
+gpu_fix_patch_sha256=9b7d2c3b5f63b919e11a5f08e7fab47ea97e40b86efbb1a90ab8370596c07eeb
 identity_patch_sha256=5c9358c2858a74d6a678eacaae550a021f3e616c98c4e4e98c0e50bd869a0666
 display_patch_sha256=d2b1ba0d8103640815b00a2bd02e59a7452bf79de524a33081011895101cf6ea
 immersive_patch_sha256=fd1cd1a619778bda5c0c4cf58001fa7053af70ac717153ed9da819d8511a2574
@@ -271,7 +267,6 @@ validate_tar_root() {
 }
 
 qemu_archive="$archive_dir/$qemu_archive_name"
-startergo_archive="$archive_dir/$startergo_archive_name"
 keycodemap_archive="$archive_dir/$keycodemap_archive_name"
 dtc_archive="$archive_dir/$dtc_archive_name"
 ninja_archive="$archive_dir/$ninja_archive_name"
@@ -283,7 +278,6 @@ wheel_archive="$archive_dir/$wheel_archive_name"
 pip_archive="$archive_dir/$pip_archive_name"
 
 obtain_and_verify "QEMU $qemu_commit" "$qemu_url" "$qemu_sha256" "$qemu_archive"
-obtain_and_verify "startergo patches $startergo_commit" "$startergo_url" "$startergo_sha256" "$startergo_archive"
 obtain_and_verify "keycodemapdb $keycodemap_commit" "$keycodemap_url" "$keycodemap_sha256" "$keycodemap_archive"
 obtain_and_verify "dtc $dtc_commit" "$dtc_url" "$dtc_sha256" "$dtc_archive"
 obtain_and_verify "Ninja $ninja_version" "$ninja_url" "$ninja_sha256" "$ninja_archive"
@@ -303,7 +297,6 @@ obtain_and_verify "wheel" "$wheel_url" "$wheel_sha256" "$wheel_archive"
 obtain_and_verify "pip" "$pip_url" "$pip_sha256" "$pip_archive"
 
 validate_tar_root "QEMU $qemu_commit" "$qemu_archive" "$qemu_root" "$listing_dir/qemu.txt"
-validate_tar_root "startergo patches" "$startergo_archive" "$startergo_root" "$listing_dir/startergo.txt"
 validate_tar_root "keycodemapdb" "$keycodemap_archive" "$keycodemap_root" "$listing_dir/keycodemapdb.txt"
 validate_tar_root "dtc" "$dtc_archive" "$dtc_root" "$listing_dir/dtc.txt"
 validate_tar_root "virglrenderer" "$virgl_archive" "virglrenderer/$virgl_version" "$listing_dir/virglrenderer.txt"
@@ -311,7 +304,6 @@ validate_tar_root "ANGLE" "$angle_archive" "angle/$angle_version" "$listing_dir/
 validate_tar_root "libepoxy" "$epoxy_archive" "libepoxy/$epoxy_version" "$listing_dir/libepoxy.txt"
 
 tar -xzf "$qemu_archive" -C "$source_parent"
-tar -xzf "$startergo_archive" -C "$source_parent"
 tar -xzf "$virgl_archive" -C "$dependency_root"
 tar -xzf "$angle_archive" -C "$dependency_root"
 tar -xzf "$epoxy_archive" -C "$dependency_root"
@@ -320,7 +312,6 @@ while IFS=$'\t' read -r formula version archive_name archive_root archive_sha; d
 done < <(pinned_core_bottle_manifest)
 
 source_dir="$source_parent/$qemu_root"
-startergo_dir="$source_parent/$startergo_root"
 [[ -f $source_dir/configure && -f $source_dir/ui/cocoa.m ]] || \
   die "QEMU source archive is incomplete"
 
@@ -331,9 +322,8 @@ mkdir -p "$source_dir/subprojects/keycodemapdb" "$source_dir/subprojects/dtc"
 tar -xzf "$keycodemap_archive" -C "$source_dir/subprojects/keycodemapdb" --strip-components=1
 tar -xzf "$dtc_archive" -C "$source_dir/subprojects/dtc" --strip-components=1
 
-gpu_fix_patch="$startergo_dir/patches/gpu-spike-resolution-fix.patch"
 verify_file_sha "Try Omarchy texture-borrowing patch" "$texture_patch" "$texture_patch_sha256"
-verify_file_sha "startergo GPU-resolution patch" "$gpu_fix_patch" "$gpu_fix_patch_sha256"
+verify_file_sha "Try Omarchy GPU-resolution patch" "$gpu_fix_patch" "$gpu_fix_patch_sha256"
 verify_file_sha "Try Omarchy Cocoa product-identity patch" \
   "$identity_patch" "$identity_patch_sha256"
 verify_file_sha "Try Omarchy dynamic-display patch" "$display_patch" "$display_patch_sha256"

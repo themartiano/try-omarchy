@@ -1,0 +1,30 @@
+From: startergo <https://github.com/startergo/homebrew-qemu-virgl-kosmickrisp>
+Subject: [PATCH] cocoa: clear the GL dirty flag once the render completes
+
+Vendored from homebrew-qemu-virgl-kosmickrisp commit
+cbfb7641c933e8364dda0a035830603fd7455a4e, patches/gpu-spike-resolution-fix.patch,
+unchanged. That tree has been unmaintained since 2026-01-14 and this was the
+last file Try Omarchy still consumed from it, so it is carried here instead of
+downloading the whole archive for one two-hunk patch.
+
+Applies after the texture-borrowing patch.
+
+--- a/ui/cocoa.m	2026-01-13 20:17:13
++++ b/ui/cocoa.m	2026-01-13 20:16:42
+@@ -2328,6 +2328,8 @@ static void cocoa_gl_render(void)
+     if (cocoa_gl_trace_enabled()) {
+         glFlush();
+         cocoa_gl_log_error("render end");
++    /* Clear dirty flag after render completes to ensure clean handoff */
++    gl_dirty = false;
+     }
+ }
+ 
+@@ -2336,7 +2338,6 @@ static void cocoa_gl_refresh(DisplayChangeListener *dcl)
+     cocoa_refresh(dcl);
+ 
+     if (gl_dirty) {
+-        gl_dirty = false;
+ 
+         if (cocoa_gl_trace_enabled()) {
+             cocoa_gl_log("refresh: triggering render dirty scanout=%d egl_surface=%d",
