@@ -190,13 +190,20 @@ enum PortForwardStartupFailure {
 /// the authoritative bind moments later; this preflight exists for better UX.
 enum PortForwardAvailability {
     static func validate(_ mappings: [PortForwardMapping]) throws {
+        try validate(mappings, canBind: systemCanBind)
+    }
+
+    static func validate(
+        _ mappings: [PortForwardMapping],
+        canBind: (PortForwardMapping) -> Bool
+    ) throws {
         try PortForwardPolicy.validate(mappings)
         for mapping in mappings where !canBind(mapping) {
             throw PortForwardAvailabilityError.unavailable(mapping.protocol, mapping.hostPort)
         }
     }
 
-    private static func canBind(_ mapping: PortForwardMapping) -> Bool {
+    private static func systemCanBind(_ mapping: PortForwardMapping) -> Bool {
         let socketType: Int32
         switch mapping.protocol {
         case .tcp:
