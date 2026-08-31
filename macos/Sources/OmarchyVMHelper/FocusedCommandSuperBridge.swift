@@ -214,223 +214,39 @@ private extension CGEventFlags {
 }
 
 final class QMPMetaKeyClient: @unchecked Sendable {
-    private let descriptor: Int32
-    private let queue = DispatchQueue(label: "org.omarchy.qmp-meta-keys", qos: .userInteractive)
-    private var nextIdentifier: UInt64 = 1
-    private var closed = false
+    private let connection: QMPConnection
 
     init(socketPath: String) throws {
-        descriptor = try Self.connectSecureSocket(path: socketPath)
-        do {
-            guard let greeting = try Self.readJSONObject(from: descriptor, timeoutMilliseconds: 2_000),
-                  greeting["QMP"] != nil else {
-                throw HelperError.io("QMP socket did not send a valid greeting")
-            }
-            try Self.writeJSON([
-                "execute": "qmp_capabilities",
-                "id": "omarchy-capabilities",
-            ], to: descriptor)
-            guard let response = try Self.readResponse(
-                id: "omarchy-capabilities",
-                from: descriptor,
-                timeoutMilliseconds: 2_000
-            ), response["return"] != nil, response["error"] == nil else {
-                throw HelperError.io("QMP capability negotiation failed")
-            }
-        } catch {
-            Darwin.close(descriptor)
-            throw error
-        }
+        connection = try QMPConnection(
+            socketPath: socketPath,
+            identifierPrefix: "omarchy-meta"
+        )
     }
 
     func send(_ transition: GuestMetaTransition) throws {
         // Complete the local socket write before the following chord key is
         // reposted. Otherwise a very fast Command-key chord could reach QEMU
         // before its guest Meta-down command.
-        try queue.sync { [self] in
-            guard !closed else {
-                throw HelperError.io("QMP key injection is unavailable")
-            }
-            do {
-                let identifier = "omarchy-meta-\(nextIdentifier)"
-                nextIdentifier += 1
-                try Self.writeJSON([
-                    "execute": "input-send-event",
-                    "arguments": [
-                        "events": [[
-                            "type": "key",
-                            "data": [
-                                "down": transition.down,
-                                "key": ["type": "qcode", "data": transition.key.rawValue],
-                            ],
-                        ]],
+        try connection.send(
+            "input-send-event",
+            arguments: [
+                "events": [[
+                    "type": "key",
+                    "data": [
+                        "down": transition.down,
+                        "key": ["type": "qcode", "data": transition.key.rawValue],
                     ],
-                    "id": identifier,
-                ], to: descriptor)
-                Self.drainAvailableInput(from: descriptor)
-            } catch {
-                closed = true
-                Darwin.close(descriptor)
-                throw error
-            }
-        }
+                ]],
+            ]
+        )
     }
 
     func close() {
-        queue.sync {
-            guard !closed else { return }
-            closed = true
-            Darwin.close(descriptor)
-        }
-    }
-
-    private static func connectSecureSocket(path: String) throws -> Int32 {
-        guard path.hasPrefix("/"), !path.utf8.contains(0) else {
-            throw HelperError.io("QMP socket path must be an absolute pathname")
-        }
-        let url = URL(fileURLWithPath: path).standardizedFileURL
-        guard url.path == path else {
-            throw HelperError.io("QMP socket path must already be standardized")
-        }
-        let parent = url.deletingLastPathComponent()
-        var parentInfo = stat()
-        guard lstat(parent.path, &parentInfo) == 0,
-              (parentInfo.st_mode & S_IFMT) == S_IFDIR,
-              parentInfo.st_uid == getuid(),
-              (parentInfo.st_mode & 0o077) == 0 else {
-            throw HelperError.io("QMP socket parent must be a private directory owned by this user")
-        }
-        var socketInfo = stat()
-        guard lstat(path, &socketInfo) == 0,
-              (socketInfo.st_mode & S_IFMT) == S_IFSOCK,
-              socketInfo.st_uid == getuid() else {
-            throw HelperError.io("QMP endpoint must be a Unix socket owned by this user")
-        }
-
-        let pathBytes = Array(path.utf8)
-        var address = sockaddr_un()
-        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
-            throw HelperError.io("QMP socket path is too long")
-        }
-        address.sun_family = sa_family_t(AF_UNIX)
-        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
-            buffer.initializeMemory(as: UInt8.self, repeating: 0)
-            buffer.copyBytes(from: pathBytes)
-        }
-
-        let fileDescriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fileDescriptor >= 0 else { throw HelperError.io("cannot create QMP socket") }
-        var noSignal: Int32 = 1
-        guard withUnsafePointer(to: &noSignal, {
-            setsockopt(
-                fileDescriptor,
-                SOL_SOCKET,
-                SO_NOSIGPIPE,
-                $0,
-                socklen_t(MemoryLayout<Int32>.size)
-            )
-        }) == 0 else {
-            Darwin.close(fileDescriptor)
-            throw HelperError.io("cannot make QMP socket resilient to guest exit")
-        }
-        let offset = MemoryLayout.offset(of: \sockaddr_un.sun_path) ?? 0
-        let length = socklen_t(offset + pathBytes.count + 1)
-        let result = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(fileDescriptor, $0, length)
-            }
-        }
-        guard result == 0 else {
-            let detail = String(cString: strerror(errno))
-            Darwin.close(fileDescriptor)
-            throw HelperError.io("cannot connect to QMP socket: \(detail)")
-        }
-        return fileDescriptor
+        connection.close()
     }
 
     static func writeJSON(_ object: [String: Any], to descriptor: Int32) throws {
-        var data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-        data.append(contentsOf: [0x0D, 0x0A])
-        try data.withUnsafeBytes { rawBuffer in
-            guard let base = rawBuffer.baseAddress else { return }
-            var written = 0
-            while written < rawBuffer.count {
-                let result = Darwin.write(descriptor, base.advanced(by: written), rawBuffer.count - written)
-                if result > 0 {
-                    written += result
-                } else if result < 0 && errno == EINTR {
-                    continue
-                } else {
-                    throw HelperError.io("cannot write QMP command")
-                }
-            }
-        }
-    }
-
-    private static func readResponse(
-        id: String,
-        from descriptor: Int32,
-        timeoutMilliseconds: Int32
-    ) throws -> [String: Any]? {
-        let deadline = DispatchTime.now().uptimeNanoseconds
-            + UInt64(timeoutMilliseconds) * 1_000_000
-        while DispatchTime.now().uptimeNanoseconds < deadline {
-            let remaining = Int32(min(
-                UInt64(Int32.max),
-                (deadline - DispatchTime.now().uptimeNanoseconds) / 1_000_000 + 1
-            ))
-            guard let object = try readJSONObject(from: descriptor, timeoutMilliseconds: remaining) else {
-                return nil
-            }
-            if object["id"] as? String == id { return object }
-        }
-        return nil
-    }
-
-    private static func readJSONObject(
-        from descriptor: Int32,
-        timeoutMilliseconds: Int32
-    ) throws -> [String: Any]? {
-        var bytes = Data()
-        while bytes.count <= 1_048_576 {
-            var descriptorPoll = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
-            let ready = Darwin.poll(&descriptorPoll, 1, timeoutMilliseconds)
-            if ready == 0 { return nil }
-            if ready < 0 {
-                if errno == EINTR { continue }
-                throw HelperError.io("cannot poll QMP socket")
-            }
-            guard descriptorPoll.revents & Int16(POLLIN) != 0 else {
-                throw HelperError.io("QMP socket closed during handshake")
-            }
-            var byte: UInt8 = 0
-            let count = Darwin.read(descriptor, &byte, 1)
-            if count == 1 {
-                if byte == 0x0A {
-                    guard let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
-                        throw HelperError.io("QMP response is not a JSON object")
-                    }
-                    return object
-                }
-                if byte != 0x0D { bytes.append(byte) }
-            } else if count == 0 {
-                throw HelperError.io("QMP socket closed during handshake")
-            } else if errno != EINTR {
-                throw HelperError.io("cannot read QMP socket")
-            }
-        }
-        throw HelperError.io("QMP response exceeds one MiB")
-    }
-
-    private static func drainAvailableInput(from descriptor: Int32) {
-        var descriptorPoll = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while Darwin.poll(&descriptorPoll, 1, 0) > 0,
-              descriptorPoll.revents & Int16(POLLIN) != 0 {
-            let count = Darwin.read(descriptor, &buffer, buffer.count)
-            if count <= 0 { return }
-            descriptorPoll.revents = 0
-        }
+        try QMPConnection.writeJSON(object, to: descriptor)
     }
 }
 

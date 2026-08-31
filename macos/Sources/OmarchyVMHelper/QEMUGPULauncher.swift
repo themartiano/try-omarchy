@@ -721,7 +721,7 @@ enum CameraPreflight {
 
 final class QEMUGPUProcessSupervisor: @unchecked Sendable {
     enum LaunchEvent: Equatable {
-        case virtualMachineReady
+        case virtualMachineReady(qmpSocketPath: String?)
     }
 
     struct StandardErrorDrain {
@@ -731,7 +731,7 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
 
     private struct StandardErrorConsumption {
         let reachedEnd: Bool
-        let reportsVirtualMachineStart: Bool
+        let launchEvents: [LaunchEvent]
     }
 
     private static let standardErrorReadBudget = 64 * 1_024
@@ -767,9 +767,11 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
             if consumption.reachedEnd {
                 handle.readabilityHandler = nil
             }
-            if consumption.reportsVirtualMachineStart {
+            if !consumption.launchEvents.isEmpty {
                 DispatchQueue.main.async {
-                    launchEvent(.virtualMachineReady)
+                    for event in consumption.launchEvents {
+                        launchEvent(event)
+                    }
                 }
             }
         }
@@ -778,11 +780,14 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
             // QEMU inherits this pipe from the shell launcher and can outlive
             // it after a crash. Drain only bytes available now; waiting for
             // EOF here could strand process completion for the QEMU lifetime.
-            if self?.consumeAvailableStandardError(
+            let finalEvents = self?.consumeAvailableStandardError(
                 from: pipe.fileHandleForReading
-            ).reportsVirtualMachineStart == true {
+            ).launchEvents ?? []
+            if !finalEvents.isEmpty {
                 DispatchQueue.main.async {
-                    launchEvent(.virtualMachineReady)
+                    for event in finalEvents {
+                        launchEvent(event)
+                    }
                 }
             }
             self?.clear(process)
@@ -856,13 +861,13 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
         guard !drain.data.isEmpty else {
             return StandardErrorConsumption(
                 reachedEnd: drain.reachedEnd,
-                reportsVirtualMachineStart: false
+                launchEvents: []
             )
         }
         try? FileHandle.standardError.write(contentsOf: drain.data)
         return StandardErrorConsumption(
             reachedEnd: drain.reachedEnd,
-            reportsVirtualMachineStart: recordStandardError(drain.data)
+            launchEvents: recordStandardError(drain.data)
         )
     }
 
@@ -939,17 +944,57 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
         }
     }
 
-    private func recordStandardError(_ data: Data) -> Bool {
+    private func recordStandardError(_ data: Data) -> [LaunchEvent] {
         lock.lock()
         defer { lock.unlock() }
         errorBuffer += String(decoding: data, as: UTF8.self)
+        var launchEvents: [LaunchEvent] = []
+        if !didReportVirtualMachineStart,
+           let event = Self.virtualMachineReadyEvent(in: errorBuffer) {
+            didReportVirtualMachineStart = true
+            launchEvents.append(event)
+        }
         if errorBuffer.count > 4_096 {
             errorBuffer = String(errorBuffer.suffix(4_096))
         }
-        guard !didReportVirtualMachineStart,
-              errorBuffer.contains("[qemu-gpu] Ready") else { return false }
-        didReportVirtualMachineStart = true
-        return true
+        return launchEvents
+    }
+
+    /// Extracts only a complete launcher-owned readiness line. Waiting for its
+    /// newline matters because FileHandle can split the socket pathname across
+    /// arbitrary readability callbacks.
+    static func virtualMachineReadyEvent(in standardError: String) -> LaunchEvent? {
+        let marker = "[qemu-gpu] Ready. QMP: "
+        var lineStart = standardError.startIndex
+        while let newline = standardError[lineStart...].firstIndex(of: "\n") {
+            var line = String(standardError[lineStart..<newline])
+            if line.last == "\r" {
+                line.removeLast()
+            }
+            if line.hasPrefix(marker) {
+                return .virtualMachineReady(
+                    qmpSocketPath: qmpSocketPath(inReadyLine: line)
+                )
+            }
+            lineStart = standardError.index(after: newline)
+        }
+        return nil
+    }
+
+    static func qmpSocketPath(inReadyLine line: String) -> String? {
+        let linePrefix = "[qemu-gpu] Ready. QMP: "
+        guard line.hasPrefix(linePrefix) else { return nil }
+        let path = String(line.dropFirst(linePrefix.count))
+        let pathPrefix = "/tmp/omarchy-qemu-gpu."
+        let pathSuffix = "/qmp.sock"
+        guard path.hasPrefix(pathPrefix), path.hasSuffix(pathSuffix) else { return nil }
+        let token = path
+            .dropFirst(pathPrefix.count)
+            .dropLast(pathSuffix.count)
+        guard token.count == 6,
+              token.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) })
+        else { return nil }
+        return path
     }
 
     private static func status(for process: Process) -> Int32 {

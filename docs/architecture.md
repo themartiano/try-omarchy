@@ -36,6 +36,16 @@ is updated. Graphics travel from Linux through virtio-gpu and VirGL to the
 native Cocoa window. Storage, networking, audio, and input use their matching
 QEMU virtual devices and host backends.
 
+The macOS helper opens an authenticated connection to QEMU's private,
+single-client machine protocol socket before host sleep and retains that control
+session through wake. Before macOS sleeps it synchronously pauses the guest
+vCPUs, and after wake it resumes them only when that sleep handler observed the
+pause transition. The bundled Cocoa runtime removes its in-process Pause and
+Resume menu actions because they cannot participate in QMP connection
+ownership. Abnormal QEMU states such as an I/O error are never overridden. This
+preserves in-memory guest state across lid close while leaving safety stops
+untouched.
+
 One small host-integration channel sits beside those devices. A virtio-serial
 port (`dev.tryomarchy.clipboard`) carries newline-delimited JSON between a
 Swift bridge on the Mac, which watches the `NSPasteboard` change count, and a

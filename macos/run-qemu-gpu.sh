@@ -1382,7 +1382,7 @@ done
 [[ -S $audio_bridge_socket ]] || fail "QEMU did not create its private audio bridge socket"
 [[ -S $camera_bridge_socket ]] || fail "QEMU did not create its private camera bridge socket"
 [[ -S $clipboard_bridge_socket ]] || fail "QEMU did not create its private clipboard bridge socket"
-echo "[qemu-gpu] Ready." >&2
+echo "[qemu-gpu] Ready. QMP: $qmp_socket" >&2
 
 # FD 9 deliberately remains open only in QEMU. Letting the sibling audio
 # bridge inherit it could keep a persistent workspace locked after QEMU exits.

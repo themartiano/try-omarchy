@@ -1,0 +1,31 @@
+From: Try Omarchy contributors
+Subject: [PATCH] cocoa: reserve pause ownership for the host sleep controller
+
+Applies after the Try Omarchy Cocoa identity, dynamic-display, immersive-mode,
+and full-grab patches.
+
+The macOS helper attributes a QMP STOP transition to host sleep and resumes
+only that transition after wake. QEMU's Cocoa Machine menu calls qmp_stop and
+qmp_cont in-process, bypassing the private QMP socket. If its Pause action
+races the helper's stop command, both transitions produce the same global STOP
+event and the helper cannot prove which caller owns the paused state.
+
+Remove the Cocoa Pause and Resume items so the helper is the only ordinary
+controller capable of entering QEMU's paused run state. Reset and Power Down
+remain available, and abnormal run states are still left untouched on wake.
+
+diff --git a/ui/cocoa.m b/ui/cocoa.m
+--- a/ui/cocoa.m
++++ b/ui/cocoa.m
+@@ -1872,11 +1872,6 @@ static void create_initial_menus(void)
+     // Machine menu
+     menu = [[NSMenu alloc] initWithTitle: @"Machine"];
+     [menu setAutoenablesItems: NO];
+-    [menu addItem: [[[NSMenuItem alloc] initWithTitle: @"Pause" action: @selector(pauseQEMU:) keyEquivalent: @""] autorelease]];
+-    menuItem = [[[NSMenuItem alloc] initWithTitle: @"Resume" action: @selector(resumeQEMU:) keyEquivalent: @""] autorelease];
+-    [menu addItem: menuItem];
+-    [menuItem setEnabled: NO];
+-    [menu addItem: [NSMenuItem separatorItem]];
+     [menu addItem: [[[NSMenuItem alloc] initWithTitle: @"Reset" action: @selector(restartQEMU:) keyEquivalent: @""] autorelease]];
+     [menu addItem: [[[NSMenuItem alloc] initWithTitle: @"Power Down" action: @selector(powerDownQEMU:) keyEquivalent: @""] autorelease]];
+     menuItem = [[[NSMenuItem alloc] initWithTitle: @"Machine" action:nil keyEquivalent:@""] autorelease];
