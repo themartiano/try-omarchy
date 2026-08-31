@@ -104,6 +104,11 @@ shared_folder_mount_point=$(python3 -c 'import json,sys; print(json.load(open(sy
 ln -sfn /usr/lib/systemd/user/omarchy-native-mac-share-link.service \
   "$root/etc/systemd/user/default.target.wants/omarchy-native-mac-share-link.service"
 cat "$guest_dir/fragments/hypr-monitors-arm-qemu.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
+# Upstream enables Wayland IME for Obsidian but not Chromium; the fcitx5
+# Chinese input methods need the text-input protocol there as well.
+[[ -f $root/etc/skel/.config/chromium-flags.conf ]] || \
+  fail "upstream chromium-flags.conf is missing from /etc/skel"
+cat "$guest_dir/fragments/chromium-flags-ime.append.conf" >>"$root/etc/skel/.config/chromium-flags.conf"
 
 hostname=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["guest"]["hostname"])' "$spec")
 printf '%s\n' "$hostname" >"$root/etc/hostname"
@@ -112,8 +117,10 @@ cat >"$root/etc/hosts" <<EOF
 ::1 localhost
 127.0.1.1 $hostname
 EOF
-printf 'en_US.UTF-8 UTF-8\n' >"$root/etc/locale.gen"
-printf 'LANG=en_US.UTF-8\n' >"$root/etc/locale.conf"
+# Chinese-first session with an English fallback. Both locales are generated
+# into the image so switching back needs no locale regeneration.
+printf 'en_US.UTF-8 UTF-8\nzh_CN.UTF-8 UTF-8\n' >"$root/etc/locale.gen"
+printf 'LANG=zh_CN.UTF-8\n' >"$root/etc/locale.conf"
 printf 'KEYMAP=us\n' >"$root/etc/vconsole.conf"
 # An unprovisioned machine receives a new identity from systemd on first boot.
 : >"$root/etc/machine-id"

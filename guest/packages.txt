@@ -13,6 +13,10 @@ e2fsprogs
 eza
 fakeroot
 fastfetch
+fcitx5
+fcitx5-gtk
+fcitx5-qt
+fcitx5-rime
 fd
 fontconfig
 foot
@@ -41,6 +45,7 @@ nautilus
 neovim
 networkmanager
 noto-fonts
+noto-fonts-cjk
 noto-fonts-emoji
 omarchy-keyring
 pacman-contrib
