@@ -15,6 +15,8 @@ QEMU_PERSISTENT_STORAGE_ROOT_MARKER='omarchy-qemu-storage-root-v1'
 QEMU_PERSISTENT_STORAGE_LOCK_FD=9
 QEMU_PERSISTENT_STORAGE_QEMU_ADD_FD='fd=9,set=77,opaque=omarchy-persistent-lock'
 QEMU_PERSISTENT_STORAGE_INCOMPATIBLE_STATUS=78
+# Room the guest needs beyond whatever the workspace itself costs to create.
+QEMU_PERSISTENT_STORAGE_HEADROOM_BYTES=1073741824
 
 QEMU_SELECTED_DISK=''
 QEMU_SELECTED_STORAGE_MODE=''
@@ -53,23 +55,23 @@ _qps_is_positive_integer() {
 }
 
 _qps_lstat_kind() {
-  stat -f '%HT' "$1" 2>/dev/null
+  /usr/bin/stat -f '%HT' "$1" 2>/dev/null
 }
 
 _qps_owner() {
-  stat -f '%u' "$1" 2>/dev/null
+  /usr/bin/stat -f '%u' "$1" 2>/dev/null
 }
 
 _qps_permissions() {
-  stat -f '%Lp' "$1" 2>/dev/null
+  /usr/bin/stat -f '%Lp' "$1" 2>/dev/null
 }
 
 _qps_size() {
-  stat -f '%z' "$1" 2>/dev/null
+  /usr/bin/stat -f '%z' "$1" 2>/dev/null
 }
 
 _qps_file_identity() {
-  stat -f '%d:%i' "$1" 2>/dev/null
+  /usr/bin/stat -f '%d:%i' "$1" 2>/dev/null
 }
 
 _qps_assert_private_directory() {
@@ -134,6 +136,89 @@ _qps_assert_source_disk() {
   }
 }
 
+# Report the filesystem type holding a path.
+#
+# `df -P` names the device in its first field and `mount` keys its listing on
+# the same device, so matching on the device avoids parsing mount points. Those
+# routinely contain spaces, both for the default location under "Application
+# Support/Try Omarchy" and for anything under /Volumes.
+_qps_volume_filesystem() {
+  local qps_path=$1
+  local qps_device=''
+
+  if [[ -n ${OMARCHY_QEMU_GPU_TEST_FS_TYPE:-} ]]; then
+    printf '%s\n' "$OMARCHY_QEMU_GPU_TEST_FS_TYPE"
+    return 0
+  fi
+
+  qps_device=$(/bin/df -P "$qps_path" 2>/dev/null | awk 'NR == 2 { print $1 }')
+  [[ -n $qps_device ]] || return 1
+  /sbin/mount | awk -v device="$qps_device" '
+    $1 == device {
+      start = index($0, "(")
+      if (start == 0) next
+      rest = substr($0, start + 1)
+      stop = index(rest, ",")
+      if (stop == 0) stop = index(rest, ")")
+      if (stop == 0) next
+      print substr(rest, 1, stop - 1)
+      exit
+    }
+  '
+}
+
+# The working disk is an APFS clone of the factory image that is then expanded
+# sparsely to its full size. Sparse files are the part that cannot be given up:
+# on exFAT a `truncate` to the working size allocates every byte immediately, so
+# a 24 GiB disk would cost 24 GiB the moment it is created. Cloning matters less
+# — a full copy works, it just costs another 6 GiB and takes far longer.
+# Refuse anything but APFS, naming what was actually found.
+_qps_assert_volume_supported() {
+  local qps_root=$1
+  local qps_filesystem=''
+
+  qps_filesystem=$(_qps_volume_filesystem "$qps_root")
+  [[ -n $qps_filesystem ]] || {
+    _qps_fail "cannot determine the filesystem holding $qps_root"
+    return 1
+  }
+  [[ $qps_filesystem == apfs ]] || {
+    _qps_fail "the Omarchy workspace requires an APFS volume; $qps_root is on $qps_filesystem"
+    return 1
+  }
+}
+
+_qps_free_bytes() {
+  local qps_path=$1
+  local qps_kibibytes=''
+
+  if [[ -n ${OMARCHY_QEMU_GPU_TEST_FREE_BYTES:-} ]]; then
+    printf '%s\n' "$OMARCHY_QEMU_GPU_TEST_FREE_BYTES"
+    return 0
+  fi
+
+  qps_kibibytes=$(/bin/df -Pk "$qps_path" 2>/dev/null | awk 'NR == 2 { print $4 }')
+  [[ $qps_kibibytes =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$((qps_kibibytes * 1024))"
+}
+
+# Fail before a multi-gigabyte write rather than part-way through it.
+_qps_assert_free_space() {
+  local qps_path=$1
+  local qps_required=$2
+  local qps_available=''
+
+  _qps_is_positive_integer "$qps_required" || return 1
+  qps_available=$(_qps_free_bytes "$qps_path") || {
+    _qps_fail "cannot determine free space on the volume holding $qps_path"
+    return 1
+  }
+  (( qps_available >= qps_required )) || {
+    _qps_fail "not enough free space for the Omarchy VM: $((qps_required / 1024 / 1024)) MiB required, $((qps_available / 1024 / 1024)) MiB available"
+    return 1
+  }
+}
+
 _qps_assert_safe_root_path() {
   local qps_root=$1
 
@@ -189,6 +274,16 @@ _qps_prepare_state_root() {
     _qps_fail "cannot create state root: $qps_configured_root"
     return 1
   }
+  # Check the filesystem first: on exFAT and friends `chmod` silently does
+  # nothing, so the private-directory assertion below would fail with a mode
+  # complaint instead of naming the real problem.
+  _qps_assert_volume_supported "$qps_configured_root" || return 1
+  # `mkdir -p` is a no-op for a directory that already exists, so `umask 077`
+  # above never applies to one — a folder the user (or Finder, creating it in
+  # the picker) made before this launch is typically mode 0755. Fix that
+  # before the strict assertion below, rather than only handling directories
+  # this script created itself.
+  chmod 700 "$qps_configured_root" 2>/dev/null
   _qps_assert_private_directory "$qps_configured_root" 'state root' || return 1
   qps_root=$(cd "$qps_configured_root" && pwd -P) || {
     _qps_fail "cannot resolve state root: $qps_configured_root"
@@ -235,7 +330,7 @@ _qps_lock_fd_is_open() {
 _qps_fd_matches_path() {
   local qps_fd=$1
   local qps_path=$2
-  [[ $(stat -f '%HT:%u:%i' "/dev/fd/$qps_fd" 2>/dev/null) == \
+  [[ $(/usr/bin/stat -f '%HT:%u:%i' "/dev/fd/$qps_fd" 2>/dev/null) == \
      "Regular File:$(id -u):$(_qps_file_identity "$qps_path" | sed 's/^.*://')" ]]
 }
 
@@ -613,6 +708,12 @@ qemu_persistent_storage_materialize_source() {
     QEMU_IMMUTABLE_SOURCE_DISK=$qps_final
     exec 8>&-
     return 0
+  fi
+
+  if ! _qps_assert_free_space "$QEMU_PERSISTENT_STORAGE_IMAGES_ROOT" \
+    "$((qps_source_bytes + QEMU_PERSISTENT_STORAGE_HEADROOM_BYTES))"; then
+    exec 8>&-
+    return 1
   fi
 
   qps_staging=$(mktemp "$QEMU_PERSISTENT_STORAGE_IMAGES_ROOT/.${qps_identity}.initializing.XXXXXX") || {
@@ -1008,7 +1109,7 @@ _qps_migrate_legacy_single_workspace() {
       _qps_error "leaving oversized legacy workspace untouched: $qps_candidate_name"
       continue
     fi
-    qps_candidate_mtime=$(stat -f '%m' "$qps_candidate/rootfs.ext4" 2>/dev/null)
+    qps_candidate_mtime=$(/usr/bin/stat -f '%m' "$qps_candidate/rootfs.ext4" 2>/dev/null)
     [[ $qps_candidate_mtime =~ ^[0-9]+$ ]] || {
       [[ $qps_candidate_name != "$qps_identity" ]] || qps_exact_invalid=1
       _qps_error "leaving legacy workspace with an unreadable modification time untouched: $qps_candidate_name"
@@ -1145,6 +1246,13 @@ _qps_select_persistent_disk() {
     fi
   fi
   if [[ ! -e $qps_final && ! -L $qps_final ]]; then
+    # The clone itself is nearly free on APFS and the expansion is sparse, so
+    # what matters here is that the guest has room to boot and write.
+    if ! _qps_assert_free_space "$QEMU_PERSISTENT_STORAGE_DISKS_ROOT" \
+      "$QEMU_PERSISTENT_STORAGE_HEADROOM_BYTES"; then
+      qemu_persistent_storage_release_lock
+      return 1
+    fi
     if ! _qps_initialize_persistent_disk \
       "$qps_identity" "$qps_storage_key" "$qps_source" "$qps_source_sha" \
       "$qps_source_bytes" "$qps_working_bytes"; then

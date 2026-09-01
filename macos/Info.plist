@@ -38,8 +38,12 @@
   <string>Try Omarchy reads and writes this folder only if you choose to share it with Omarchy.</string>
   <key>NSDownloadsFolderUsageDescription</key>
   <string>Try Omarchy reads and writes this folder only if you choose to share it with Omarchy.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Try Omarchy uses the Mac camera only while software inside the virtual machine records video.</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Try Omarchy uses the Mac microphone only when software inside the virtual machine records audio.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>Try Omarchy stores its virtual machine on this drive only if you choose to keep it there.</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
   <key>NSSupportsAutomaticGraphicsSwitching</key>

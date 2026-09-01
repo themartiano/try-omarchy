@@ -102,6 +102,8 @@ class BuildCacheTests(unittest.TestCase):
         app = dry_run.index(" app --")
         self.assertLess(guest, runtime)
         self.assertLess(runtime, app)
+        self.assertIn("Build output:", dry_run)
+        self.assertIn(str(REPOSITORY / "dist/Try Omarchy.app"), dry_run)
 
         forced = subprocess.run(
             ["make", "-n", "build", "FORCE=1"],
@@ -123,6 +125,28 @@ class BuildCacheTests(unittest.TestCase):
         )
         self.assertNotEqual(0, invalid_release.returncode)
         self.assertNotIn("build-cache.py", invalid_release.stdout)
+
+    def test_runtime_file_manifest_is_the_single_validated_closure(self) -> None:
+        manifest = REPOSITORY / "macos/runtime-files.txt"
+        expected = frozenset(manifest.read_text(encoding="ascii").splitlines())
+        self.assertEqual(expected, build_cache.RUNTIME_FILES)
+        self.assertEqual(16, len(expected))
+        self.assertIn("bin/qemu-system-aarch64", expected)
+        self.assertIn("bin/zstd", expected)
+        self.assertIn("lib/libSDL3.dylib", expected)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            invalid = Path(temporary) / "runtime-files.txt"
+            for contents in (
+                "",
+                "bin/tool\nbin/tool\n",
+                "../outside\n",
+                "bin//tool\n",
+                "lib/nested/tool\n",
+            ):
+                invalid.write_text(contents, encoding="ascii")
+                with self.assertRaises(RuntimeError):
+                    build_cache.read_runtime_manifest(invalid)
 
     def test_guest_fingerprint_tracks_build_inputs_but_not_documentation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -33,6 +33,7 @@ less
 libnotify
 libsecret
 linux-aarch64
+linux-aarch64-headers
 mesa
 mkinitcpio
 mpv
@@ -42,6 +43,7 @@ networkmanager
 noto-fonts
 noto-fonts-emoji
 omarchy-keyring
+openssh
 pacman-contrib
 pipewire
 pipewire-alsa
@@ -66,6 +68,7 @@ ttf-jetbrains-mono-nerd
 udiskie
 unzip
 uwsm
+v4l2loopback-dkms
 vulkan-swrast
 wayland
 wireplumber

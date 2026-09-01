@@ -53,5 +53,18 @@ review. Run `make guest` and `make test`. The upstream source can report a devel
 version even for an official tag, so never hand-edit the `version` or `release`
 fields to make them agree; they record different upstream identities.
 
+## Tests
+
+Tests should describe a user-visible behavior, policy, data contract, or
+process boundary. Keep presentation and edit rules in deterministic models that
+can be exercised without opening AppKit windows. Do not make CI depend on pixel
+coordinates, font metrics, display size, global window lookup, fixed run-loop
+delays, or an assumed free network port.
+
+Platform integration tests are appropriate when the operating-system boundary
+is itself the contract. Use isolated temporary state, inject controllable
+probes where the real resource is incidental, and use bounded readiness checks
+instead of fixed settling delays.
+
 By contributing, you agree that your contribution is licensed under the MIT
 License in this repository.

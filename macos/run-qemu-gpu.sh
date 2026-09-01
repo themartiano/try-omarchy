@@ -40,27 +40,26 @@ guest_input=${1:-"$resources_dir/guest"}
 qemu_bin="$resources_dir/runtime/bin/Try Omarchy"
 native_bridge="$contents_dir/MacOS/omarchy-vm-helper"
 storage_library="$script_dir/qemu-persistent-storage.sh"
-
-[[ -f $storage_library && ! -L $storage_library ]] || {
-  fail "persistent-storage library is missing or unsafe: $storage_library"
-}
-# shellcheck source=qemu-persistent-storage.sh
-source "$storage_library"
+port_forwarding_library="$script_dir/qemu-port-forwarding.sh"
 
 [[ $(uname -m) == arm64 ]] || fail "requires an ARM64 Mac"
 [[ $(uname -s) == Darwin ]] || fail "requires macOS"
 [[ -d $guest_input && ! -L $guest_input ]] || fail "ARM guest directory is missing or unsafe: $guest_input"
 guest_dir=$(cd "$guest_input" && pwd -P)
 
-for command in codesign file getconf id mktemp ps stat sysctl; do
+for command in codesign file getconf id mktemp ps sysctl; do
   command -v "$command" >/dev/null || fail "$command is required"
 done
 
-if [[ ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} != 1 ]]; then
-  codesign --verify --deep --strict "$app_bundle" >/dev/null 2>&1 || {
-    fail "the installed app is damaged or has an invalid code signature"
-  }
-fi
+case ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} in
+  0)
+    codesign --verify --deep --strict "$app_bundle" >/dev/null 2>&1 || {
+      fail "the installed app is damaged or has an invalid code signature"
+    }
+    ;;
+  1) ;;
+  *) fail "OMARCHY_QEMU_GPU_INSPECT_ONLY must be 0 or 1" ;;
+esac
 
 [[ -f $qemu_bin && -x $qemu_bin ]] || {
   fail "missing bundled GPU QEMU runtime at $qemu_bin"
@@ -97,6 +96,12 @@ qemu_devices=$("$qemu_bin" -device help 2>&1) || fail "cannot inspect staged QEM
 qemu_help=$("$qemu_bin" -help 2>&1) || fail "cannot inspect staged QEMU options"
 printf '%s\n' "$qemu_help" | grep -q -- '^-add-fd fd=fd,set=set' || {
   fail "staged QEMU cannot preserve the persistent-disk lock descriptor"
+}
+printf '%s\n' "$qemu_help" | grep -Fq -- '-action reboot=reset|shutdown' || {
+  fail "staged QEMU cannot apply the required reboot policy"
+}
+printf '%s\n' "$qemu_help" | grep -Fq -- '-action shutdown=poweroff|pause' || {
+  fail "staged QEMU cannot apply the required shutdown policy"
 }
 printf '%s\n' "$qemu_help" | grep -Fq 'full-grab=on|off' || {
   fail "staged QEMU cannot capture macOS system key combinations"
@@ -342,6 +347,7 @@ runtime = exact_keys(
     spec.get("runtime"),
     {
         "audio",
+        "camera",
         "clipboard",
         "compressedDisk",
         "devices",
@@ -403,12 +409,38 @@ network = {
     "device": "virtio-net-pci",
     "backend": "slirp",
     "mode": "user",
+    "sshAccess": {
+        "activation": {
+            "guestPort": 22,
+            "kernelToken": "tryomarchy.ssh_access=1",
+            "protocol": "tcp",
+            "scope": "boot",
+            "service": "sshd.service",
+        },
+        "preset": {
+            "guestPort": 22,
+            "hostAddress": "127.0.0.1",
+            "hostPort": 2222,
+            "protocol": "tcp",
+        },
+    },
 }
 audio = {
     "controller": "intel-hda",
     "codec": "hda-micro",
     "backend": "sdl",
     "duplex": True,
+}
+camera = {
+    "activation": "on-demand",
+    "device": "virtserialport",
+    "framesPerSecond": 30,
+    "guestDevice": "/dev/video42",
+    "height": 720,
+    "pixelFormat": "NV12",
+    "port": "dev.tryomarchy.camera",
+    "protocolVersion": 1,
+    "width": 1280,
 }
 storage = {
     "device": "virtio-blk-pci",
@@ -430,6 +462,7 @@ if (
     or runtime.get("graphics") != graphics
     or runtime.get("network") != network
     or runtime.get("audio") != audio
+    or runtime.get("camera") != camera
     or runtime.get("storage") != storage
     or runtime.get("clipboard") != clipboard
     or runtime.get("sharedFolder") != shared_folder
@@ -460,6 +493,7 @@ if (
 supply_chain_keys = {
     "archLinuxArmPackagesCommit",
     "archLinuxArmPackagesRepository",
+    "hyprland",
     "mise",
     "omarchyPackagesCommit",
     "omarchyPackagesRepository",
@@ -474,6 +508,55 @@ if (
     or supply_chain.get("archLinuxArmPackagesCommit") != "0b5418fc3f62860b191cd872cb2f933f9fc77841"
 ):
     fail("ARM package supply chain is not pinned")
+hyprland = exact_keys(
+    supply_chain.get("hyprland"),
+    {
+        "binarySha256",
+        "buildPackages",
+        "commit",
+        "glazeCommit",
+        "glazeLicenseSha256",
+        "glazeSha256",
+        "glazeUrl",
+        "glazeVersion",
+        "issue",
+        "license",
+        "patch",
+        "patchSha256",
+        "pkgrel",
+        "repository",
+        "sha256",
+        "upstreamPackageSha256",
+        "upstreamPackageVersion",
+        "url",
+        "version",
+    },
+    "build spec hyprland component",
+)
+exact_keys(
+    hyprland.get("buildPackages"),
+    {
+        "base-devel",
+        "binutils",
+        "cmake",
+        "gcc",
+        "gcc-libs",
+        "glibc",
+        "hyprland",
+        "hyprland-protocols",
+        "make",
+        "meson",
+        "ninja",
+        "pkgconf",
+        "xorgproto",
+    },
+    "build spec hyprland build packages",
+)
+hyprland_identity = hashlib.sha256(
+    json.dumps(hyprland, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+if hyprland_identity != "f3855f9bc084ee047657484400f413bb37d0797d71c64b9d9c2e459bdbc67bf5":
+    fail("factory Hyprland component is not the reviewed rounded-border build")
 mise = exact_keys(
     supply_chain.get("mise"),
     {"binarySha256", "license", "reportedVersion", "sha256", "url", "version"},
@@ -572,6 +655,8 @@ if any(argument.startswith("omarchy.qemu_virgl=") for argument in arguments):
     fail("kernel command line already contains a QEMU VirGL role")
 if any(argument.startswith("omarchy.shared_folder_name=") for argument in arguments):
     fail("kernel command line already contains a shared folder name")
+if any(argument.startswith("tryomarchy.ssh_access=") for argument in arguments):
+    fail("kernel command line contains a launcher-owned SSH activation argument")
 
 records = manifest.get("artifacts")
 if not isinstance(records, list) or len(records) != len(expected_artifacts):
@@ -674,14 +759,40 @@ IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes compressed_d
 [[ $expanded_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated working-disk size is invalid"
 (( expanded_disk_bytes >= source_disk_bytes )) || fail "working disk cannot be smaller than its source"
 [[ -n $kernel_command_line ]] || fail "validated kernel command line is empty"
-case ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} in
-  1)
-    printf '%s\n' "$bundle_validation"
-    exit 0
+case " $kernel_command_line " in
+  *' tryomarchy.ssh_access='*)
+    fail "validated kernel command line contains a launcher-owned SSH activation argument"
     ;;
-  0) ;;
-  *) fail "OMARCHY_QEMU_GPU_INSPECT_ONLY must be 0 or 1" ;;
 esac
+if [[ ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} == 1 ]]; then
+  printf '%s\n' "$bundle_validation"
+  exit 0
+fi
+
+[[ -f $storage_library && ! -L $storage_library ]] || {
+  fail "persistent-storage library is missing or unsafe: $storage_library"
+}
+[[ -f $port_forwarding_library && ! -L $port_forwarding_library ]] || {
+  fail "port-forwarding library is missing or unsafe: $port_forwarding_library"
+}
+
+# These libraries are sealed resources in normal app launches. The complete
+# app bundle was verified above before either file can execute. Inspect-only is
+# a build-time path and exits without sourcing any shell library.
+# shellcheck source=qemu-persistent-storage.sh
+source "$storage_library"
+# shellcheck source=qemu-port-forwarding.sh
+source "$port_forwarding_library"
+
+if ! qemu_port_forwarding_configure "${OMARCHY_QEMU_GPU_PORT_FORWARDS:-}"; then
+  fail "$QEMU_PORT_FORWARDING_ERROR"
+fi
+qemu_netdev=$QEMU_PORT_FORWARDING_NETDEV
+port_forwarding_summary=$QEMU_PORT_FORWARDING_SUMMARY
+ssh_kernel_argument=''
+if ((QEMU_PORT_FORWARDING_ENABLES_SSH)); then
+  ssh_kernel_argument=' tryomarchy.ssh_access=1'
+fi
 
 host_cpu_count=$(
   sysctl -n hw.logicalcpu 2>/dev/null ||
@@ -723,7 +834,7 @@ if [[ -n $shared_folder ]]; then
   [[ $shared_folder != *$'\n'* && $shared_folder != *$'\r'* && $shared_folder != *,* ]] || {
     fail "shared folder resolves to a path with an unsupported character: $shared_folder"
   }
-  [[ $(stat -f '%u' "$shared_folder") == $(id -u) ]] || {
+  [[ $(_qps_owner "$shared_folder") == $(id -u) ]] || {
     fail "shared folder must be owned by this user: $shared_folder"
   }
   home_dir=$(cd "$HOME" 2>/dev/null && pwd -P || true)
@@ -755,6 +866,7 @@ owner_marker=""
 owner_token=""
 qemu_pid=""
 audio_bridge_pid=""
+camera_bridge_pid=""
 clipboard_bridge_pid=""
 
 terminate_child() {
@@ -786,6 +898,9 @@ cleanup() {
   if [[ $audio_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$audio_bridge_pid" 20
   fi
+  if [[ $camera_bridge_pid =~ ^[0-9]+$ ]]; then
+    terminate_child "$camera_bridge_pid" 20
+  fi
   if [[ $clipboard_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$clipboard_bridge_pid" 20
   fi
@@ -794,7 +909,7 @@ cleanup() {
     case "$work_dir" in
       /private/tmp/omarchy-qemu-gpu.??????)
         if [[ -d $work_dir && ! -L $work_dir && -f $owner_marker && ! -L $owner_marker ]] &&
-           [[ $(stat -f '%u' "$work_dir" 2>/dev/null) == $(id -u) ]] &&
+           [[ $(_qps_owner "$work_dir") == $(id -u) ]] &&
            [[ $(<"$owner_marker") == "$owner_token" ]]; then
           /bin/rm -rf "$work_dir" || {
             echo "run-qemu-gpu: could not remove owned temporary directory $work_dir" >&2
@@ -828,8 +943,8 @@ reap_stale_work_dirs() {
 
   for candidate in /private/tmp/omarchy-qemu-gpu.??????; do
     [[ -d $candidate && ! -L $candidate ]] || continue
-    [[ $(stat -f '%u' "$candidate" 2>/dev/null) == $(id -u) ]] || continue
-    [[ $(stat -f '%Lp' "$candidate" 2>/dev/null) == 700 ]] || continue
+    [[ $(_qps_owner "$candidate") == $(id -u) ]] || continue
+    [[ $(_qps_permissions "$candidate") == 700 ]] || continue
 
     marker="$candidate/.run-qemu-gpu.owner"
     [[ -f $marker && ! -L $marker ]] || continue
@@ -868,7 +983,7 @@ case "$work_dir" in
   *) fail "mktemp returned an unexpected path: $work_dir" ;;
 esac
 [[ -d $work_dir && ! -L $work_dir ]] || fail "temporary directory is unsafe: $work_dir"
-[[ $(stat -f '%u' "$work_dir") == $(id -u) ]] || fail "temporary directory is not owned by this user"
+[[ $(_qps_owner "$work_dir") == $(id -u) ]] || fail "temporary directory is not owned by this user"
 owner_marker="$work_dir/.run-qemu-gpu.owner"
 owner_token="run-qemu-gpu:v1:$$:${RANDOM}${RANDOM}"
 printf '%s\n' "$owner_token" >"$owner_marker"
@@ -879,6 +994,7 @@ chmod 600 "$owner_marker"
 # for cleanup, but expose the runtime sockets through that standardized alias.
 qmp_socket="/tmp/${work_dir##*/}/qmp.sock"
 audio_bridge_socket="/tmp/${work_dir##*/}/audio.sock"
+camera_bridge_socket="/tmp/${work_dir##*/}/camera.sock"
 clipboard_bridge_socket="/tmp/${work_dir##*/}/clipboard.sock"
 audio_route_dir="/tmp/${work_dir##*/}/audio-routes"
 mkdir -m 700 "$work_dir/audio-routes"
@@ -918,19 +1034,26 @@ if ((reset_only)); then
   exit 0
 fi
 
+case ${OMARCHY_QEMU_GPU_IMMERSIVE:-1} in
+  1) cocoa_full_grab=on ;;
+  0) cocoa_full_grab=off ;;
+  *) fail "OMARCHY_QEMU_GPU_IMMERSIVE must be 0 or 1" ;;
+esac
+
 qemu_args=(
   -name 'Try Omarchy'
   # HVF exposes the ARM virtual GICv2 interface on current Apple Silicon.
   # Eight vCPUs is the architectural GICv2 limit and matches our host cap.
-  -machine 'virt,accel=hvf,gic-version=2'
+  -machine 'virt,accel=hvf,gic-version=3'
   # HVF does not provide a usable guest PMU on Apple Silicon. Do not advertise
   # one: Linux otherwise probes the dead device and prints a misleading failure.
   -cpu 'host,pmu=off'
   -smp "$vcpu_count,sockets=1,cores=$vcpu_count,threads=1"
   -m 4G
   -nodefaults
-  -no-reboot
-  -netdev 'user,id=omarchy-net'
+  # Reboot the guest inside this QEMU process, but let shutdown close the app.
+  -action 'reboot=reset,shutdown=poweroff'
+  -netdev "$qemu_netdev"
   -device 'virtio-net-pci,netdev=omarchy-net,mac=52:54:00:12:34:56,romfile='
   -audiodev 'sdl,id=omarchy-audio'
   -device 'intel-hda,id=omarchy-hda,romfile='
@@ -940,17 +1063,16 @@ qemu_args=(
   -qmp "unix:$qmp_socket,server=on,wait=off"
   -kernel "$guest_dir/vmlinuz-linux"
   -initrd "$guest_dir/initramfs-linux.img"
-  -append "$kernel_command_line omarchy.qemu_virgl=1$shared_folder_kernel_argument"
+  -append "$kernel_command_line omarchy.qemu_virgl=1$shared_folder_kernel_argument$ssh_kernel_argument"
   -drive "if=none,id=omarchy-root,file=$working_disk,format=raw,media=disk,cache=writeback"
   -device 'virtio-blk-pci,drive=omarchy-root,serial=omarchy-root'
   -device "$gpu_device"
   # Cocoa forwards its live backing-pixel dimensions and the current host
   # display refresh rate through Virtio GPU EDID. Its accessibility-backed
-  # full grab captures application Command chords for as long as the window is
-  # key, so a launcher cannot consume them; Command remains guest Super and
-  # Option guest Alt. macOS symbolic hot keys (Spotlight's Command-Space,
-  # Command-Tab) are dispatched above any event tap and still reach the host.
-  -display 'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,swap-opt-cmd=off'
+  # Immersive mode uses Cocoa's full grab to capture system/global Command
+  # chords and hard-hide Mac chrome. Standard mode stays full screen but lets
+  # Cocoa reveal the Mac menu bar and Dock at the screen edges.
+  -display "cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=$cocoa_full_grab,swap-opt-cmd=off"
   -device 'virtio-keyboard-pci,romfile='
   -device 'virtio-tablet-pci,romfile='
   -object 'rng-random,id=omarchy-rng,filename=/dev/urandom'
@@ -963,6 +1085,8 @@ qemu_args=(
   -device 'virtserialport,bus=omarchy-serial.0,nr=1,chardev=omarchy-audio-bridge,name=dev.tryomarchy.audio'
   -chardev "socket,id=omarchy-clipboard-bridge,path=$clipboard_bridge_socket,server=on,wait=off"
   -device 'virtserialport,bus=omarchy-serial.0,nr=2,chardev=omarchy-clipboard-bridge,name=dev.tryomarchy.clipboard'
+  -chardev "socket,id=omarchy-camera-bridge,path=$camera_bridge_socket,server=on,wait=off"
+  -device 'virtserialport,bus=omarchy-serial.0,nr=4,chardev=omarchy-camera-bridge,name=dev.tryomarchy.camera'
 )
 
 if [[ -n $shared_folder ]]; then
@@ -995,11 +1119,14 @@ if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
     "$native_bridge" "$audio_bridge_socket" "$audio_route_dir" >&2
   printf '\n[qemu-gpu] clipboard bridge command: %q --bridge-native-clipboard QEMU_PID %q' \
     "$native_bridge" "$clipboard_bridge_socket" >&2
+  printf '\n[qemu-gpu] camera bridge command: %q --bridge-native-camera QEMU_PID %q' \
+    "$native_bridge" "$camera_bridge_socket" >&2
   if [[ -n $shared_folder ]]; then
     printf '\n[qemu-gpu] shared folder: %q' "$shared_folder" >&2
   else
     printf '\n[qemu-gpu] shared folder: disabled' >&2
   fi
+  printf '\n[qemu-gpu] port forwarding: %s' "$port_forwarding_summary" >&2
   printf '\n' >&2
   exit 0
 fi
@@ -1016,18 +1143,22 @@ fi
 if [[ -n $shared_folder ]]; then
   echo "[qemu-gpu] Shared folder: $shared_folder (guest ~/$shared_folder_name)" >&2
 fi
+echo "[qemu-gpu] Port forwarding: $port_forwarding_summary" >&2
 "$qemu_bin" "${qemu_args[@]}" &
 qemu_pid=$!
 printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid"
 chmod 600 "$work_dir/.qemu.pid"
 
 for ((attempt = 0; attempt < 100; attempt++)); do
-  [[ -S $qmp_socket && -S $audio_bridge_socket && -S $clipboard_bridge_socket ]] && break
+  if [[ -S $qmp_socket && -S $audio_bridge_socket && -S $camera_bridge_socket && -S $clipboard_bridge_socket ]]; then
+    break
+  fi
   kill -0 "$qemu_pid" 2>/dev/null || fail "QEMU exited before creating its private QMP socket"
   sleep 0.05
 done
 [[ -S $qmp_socket ]] || fail "QEMU did not create its private QMP socket"
 [[ -S $audio_bridge_socket ]] || fail "QEMU did not create its private audio bridge socket"
+[[ -S $camera_bridge_socket ]] || fail "QEMU did not create its private camera bridge socket"
 [[ -S $clipboard_bridge_socket ]] || fail "QEMU did not create its private clipboard bridge socket"
 echo "[qemu-gpu] Ready." >&2
 
@@ -1044,6 +1175,14 @@ start_clipboard_bridge() {
 }
 start_clipboard_bridge
 clipboard_bridge_restarts=0
+
+start_camera_bridge() {
+  "$native_bridge" --bridge-native-camera \
+    "$qemu_pid" "$camera_bridge_socket" 9>&- &
+  camera_bridge_pid=$!
+}
+start_camera_bridge
+camera_bridge_restarts=0
 
 # Bash 3.2 has no `wait -n`. The native-audio bridge is required for the guest
 # transport, so watch it alongside QEMU and fail if it exits unexpectedly.
@@ -1083,6 +1222,27 @@ while true; do
       fi
     fi
   fi
+  # Camera sharing is optional. A failed capture backend must not stop the VM;
+  # reconnect it so a transient device change can recover in this session.
+  if [[ $camera_bridge_pid =~ ^[0-9]+$ ]]; then
+    camera_bridge_state=$(ps -p "$camera_bridge_pid" -o state= 2>/dev/null || true)
+    if [[ -z $camera_bridge_state || $camera_bridge_state == *Z* ]]; then
+      if wait "$camera_bridge_pid"; then
+        camera_bridge_status=0
+      else
+        camera_bridge_status=$?
+      fi
+      camera_bridge_pid=""
+      if (( camera_bridge_restarts < 5 )); then
+        camera_bridge_restarts=$((camera_bridge_restarts + 1))
+        echo "[qemu-gpu] camera bridge exited (status $camera_bridge_status); restarting ($camera_bridge_restarts/5)" >&2
+        sleep 1
+        start_camera_bridge
+      else
+        echo "[qemu-gpu] camera sharing is unavailable for the rest of this session" >&2
+      fi
+    fi
+  fi
   sleep 0.1
 done
 
@@ -1109,4 +1269,8 @@ if [[ $clipboard_bridge_pid =~ ^[0-9]+$ ]]; then
   terminate_child "$clipboard_bridge_pid" 20
 fi
 clipboard_bridge_pid=""
+if [[ $camera_bridge_pid =~ ^[0-9]+$ ]]; then
+  terminate_child "$camera_bridge_pid" 20
+fi
+camera_bridge_pid=""
 exit "$qemu_status"

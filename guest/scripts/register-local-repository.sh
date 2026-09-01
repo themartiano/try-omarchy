@@ -41,6 +41,12 @@ case "$root" in
     ;;
 esac
 [[ -f $spec ]] || fail "spec not found: $spec"
+root=$(cd "$root" && pwd -P)
+case "$root" in
+  /|/bin|/boot|/etc|/home|/opt|/root|/usr|/var)
+    fail "refusing canonical unsafe root: $root"
+    ;;
+esac
 for command in arch-chroot find gzip install python3 repo-add sort tar; do
   command -v "$command" >/dev/null || fail "$command is required"
 done
@@ -53,13 +59,18 @@ import sys
 spec = json.loads(pathlib.Path(sys.argv[1]).read_text())
 print(spec["image"]["sourceDateEpoch"])
 print(spec.get("guest", {}).get("profile"))
+hyprland = spec["supplyChain"]["hyprland"]
+print(f'{hyprland["version"]}-{hyprland["pkgrel"]}')
 PY
 )
-(( ${#metadata[@]} == 2 )) || fail "could not read local repository contract"
+(( ${#metadata[@]} == 3 )) || fail "could not read local repository contract"
 source_date_epoch=${metadata[0]}
 profile=${metadata[1]}
+expected_hyprland_version=${metadata[2]}
 [[ $source_date_epoch =~ ^[0-9]+$ ]] || fail "invalid source date epoch"
 [[ $profile == factory ]] || fail "native guest profile must be factory"
+[[ $expected_hyprland_version =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9.]+$ ]] ||
+  fail "invalid patched Hyprland package version"
 
 repo_name=try-omarchy
 repo_dir="$root/usr/share/try-omarchy/repo"
@@ -67,13 +78,15 @@ repo_dir="$root/usr/share/try-omarchy/repo"
 shopt -s nullglob
 archives=("$repo_dir"/*.pkg.tar.zst)
 shopt -u nullglob
-expected_archive_count=4
+expected_archive_count=5
 (( ${#archives[@]} == expected_archive_count )) ||
   fail "local repository expected $expected_archive_count package archive(s), found ${#archives[@]}"
 [[ ${archives[*]} == *'/try-omarchy-runtime-'* ]] || fail "local repository is missing the Omarchy runtime"
 [[ ${archives[*]} == *'/try-omarchy-mise-'* ]] || fail "factory repository is missing pinned mise"
 [[ ${archives[*]} == *'/try-omarchy-ttfx-'* ]] || fail "factory repository is missing pinned ttfx"
 [[ ${archives[*]} == *'/try-omarchy-yay-'* ]] || fail "factory repository is missing pinned yay"
+[[ ${archives[*]} == *"/hyprland-$expected_hyprland_version-aarch64.pkg.tar.zst"* ]] ||
+  fail "factory repository is missing patched Hyprland"
 
 temporary=$(mktemp -d "$root/usr/share/try-omarchy/.repo-db.XXXXXX")
 cleanup() {
@@ -115,16 +128,38 @@ ln -sfn "$repo_name.db.tar.gz" "$repo_dir/$repo_name.db"
 install -d -m 0755 "$root/var/lib/pacman/sync"
 install -m 0644 "$repo_dir/$repo_name.db.tar.gz" "$root/var/lib/pacman/sync/$repo_name.db"
 
-if grep -q '^\[try-omarchy\]$' "$root/etc/pacman.conf"; then
+pacman_conf="$root/etc/pacman.conf"
+if grep -q '^\[try-omarchy\]$' "$pacman_conf"; then
   fail "local repository is already configured"
 fi
-cat >>"$root/etc/pacman.conf" <<'EOF'
+python3 - "$pacman_conf" <<'PY' || fail "could not prioritize the immutable local repository"
+import pathlib
+import sys
 
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+marker = "\n[core]\n"
+if text.count(marker) != 1 or "\n[try-omarchy]\n" in text:
+    raise SystemExit(1)
+block = """
 # Immutable packages assembled from the checksummed Try Omarchy build spec.
+# Keep this before remote repositories so Omarchy's explicit package reinstall
+# resolves the patched Hyprland package locally.
 [try-omarchy]
 SigLevel = Optional TrustAll
 Server = file:///usr/share/try-omarchy/repo
-EOF
+"""
+path.write_text(text.replace(marker, block + marker, 1))
+PY
+
+python3 - "$pacman_conf" <<'PY' || fail "immutable local repository does not have priority"
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text()
+if not text.index("[try-omarchy]") < text.index("[core]"):
+    raise SystemExit(1)
+PY
 
 # This makes pacman -Qm correctly distinguish our pinned native packages from
 # real AUR packages when Omarchy's updater reaches its AUR step.
@@ -134,7 +169,7 @@ foreign=$(arch-chroot "$root" pacman -Qem || true)
 # This is the complete runtime configuration: the reviewed ARM repositories
 # plus the immutable local repository added above. The pre-refresh-pacman hook
 # restores this exact file after Omarchy writes an x86_64 channel template.
-install -m 0644 "$root/etc/pacman.conf" "$root/usr/share/try-omarchy/pacman.conf"
+install -m 0644 "$pacman_conf" "$root/usr/share/try-omarchy/pacman.conf"
 install -m 0644 "$root/etc/pacman.d/mirrorlist" "$root/usr/share/try-omarchy/mirrorlist"
 
 echo "Registered ${#archives[@]} pinned package(s) in the immutable local repository"

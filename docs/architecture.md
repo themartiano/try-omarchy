@@ -17,7 +17,7 @@ Try Omarchy.app
 ## What happens when the app opens
 
 The Swift launcher presents a start menu on every app open. It reports optional
-macOS Accessibility and Microphone permission state, handles confirmed factory
+macOS Accessibility, Microphone, and Camera permission state, handles confirmed factory
 resets, startup, shutdown, and host audio devices. It prepares a writable copy
 of the Linux disk and starts QEMU. QEMU's Cocoa input layer uses the shared
 Accessibility grant to capture system-wide Command chords and deliver Command
@@ -42,6 +42,15 @@ fingerprint of what it last wrote so the immediate echo is dropped. The marker
 is cleared as soon as the other side moves on to new content, and expires after
 a couple of seconds regardless, so a genuine repeat of the same content still flows.
 
+A separate virtio-serial port (`dev.tryomarchy.camera`) carries fixed-size
+1280×720 NV12 frames from an AVFoundation bridge in the signed Mac helper. The
+guest feeds those frames into an exclusive-capabilities `v4l2loopback` device,
+`/dev/video42`, labeled **Mac Camera**. The guest subscribes to the loopback
+driver's client-usage events and requests capture only while a Linux application
+is reading the camera. Camera permission, capture failure, or device removal is
+non-fatal to the VM; the launcher can restart the optional bridge without
+restarting Omarchy.
+
 When a folder is chosen on the start menu, QEMU exports it over virtio-9p with
 `security_model=none`, so every host file operation runs as the Mac user and
 the Mac keeps real modes and ownership. A small QEMU patch adds
@@ -51,6 +60,26 @@ kernel's permission checks agree with what the host will actually allow. The
 guest mounts the tag at `/mnt/mac` before the display manager starts, and a
 user unit links `~/<folder name>` to it at login; the name travels on the
 kernel command line as `omarchy.shared_folder_name=<base64url>`.
+
+Optional port mappings are stored as a versioned launcher preference, validated
+again at every Swift-to-shell boundary, and translated into QEMU user-network
+`hostfwd` rules. The host side is always bound explicitly to `127.0.0.1`; the
+launcher never creates wildcard or LAN-facing listeners. TCP and UDP occupy
+separate host-port namespaces, matching QEMU's socket behavior.
+
+**Add SSH** inserts an ordinary `tcp:2222:22` mapping into that same preference;
+there is no second SSH forwarding store or QEMU argument path. After the shell
+parser accepts the complete mapping list, any TCP rule targeting guest port 22
+also adds the fixed `tryomarchy.ssh_access=1` boot token. UDP port 22 and other
+guest ports do not. A guest systemd generator consumes only that exact token and
+adds the vendor `sshd.service` to the current boot's runtime wants directory,
+without modifying persistent systemd or SSH configuration.
+
+SSH host keys belong to the writable guest disk. Persistent compatible VMs keep
+them; Factory Reset and each ephemeral disk generate new keys. Reusing the same
+Mac endpoint after either operation can require removing that endpoint from the
+Mac's `known_hosts`. Loopback prevents LAN access but other local Mac processes
+and users can still attempt authentication.
 
 ## The ARM64 image
 
@@ -76,6 +105,10 @@ creates the account on first boot.
   artifact provenance. Guest overlays add the QEMU and ARM64 integration around
   them, including narrowly audited command replacements for host-backed audio
   selection and VM-aware cursor restoration after the screensaver exits.
+- The guest normally consumes upstream Arch Linux ARM packages. Hyprland is the
+  documented exception: an upstream package is reproducibly rebuilt with a
+  guarded rounded-border coverage patch for the VM graphics path, then held in
+  the guest's immutable local repository.
 - The final Arch Linux ARM pacman files live under `/usr/share/try-omarchy/`.
   An Omarchy-supported `pre-refresh-pacman` hook restores them after a channel
   refresh writes its x86_64 templates to `/etc`; the upstream templates remain
@@ -92,6 +125,21 @@ discarding its contents. If several recognized legacy disks exist, normal launch
 stops at the start menu; confirmed reset safely removes them before publishing
 one fresh workspace. Unrecognized host files are always left untouched.
 Ephemeral mode uses a disposable disk.
+
+The workspace does not have to live in Application Support. The start menu can
+put it in any folder the user picks, including one on an external drive, and the
+launcher receives that choice as `OMARCHY_QEMU_GPU_STATE_ROOT`. The chosen
+folder is used as-is: it is never restructured with a folder created inside
+it, so it must already be empty (or already be a workspace Omarchy has used)
+— a populated folder or a drive's top level is refused with an explanation
+instead. The volume must
+be APFS: the storage library clones the factory image with `cp -c` and expands
+the working disk sparsely, and it serializes launches with a `lockf` advisory
+lock. On exFAT the same expansion allocates the full working size immediately,
+and on a network share the lock is unreliable. Both layers check independently, the app
+when the folder is chosen and the shell library again at launch, because the
+volume can change in between. A location change never moves the existing VM;
+unrecognized host files stay untouched, as everywhere else here.
 
 ## Build layout
 
@@ -111,3 +159,14 @@ trees from backported trees and records each reviewed patch with its input and
 output hashes. The app also verifies the app signature and required QEMU
 features. Updates to a pinned dependency should update its digest, contract
 tests, notices, and review evidence together.
+
+Optional, user-initiated installers run after the factory image has been built
+and are a separate trust boundary. They may resolve a mutable current release
+from a vendor or community package source, but the resulting payload is written
+only to the user's persistent guest disk; it is not redistributed in the app,
+recorded as a factory-image input, or covered by guest provenance. Each such
+exception must be declared in `guest/spec.json`, documented in
+`THIRD_PARTY_NOTICES.md`, and contract-tested to ensure that its installer uses
+the declared sources and authenticates downloaded vendor artifacts against an
+explicit signing identity. Invoking an optional installer is the user's
+decision to cross that post-build boundary.

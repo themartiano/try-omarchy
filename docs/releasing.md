@@ -43,9 +43,15 @@ make release \
 
 1. Confirm `main` is clean and all pinned inputs have reviewable provenance.
 2. Run all tests and perform a first-boot provisioning test on a clean Mac user.
-3. Verify networking, display scaling, keyboard/mouse, microphone permission,
-   audio-device changes, clipboard sharing in both directions, a shared folder
-   read and written from both sides, persistence, reset, and ephemeral mode.
+3. Verify networking, display scaling, keyboard/mouse, microphone and camera permission,
+   on-demand FaceTime HD capture, audio-device changes, clipboard sharing in both
+   directions, a shared folder read and written from both sides, persistence,
+   reset, and ephemeral mode. Exercise the SSH preset with a provisioned guest:
+   confirm the listener is bound only to `127.0.0.1`, normal and ephemeral TCP
+   mappings to guest port 22 work, UDP port 22 does not request sshd, a normal
+   restart preserves the persistent VM, and the documented endpoint-specific
+   host-key recovery works after Reset/ephemeral replacement. Inspect the
+   factory image to confirm it contains no SSH host private keys.
 4. Verify the app and DMG signatures with Apple's tools and confirm notarization.
 5. Audit `THIRD_PARTY_NOTICES.md`, the bundle's license material, the guest
    package lock, and QEMU corresponding-source obligations.

@@ -4,7 +4,7 @@ This directory contains the Apple Silicon application layer:
 
 - a Swift/AppKit lifecycle and permission helper;
 - a pinned, patched QEMU ARM64 runtime using HVF and Cocoa/VirGL;
-- persistent-disk, input, audio-device, clipboard, shared-folder, signing, and DMG tooling.
+- persistent-disk, input, audio-device, camera, clipboard, shared-folder, signing, and DMG tooling.
 
 Use the root Makefile for normal development:
 
@@ -19,6 +19,11 @@ make test
 
 `make app` requires an existing `dist/guest/` and staged QEMU runtime. A full
 `make build` creates both first.
+
+The staged runtime is a complete, checksum-pinned Apple Silicon closure built
+for macOS 15.0. Runtime and app assembly do not resolve libraries or `zstd`
+from the host Homebrew prefix, so building on a newer macOS release cannot
+silently raise the app's deployment target.
 
 `make release` defaults to the maintainer's Developer ID Application identity
 and `try-omarchy` notarytool profile. The app builder is also directly usable
@@ -52,6 +57,22 @@ setting `OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=1`; release behavior leaves it
 unset. The disk's guest-build identity is immutable so an older root filesystem
 can never boot with incompatible bundled kernel modules. A changed guest build
 requires the user-facing, confirmed Reset Omarchy flow.
+
+The start menu can move that workspace to any APFS folder the user picks; the
+folder is used exactly as chosen, never with a folder created inside it — a
+folder with other files already in it, or a drive's top level, is refused
+instead of restructured. The choice is stored in `UserDefaults` and published
+to the launcher as `OMARCHY_QEMU_GPU_STATE_ROOT`. An inherited value of that
+variable still wins, so the development and test override keeps working
+unchanged. Reset composes its environment exactly as a launch does, so it
+always erases the workspace the user is actually running.
+
+Port forwarding is one versioned generic mapping list. The editor's **Add SSH**
+action only inserts the ordinary TCP `2222 → 22` preset; users may edit it like
+any other mapping. The signed shell parser remains the sole QEMU `hostfwd`
+builder and derives boot-scoped sshd intent only from a fully valid TCP mapping
+to guest port 22. No SSH-specific preference, port probe, status code, or
+parallel forwarding path exists.
 
 Ad-hoc signing identifies one exact build, so macOS intentionally invalidates
 its privacy grants when that build is replaced. The app's **Open Settings**

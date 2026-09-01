@@ -11,6 +11,11 @@ code.
   build.
 - **Arch Linux ARM packages** — each package retains its own license. The
   generated package transaction is recorded in `packages.lock.txt`.
+- **Hyprland** — BSD-3-Clause; the reviewed v0.56.1 source and rounded-border
+  coverage backport are pinned in `guest/spec.json`. The guest package retains
+  Hyprland's upstream license and dependency metadata.
+- **Glaze** — MIT; the pinned v7.2.0 headers are used by the Hyprland build, and
+  their verified upstream license is retained in the rebuilt guest package.
 - **ANGLE, VirGLRenderer, libepoxy, SDL, libslirp, GLib, Pixman, and other QEMU
   dependencies** — retain their respective upstream licenses.
 - **mise** — MIT; the reviewed ARM64 release is pinned in `guest/spec.json`.
@@ -21,6 +26,12 @@ code.
 - **yay** — GPL-3.0-or-later; the official ARM64 release and its versioned
   license are pinned in `guest/spec.json` and packaged into the guest's local
   repository.
+- **1Password** — proprietary software not redistributed by Try Omarchy. When a
+  user explicitly invokes its optional ARM64 installer, the guest resolves the
+  current vendor release and AUR CLI recipe after the factory build. These
+  mutable post-build inputs are excluded from factory provenance and are
+  declared separately in `guest/spec.json`; the application archive is accepted
+  only when its signature validates to 1Password's pinned signing fingerprint.
 
 See `guest/spec.json`, `guest/packages.lock.json`, and
 `macos/build-qemu-gpu-runtime.sh` for exact source identities and checksums.

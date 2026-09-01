@@ -1,0 +1,31 @@
+#!/bin/sh
+
+# Pull sshd into this boot only when the signed host launcher requested its
+# loopback-only SSH forward. This generator never writes persistent state.
+
+set -eu
+
+[ "$#" -eq 3 ] || exit 64
+normal_output=$1
+[ -d "$normal_output" ] && [ ! -L "$normal_output" ] || exit 1
+
+command_line=""
+IFS= read -r command_line </proc/cmdline || exit 1
+enabled=0
+set -f
+for argument in $command_line; do
+  if [ "$argument" = tryomarchy.ssh_access=1 ]; then
+    enabled=1
+  fi
+done
+[ "$enabled" -eq 1 ] || exit 0
+
+vendor_unit=/usr/lib/systemd/system/sshd.service
+[ -f "$vendor_unit" ] && [ ! -L "$vendor_unit" ] || exit 1
+wants=$normal_output/multi-user.target.wants
+if [ -e "$wants" ] || [ -L "$wants" ]; then
+  [ -d "$wants" ] && [ ! -L "$wants" ] || exit 1
+else
+  mkdir "$wants"
+fi
+ln -s "$vendor_unit" "$wants/sshd.service"

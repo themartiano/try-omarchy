@@ -11,13 +11,30 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let supervisor: QEMUGPUProcessSupervisor
     private let preferenceStore: AudioRoutingPreferenceStore
     private let sharedFolderStore: SharedFolderPreferenceStore
+    private let portForwardingStore: PortForwardingPreferenceStore
+    private let fullscreenPreferenceStore: FullscreenPreferenceStore
+    private let storageLocationStore: StorageLocationPreferenceStore
+    private let volumeProbe: VolumeProbing
+    private let volumeRootDetector: VolumeRootDetecting
     private let deviceProvider: HostAudioDeviceProviding
+    private let bundledMetrics: BundledGuestMetrics?
     private var startMenuWindow: StartMenuWindow?
+    private var volumeObserver: NSObjectProtocol?
+
+    /// The workspace the running VM is writing to, so an unmount of its volume
+    /// can be recognized as the disk disappearing under QEMU.
+    private var activeStateRoot: String?
 
     private var lifecycle = VMRunLifecycle()
     private var childRunning = false
     private var applicationTerminationPending = false
     private var virtualMachineReachedStart = false
+
+    /// True while a modal alert this controller opened itself (rather than
+    /// AppKit) is on screen awaiting a click. `finish()`'s watchdog checks
+    /// this so it never yanks a dialog out from under the user; it reschedules
+    /// instead of firing while this is true.
+    private var isPresentingBlockingAlert = false
 
     private(set) var exitStatus: Int32 = 0
 
@@ -28,7 +45,13 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         supervisor: QEMUGPUProcessSupervisor = QEMUGPUProcessSupervisor(),
         preferenceStore: AudioRoutingPreferenceStore = AudioRoutingPreferenceStore(),
         sharedFolderStore: SharedFolderPreferenceStore = SharedFolderPreferenceStore(),
-        deviceProvider: HostAudioDeviceProviding = CoreAudioHostAudioDeviceProvider()
+        portForwardingStore: PortForwardingPreferenceStore = PortForwardingPreferenceStore(),
+        fullscreenPreferenceStore: FullscreenPreferenceStore = FullscreenPreferenceStore(),
+        storageLocationStore: StorageLocationPreferenceStore = StorageLocationPreferenceStore(),
+        volumeProbe: VolumeProbing = URLVolumeProbe(),
+        volumeRootDetector: VolumeRootDetecting = FileManagerVolumeRootDetector(),
+        deviceProvider: HostAudioDeviceProviding = CoreAudioHostAudioDeviceProvider(),
+        bundledMetrics: BundledGuestMetrics? = QEMUGPUStorageSpaceEstimate.bundledMetrics()
     ) {
         self.launcherURL = launcherURL
         self.initialArguments = initialArguments
@@ -36,10 +59,17 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         self.supervisor = supervisor
         self.preferenceStore = preferenceStore
         self.sharedFolderStore = sharedFolderStore
+        self.portForwardingStore = portForwardingStore
+        self.fullscreenPreferenceStore = fullscreenPreferenceStore
+        self.storageLocationStore = storageLocationStore
+        self.volumeProbe = volumeProbe
+        self.volumeRootDetector = volumeRootDetector
         self.deviceProvider = deviceProvider
+        self.bundledMetrics = bundledMetrics
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        observeVolumeUnmounts()
         showStartMenu()
     }
 
@@ -57,28 +87,50 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         let startMenu = StartMenuWindow(
             accessibilityStatus: { AXIsProcessTrusted() },
             microphoneStatus: { MicrophonePreflight.authorizationState() },
+            cameraStatus: { CameraPreflight.authorizationState() },
             requestAccessibility: { [weak self] in
                 self?.requestOptionalAccessibilityPermission()
             },
             requestMicrophone: { completion in
                 MicrophonePreflight.requestAccess(completion: completion)
             },
+            requestCamera: { completion in
+                CameraPreflight.requestAccess(completion: completion)
+            },
             canResetStorage: canResetStorage,
-            storageLocation: canResetStorage
-                ? QEMUGPUStorageSpaceEstimate.dataDirectoryDisplayPath(
-                    environment: baseEnvironment
+            storageLocation: { [weak self] in
+                guard canResetStorage, let self else { return nil }
+                return QEMUGPUStorageSpaceEstimate.dataDirectoryDisplayPath(
+                    environment: self.baseEnvironment,
+                    preference: self.storageLocationStore.load()
                 )
-                : nil,
-            storageLocationURL: canResetStorage
-                ? QEMUGPUStorageSpaceEstimate.dataDirectoryURL(
-                    environment: baseEnvironment
+            },
+            storageLocationURL: { [weak self] in
+                guard canResetStorage, let self else { return nil }
+                return QEMUGPUStorageSpaceEstimate.dataDirectoryURL(
+                    environment: self.baseEnvironment,
+                    preference: self.storageLocationStore.load()
                 )
-                : nil,
-            storageSpaceEstimate: { [baseEnvironment] in
-                QEMUGPUStorageSpaceEstimate.formattedReclaimableSpace(
-                    environment: baseEnvironment,
-                    bundleIdentity: QEMUGPUStorageSpaceEstimate.bundledIdentity()
+            },
+            storageSpaceEstimate: { [weak self] in
+                guard let self else { return nil }
+                return QEMUGPUStorageSpaceEstimate.formattedReclaimableSpace(
+                    environment: self.baseEnvironment,
+                    bundleIdentity: self.bundledMetrics?.identity,
+                    preference: self.storageLocationStore.load()
                 )
+            },
+            storageLocationStatus: { [weak self] in
+                self?.storageLocationMenuState() ?? .defaultLocation
+            },
+            validateStorageLocation: { [weak self] path in
+                self?.validateStorageLocation(path)
+            },
+            chooseStorageLocation: { [weak self] path in
+                self?.chooseStorageLocation(path)
+            },
+            useDefaultStorageLocation: { [weak self] in
+                self?.useDefaultStorageLocation()
             },
             resetStorage: { [weak self] in
                 self?.resetVirtualMachine()
@@ -91,6 +143,20 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             },
             setSharedFolderEnabled: { [weak self] enabled in
                 self?.setSharedFolderEnabled(enabled)
+            },
+            portForwardingStatus: { [weak self] in
+                self?.portForwardingStore.load() ?? []
+            },
+            savePortForwarding: { [weak self] mappings in
+                self?.savePortForwarding(mappings)
+            },
+            immersiveMode: { [weak self] in
+                self?.fullscreenPreferenceStore.load().isImmersive ?? true
+            },
+            setImmersiveMode: { [weak self] isImmersive in
+                self?.fullscreenPreferenceStore.save(
+                    FullscreenPreferences(isImmersive: isImmersive)
+                )
             },
             launch: { [weak self] in
                 self?.startVirtualMachine()
@@ -122,6 +188,19 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             guard microphoneDecision.allowsLaunch else {
                 throw HelperError.io("microphone policy unexpectedly prevented audio playback")
             }
+            // Switching to the default is an acceptable way to start a VM, so
+            // both `.available` and `.switchedToDefault` proceed here.
+            guard resolveStorageLocationAvailability() != .cancelled else {
+                startMenuWindow?.launchDidAbort()
+                return
+            }
+            let cameraDecision = CameraPreflight.decision()
+            if let warning = cameraDecision.warning {
+                fputs("[camera] \(warning)\n", stderr)
+            }
+            guard cameraDecision.allowsLaunch else {
+                throw HelperError.io("camera policy unexpectedly prevented launch")
+            }
             try launch(arguments: launchArguments())
         } catch {
             failLaunch(error)
@@ -147,11 +226,28 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     }
 
     private func resetVirtualMachine() {
+        // Unlike launch, a reset that lands on the default workspace after the
+        // chosen drive went missing would erase a VM the user never confirmed.
+        // Switching the setting is allowed; erasing on that same click is not,
+        // so the reset is abandoned and they get an accurate confirmation the
+        // next time they ask for one.
+        guard resolveStorageLocationAvailability() == .available else {
+            startMenuWindow?.resetDidAbort()
+            return
+        }
         do {
+            let context = childLaunchContext()
+            guard context.storageUnavailableReason == nil else {
+                startMenuWindow?.resetDidFinish(
+                    errorMessage: context.storageUnavailableReason
+                )
+                return
+            }
+            activeStateRoot = context.stateRoot
             try supervisor.start(
                 executableURL: launcherURL,
                 arguments: resetArguments(),
-                environment: baseEnvironment
+                environment: QEMUGPURuntimeEnvironment.sanitizedForReset(context.environment)
             ) { [weak self] status in
                 self?.resetDidExit(status: status)
             }
@@ -199,24 +295,73 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func launch(arguments: [String]) throws {
-        let preferences = preferenceStore.load()
-        let catalog = deviceProvider.catalog()
-        let configuration = AudioLaunchConfiguration.make(
-            baseEnvironment: baseEnvironment,
-            preferences: preferences,
-            catalog: catalog
+    private struct ChildLaunchContext {
+        let environment: [String: String]
+        let stateRoot: String?
+        let portForwardMappings: [PortForwardMapping]
+        /// Set when a chosen data folder could not be validated. Starting the
+        /// launcher anyway would silently retarget the default workspace.
+        let storageUnavailableReason: String?
+    }
+
+    /// The environment every launcher invocation receives.
+    ///
+    /// Reset must compose this exactly as a normal launch does. When the two
+    /// diverged, choosing a custom data folder would leave Reset erasing the
+    /// default workspace while the VM the user meant to erase stayed untouched.
+    ///
+    /// Port-forward availability is deliberately *not* validated here: this
+    /// context is shared with Reset, and a reset that only wipes the VM disk
+    /// should never fail because an unrelated port mapping is unavailable.
+    /// `launch()` validates the composed mappings itself, after calling this.
+    private func childLaunchContext() -> ChildLaunchContext {
+        let audio = AudioLaunchConfiguration.make(
+            baseEnvironment: QEMUGPURuntimeEnvironment.sanitizedForLaunch(baseEnvironment),
+            preferences: preferenceStore.load(),
+            catalog: deviceProvider.catalog()
         )
         let sharing = SharedFolderLaunchConfiguration.make(
-            baseEnvironment: configuration.environment,
+            baseEnvironment: audio.environment,
             preference: sharedFolderStore.load(),
             homeDirectory: Self.homeDirectory
         )
+        let forwarding = PortForwardLaunchConfiguration.make(
+            baseEnvironment: sharing.environment,
+            mappings: portForwardingStore.load()
+        )
+        let fullscreen = FullscreenLaunchConfiguration.make(
+            baseEnvironment: forwarding.environment,
+            preferences: fullscreenPreferenceStore.load()
+        )
+        let storage = StorageLocationLaunchConfiguration.make(
+            baseEnvironment: fullscreen.environment,
+            preference: storageLocationStore.load(),
+            metrics: bundledMetrics,
+            probe: volumeProbe,
+            volumeRootDetector: volumeRootDetector
+        )
+        return ChildLaunchContext(
+            environment: storage.environment,
+            stateRoot: storage.stateRoot,
+            portForwardMappings: forwarding.mappings,
+            storageUnavailableReason: storage.unavailableReason
+        )
+    }
+
+    private func launch(arguments: [String]) throws {
+        let context = childLaunchContext()
+        // The UI gate above normally resolves this first; failing closed here
+        // too keeps a silent fallback impossible for any future caller.
+        if let reason = context.storageUnavailableReason {
+            throw HelperError.io(reason)
+        }
+        try PortForwardAvailability.validate(context.portForwardMappings)
+        activeStateRoot = context.stateRoot
 
         try supervisor.start(
             executableURL: launcherURL,
             arguments: arguments,
-            environment: sharing.environment,
+            environment: context.environment,
             launchEvent: { [weak self] event in
                 if event == .virtualMachineReady {
                     self?.virtualMachineDidStart()
@@ -264,6 +409,177 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         sharedFolderStore.save(preference)
     }
 
+    private func savePortForwarding(_ mappings: [PortForwardMapping]) -> String? {
+        do {
+            try portForwardingStore.save(mappings)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private func storageLocationMenuState() -> StorageLocationMenuState {
+        StorageLocationMenuState.make(
+            preference: storageLocationStore.load(),
+            metrics: bundledMetrics,
+            homeDirectory: Self.homeDirectory,
+            environmentOverride: storageEnvironmentOverride,
+            probe: volumeProbe,
+            volumeRootDetector: volumeRootDetector
+        )
+    }
+
+    /// Returns an error message when the folder is rejected, changing nothing.
+    private func validateStorageLocation(_ path: String) -> String? {
+        do {
+            _ = try StorageLocationPolicy.validate(
+                path,
+                metrics: bundledMetrics,
+                probe: volumeProbe,
+                volumeRootDetector: volumeRootDetector
+            )
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Returns an error message when the folder is rejected; otherwise stores
+    /// it. The existing VM is deliberately left where it is: copying tens of
+    /// gigabytes across volumes cannot use cloning and would be interruptible.
+    private func chooseStorageLocation(_ path: String) -> String? {
+        do {
+            let resolution = try StorageLocationPolicy.validate(
+                path,
+                metrics: bundledMetrics,
+                probe: volumeProbe,
+                volumeRootDetector: volumeRootDetector
+            )
+            storageLocationStore.save(
+                StorageLocationPreference(containerPath: resolution.containerPath)
+            )
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private func useDefaultStorageLocation() {
+        storageLocationStore.save(.default)
+    }
+
+    /// What the user decided once their chosen drive turned out to be missing.
+    ///
+    /// Launch and reset must react differently, which is why this reports the
+    /// choice instead of a bare yes/no. Switching to the default is a fine way
+    /// to *start* a VM, but it must never be a way to *erase* one: the user
+    /// confirmed erasing the workspace on their own drive, and the default
+    /// workspace is a different VM they were never asked about.
+    private enum StorageAvailability {
+        case available
+        case switchedToDefault
+        case cancelled
+    }
+
+    /// Refuses to act on the default workspace behind the user's back when
+    /// their chosen drive is missing. Silently falling back would create — or
+    /// destroy — a second VM they never asked about, which is exactly the
+    /// multi-workspace confusion the storage library works to avoid.
+    /// The state root forced by the environment, if any.
+    ///
+    /// `StorageLocationLaunchConfiguration` lets this beat the stored
+    /// preference, so anything that reports or gates on "the location" has to
+    /// read it too. Otherwise the reset sheet names the folder the user picked
+    /// while the launcher erases the one the environment chose.
+    private var storageEnvironmentOverride: String? {
+        let configured = baseEnvironment[StorageLocationPolicy.environmentKey]
+        return (configured?.isEmpty == false) ? configured : nil
+    }
+
+    private func resolveStorageLocationAvailability() -> StorageAvailability {
+        // An override wins over the preference on the way to the launcher, so
+        // the preference's reachability says nothing about this run. The
+        // launcher validates the override itself and fails loudly.
+        if storageEnvironmentOverride != nil { return .available }
+        let preference = storageLocationStore.load()
+        guard let container = preference.containerPath else { return .available }
+        do {
+            _ = try StorageLocationPolicy.validate(
+                container,
+                metrics: bundledMetrics,
+                probe: volumeProbe,
+                volumeRootDetector: volumeRootDetector
+            )
+            return .available
+        } catch {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "Omarchy\u{2019}s data folder is unavailable"
+            alert.informativeText = """
+                \(error.localizedDescription)
+
+                Reconnect the drive and try again, or switch back to the default \
+                folder. Switching does not delete the VM stored on that drive.
+                """
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Use Default Folder")
+            guard alert.runModal() == .alertSecondButtonReturn else { return .cancelled }
+            storageLocationStore.save(.default)
+            return .switchedToDefault
+        }
+    }
+
+    /// A physical unplug cannot be prevented, but the VM must not keep writing
+    /// into a vanished mount. A graceful eject is already refused by macOS
+    /// while QEMU holds the disk open and FD 9 holds its advisory lock.
+    private func observeVolumeUnmounts() {
+        volumeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didUnmountNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            MainActor.assumeIsolated {
+                guard let self,
+                      let volume = notification.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL
+                else { return }
+                self.handleVolumeUnmount(at: volume)
+            }
+        }
+    }
+
+    private func handleVolumeUnmount(at volume: URL) {
+        guard childRunning, !lifecycle.isStopping, let root = activeStateRoot else { return }
+        let mountPoint = volume.standardizedFileURL.path
+        let prefix = mountPoint.hasSuffix("/") ? mountPoint : mountPoint + "/"
+        guard root == mountPoint || root.hasPrefix(prefix) else { return }
+
+        fputs(
+            "omarchy-vm-helper: the volume holding the Omarchy VM was unmounted; stopping\n",
+            stderr
+        )
+        lifecycle.requestQuit()
+        supervisor.forward(signal: SIGTERM)
+
+        // This alert is the first UI this accessory app shows all session, so
+        // it must activate itself or it can be created without ever becoming
+        // key/visible (see the note in finish()).
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "The Omarchy disk was disconnected"
+        alert.informativeText = "The drive holding this VM was removed while it was running, so Omarchy is shutting down. Reconnect the drive before launching again. Removing the drive while the VM is running can damage it."
+        alert.addButton(withTitle: "OK")
+
+        // The child's own completion callback can arrive and call finish()
+        // while this modal call is still blocking below it on the stack — a
+        // dispatched main-queue block still gets pumped by a nested modal run
+        // loop. Mark the alert as blocking so that reentrant finish() call
+        // waits for this dialog instead of tearing it down mid-read.
+        isPresentingBlockingAlert = true
+        alert.runModal()
+        isPresentingBlockingAlert = false
+    }
+
     private func requestOptionalAccessibilityPermission() {
         guard !AXIsProcessTrusted() else { return }
         // A replacement app can leave a disabled TCC row tied to the old
@@ -283,6 +599,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private func childDidExit(status: Int32) {
         guard childRunning else { return }
         childRunning = false
+        let recentStandardError = supervisor.recentStandardError
 
         let wasStopping = lifecycle.isStopping
         let presentation = VMExitPresentationDecision.make(
@@ -294,6 +611,15 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         if applicationTerminationPending {
             NSApp.reply(toApplicationShouldTerminate: true)
         } else {
+            if presentation.showsStartupFailure,
+               let startMenuWindow,
+               let portFailure = PortForwardStartupFailure.message(
+                   standardError: recentStandardError,
+                   mappings: portForwardingStore.load()
+               ) {
+                startMenuWindow.launchDidFail(errorMessage: portFailure)
+                return
+            }
             if presentation.requiresWorkspaceReset {
                 startMenuWindow?.launchRequiresReset()
                 return
@@ -314,24 +640,41 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
 
     private func failLaunch(_ error: Error) {
         fputs("omarchy-vm-helper: \(error.localizedDescription)\n", stderr)
-        startMenuWindow?.dismiss()
-        startMenuWindow = nil
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "Try Omarchy couldn’t start"
-        alert.informativeText = error.localizedDescription
-        alert.addButton(withTitle: "Close")
-        alert.runModal()
-        finish(status: 1)
+        guard let startMenuWindow else {
+            finish(status: 1)
+            return
+        }
+        startMenuWindow.launchDidFail(errorMessage: error.localizedDescription)
     }
 
     private func finish(status: Int32) {
-        exitStatus = status
-        NSApp.stop(nil)
+        // The completion callback that reaches `finish()` can arrive while a
+        // dialog this controller opened is still on screen — a dispatched
+        // main-queue block is still pumped by a nested `runModal()` loop.
+        // `NSApp.stop()` is not scoped to only the outer run loop: called
+        // while a modal session is active, it can end THAT session too,
+        // closing the alert before the user has read it. So the whole
+        // shutdown sequence below waits for the alert to be dismissed on its
+        // own, rather than only guarding the final forced exit.
+        guard !isPresentingBlockingAlert else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.finish(status: status)
+            }
+            return
+        }
 
-        // `stop` takes effect after the current event is handled. Posting a
-        // private wake-up also covers completion handlers that arrive while
-        // the application is otherwise idle.
+        exitStatus = status
+
+        // `stop` + a posted wake-up event only reliably pumps the run loop
+        // for an app the window server considers active. This accessory app
+        // never shows its own window once the VM is running — QEMU owns the
+        // visible window as a separate process — so a path that reaches here
+        // without our window ever having been key (an eject while running,
+        // not a signal-driven quit) can leave the posted event unserviced and
+        // the process running with nothing on screen. Activating first covers
+        // that gap; the delayed hard exit is a backstop in case it does not.
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.stop(nil)
         if let wakeUp = NSEvent.otherEvent(
             with: .applicationDefined,
             location: .zero,
@@ -344,6 +687,14 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             data2: 0
         ) {
             NSApp.postEvent(wakeUp, atStart: false)
+        }
+
+        // Backstop: forces the process to exit if the run loop has not
+        // already returned on its own. If `run()` has already returned by
+        // the time this fires, the process has exited and this never runs.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            fputs("omarchy-vm-helper: forcing exit; the run loop did not stop on its own\n", stderr)
+            Darwin.exit(status)
         }
     }
 }

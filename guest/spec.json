@@ -36,6 +36,41 @@
     "omarchyPackagesCommit": "7e448b90313fea4fb78da9a78607287691d3b241",
     "archLinuxArmPackagesRepository": "https://github.com/archlinuxarm/PKGBUILDs",
     "archLinuxArmPackagesCommit": "0b5418fc3f62860b191cd872cb2f933f9fc77841",
+    "hyprland": {
+      "version": "0.56.1",
+      "pkgrel": "3.2",
+      "upstreamPackageVersion": "0.56.1-3",
+      "repository": "https://github.com/hyprwm/Hyprland",
+      "commit": "5c9377c15f85c50648f35ca5a213754f95b93ca0",
+      "url": "https://github.com/hyprwm/Hyprland/releases/download/v0.56.1/source-v0.56.1.tar.gz",
+      "sha256": "c5b26eb377360358d01839a1de43fdc004a33e56d6a5d442fdad69b9f3a10549",
+      "upstreamPackageSha256": "4fcb1b5efe019e184a85b234f75151e68fd8f60ace9b06ff59e7ffbd8a280f7a",
+      "patch": "patches/hyprland/rounded-border-coverage.patch",
+      "patchSha256": "5da431cbca37bdd9a66edeb77c3d677b7033d5f91449158e3ffa58a4eb515828",
+      "glazeVersion": "7.2.0",
+      "glazeCommit": "b518eec7a22e56ffa238b072c07f47efa7cea97f",
+      "glazeUrl": "https://github.com/stephenberry/glaze/archive/refs/tags/v7.2.0.tar.gz",
+      "glazeSha256": "17dba19ae63ae48f94994f00d49d5cb3c8f1306db1046c534c4828662490b7d4",
+      "glazeLicenseSha256": "5d49e66411a0807a7c8d6b911b9a26b59e940c71aebe561a3ad8b0b80ac4b7b6",
+      "binarySha256": "c668b05275f2d5cbff66fdb8f4ea4cbbfb7d5a7f9e682f358f3fbcff8494c68a",
+      "license": "BSD-3-Clause",
+      "issue": "https://github.com/themartiano/try-omarchy/issues/5",
+      "buildPackages": {
+        "base-devel": "1-2",
+        "binutils": "2.46+r70+g155188ea10a7-1",
+        "cmake": "4.4.3-1",
+        "gcc": "16.1.1+r12+g301eb08fa2c5-1",
+        "gcc-libs": "16.1.1+r12+g301eb08fa2c5-1",
+        "glibc": "2.43+r22+g8362e8ce10b2-2",
+        "hyprland": "0.56.1-3",
+        "hyprland-protocols": "0.7.0-1",
+        "make": "4.4.1-3",
+        "meson": "1.12.0-1",
+        "ninja": "1.13.2-3",
+        "pkgconf": "3.0.6-1",
+        "xorgproto": "2025.1-1"
+      }
+    },
     "mise": {
       "version": "2026.8.11",
       "url": "https://github.com/jdx/mise/releases/download/v2026.8.11/mise-v2026.8.11-linux-arm64.tar.xz",
@@ -91,16 +126,35 @@
   "authenticity": {
     "verbatimRuntimeTrees": [
       "applications",
-      "bin",
       "config",
       "default",
       "install",
       "migrations"
     ],
     "backportedRuntimeTrees": [
+      "bin",
       "shell"
     ],
     "backports": [
+      {
+        "id": "1password-arm64-installer",
+        "description": "Install 1Password from its signed ARM64 release with VM-compatible launchers and Quick Access.",
+        "reference": "https://github.com/basecamp/omarchy/issues/87",
+        "patch": "patches/omarchy/1password-arm64-installer.patch",
+        "patchSha256": "8696ada095cd8c4a5b42ed0466417e423cb4cbce122ddb52870c565d2bf40bca",
+        "targets": [
+          {
+            "path": "bin/omarchy-install-service-1password",
+            "beforeSha256": "5d5a5a9b3cf87579b4232067c9f7c78091cecf250111b802ffffa49c607f52d7",
+            "afterSha256": "ce404a13daf7cb08fab413ae0100786fc64abe6aefc403147114e6208c58b5c4"
+          },
+          {
+            "path": "default/hypr/bindings/applications.lua",
+            "beforeSha256": "6ef93bfe3df6f3b93379e0b194f3ec925cd84cfdb30115c6ece18198f21e0e3e",
+            "afterSha256": "e71e1cd7a2eaab92d4fb3f92f0ede2fb5c8519222dce1cdb38ae80c76148cf63"
+          }
+        ]
+      },
       {
         "id": "notification-hover-close",
         "description": "Restore the upstream hover-revealed notification dismiss control omitted from v4.0.1.",
@@ -135,9 +189,25 @@
         ]
       }
     ],
+    "postBuildUserInstallers": [
+      {
+        "id": "1password-arm64",
+        "userInitiated": true,
+        "delivery": "mutable-vendor-release",
+        "applicationUrl": "https://downloads.1password.com/linux/tar/stable/aarch64/1password-latest.tar.gz",
+        "signingKeyUrl": "https://downloads.1password.com/linux/keys/1password.asc",
+        "signingFingerprint": "3FEF9748469ADBE15DA7CA80AC2D62742012EA22",
+        "cliSource": "https://aur.archlinux.org/packages/1password-cli",
+        "runtimePackages": [
+          "which"
+        ],
+        "factoryProvenance": "excluded"
+      }
+    ],
     "requiredPaths": [
       "LICENSE",
       "bin/omarchy",
+      "bin/omarchy-install-service-1password",
       "bin/omarchy-launch-shell",
       "bin/omarchy-menu",
       "bin/omarchy-provision-owner",
@@ -186,13 +256,39 @@
     "network": {
       "device": "virtio-net-pci",
       "backend": "slirp",
-      "mode": "user"
+      "mode": "user",
+      "sshAccess": {
+        "activation": {
+          "guestPort": 22,
+          "kernelToken": "tryomarchy.ssh_access=1",
+          "protocol": "tcp",
+          "scope": "boot",
+          "service": "sshd.service"
+        },
+        "preset": {
+          "guestPort": 22,
+          "hostAddress": "127.0.0.1",
+          "hostPort": 2222,
+          "protocol": "tcp"
+        }
+      }
     },
     "audio": {
       "controller": "intel-hda",
       "codec": "hda-micro",
       "backend": "sdl",
       "duplex": true
+    },
+    "camera": {
+      "activation": "on-demand",
+      "device": "virtserialport",
+      "framesPerSecond": 30,
+      "guestDevice": "/dev/video42",
+      "height": 720,
+      "pixelFormat": "NV12",
+      "port": "dev.tryomarchy.camera",
+      "protocolVersion": 1,
+      "width": 1280
     },
     "storage": {
       "device": "virtio-blk-pci",

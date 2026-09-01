@@ -13,10 +13,116 @@ Try Omarchy is not official or affiliated with Omarchy.
 - Hardware-accelerated ARM64 virtualization and VirGL graphics
 - Resizable native window with automatic guest resolution and HiDPI scale updates
 - Mac audio input/output selection inside Omarchy, with live routing and system-default fallback
+- FaceTime HD and other Mac cameras exposed to Omarchy as an on-demand 720p webcam
 - Two-way clipboard sharing for text and PNG images between macOS and Omarchy
 - One optional shared Mac folder, available inside Omarchy under the same name (`~/Work` stays `~/Work`)
+- Loopback-only TCP and UDP port forwarding from the Mac into Omarchy
 
 > **Current limitation:** Video decoding is CPU-only, so playback can be slow, especially at high resolutions. An improved video path is in development.
+
+## Changes in this fork
+
+This fork moves the runtime to QEMU 11.1.1 to pick up Apple's in-hypervisor
+GIC, and fixes two audio problems found along the way.
+
+### Component versions
+
+| Component | Upstream | This fork | Reason |
+| --- | --- | --- | --- |
+| QEMU | `cf3e71d8` — 10.2.50, 2026-01-13 | `c3d48b7d` — 11.1.1, 2026-08-26 | First release carrying `hw/intc/arm_gicv3_hvf.c` |
+| ARM GIC | GICv2, emulated in QEMU userspace | GICv3 via Hypervisor.framework | Removes the interrupt path from the big QEMU lock |
+| Render patch | startergo mega-patch, 29 files | Vendored and trimmed to 18, forward-ported | Upstream is unmaintained since 2026-01-14 and QEMU's display API moved |
+| Python build deps | Host interpreter | Pinned `setuptools`, `wheel`, `pip` wheels | QEMU 11.1 builds `qemu.qmp`, and Python 3.12+ dropped `setuptools` |
+| Render patch source | Downloaded from the startergo tarball | Vendored in `macos/patches/` | That tree is unmaintained since 2026-01-14; the archive is no longer fetched at all |
+| Cocoa keyboard capture | Capture follows the mouse grab | Capture follows the key window | An absolute-pointing guest drops the grab as soon as virtio-tablet binds, leaking host Command chords mid-session |
+
+### What it fixes
+
+**Idle CPU.** QEMU emulated GICv2 in userspace under the big QEMU lock, so
+every guest interrupt cost about four lock acquisitions and every IPI about
+five across two vCPU threads. The cost scaled with vCPU count and was
+independent of what the guest was doing.
+
+| Measured at idle | Before | After |
+| --- | --- | --- |
+| QEMU | ~65% of a core | ~15% |
+| `coreaudiod` attributable to the VM | 6.4% | 0.3% |
+| Total | ~71% | ~15% |
+
+The QEMU figure moved twice: the GIC work took it to ~22%, and clearing the
+Cocoa GL dirty flag (below) took it to ~15%. The second measurement was taken
+on a freshly booted desktop rather than the same session, so treat the split
+between the two as approximate.
+
+Under HVF, QEMU 11.1.1 also rejects GICv2 outright, so this is now the only
+supported configuration rather than an optimisation.
+
+**A host audio device held open forever.** `sdl_enable_out` only paused the
+device, and QEMU links sdl2-compat over SDL3 where pausing a logical device
+leaves the physical one running. The device being held was not even from
+playback — `sdl_init_out` opens one at startup purely to negotiate a format,
+and nothing released it. The host resampled silence for the life of the VM.
+
+**An unconditional re-render every refresh tick.** The vendored
+GPU-resolution patch cleared `gl_dirty` inside an `if (cocoa_gl_trace_enabled())`
+block, so in a normal build the flag was never cleared: it latched true on the
+first damage and `cocoa_gl_refresh` then blitted the scanout on every tick for
+the life of the VM, whether or not anything had changed. The clear now sits at
+function scope, where its own comment says it belongs.
+
+**Audio dropouts.** PipeWire reported continuous xruns on a ring 682 ms deep,
+with the guest driver using 17 us against a 42 ms deadline. QEMU advances the
+emulated Intel HDA DMA position from a 100 Hz timer, so the counter moves in
+coarse jumps and ALSA concludes it has missed. Raising the guest's quantum
+gives the emulated counter fewer and larger checks to satisfy. A deeper SDL
+buffer made this worse, and raising the QEMU main loop to
+`QOS_CLASS_USER_INTERACTIVE` changed nothing, which rules out both buffer
+depth and priority inversion.
+
+### Graphics chain
+
+Rendering reaches the GPU through Metal, but nothing in QEMU speaks Metal.
+virglrenderer replays the guest's commands as OpenGL ES, and ANGLE translates
+those into Metal, which is why the display is started with `gl=es`.
+
+```
+Hyprland / Omarchy
+  |  OpenGL
+  v
+Mesa virgl driver                       guest
+  |  command stream
+  v
+virtio-gpu-gl-pci  ─────────────────────────── VM boundary
+  |
+  v
+virglrenderer                           host, replays as OpenGL ES
+  |
+  v
+ANGLE  (libGLESv2.dylib, libEGL.dylib)  translates GL ES -> Metal
+  |
+  v
+Metal.framework                         Apple silicon GPU
+```
+
+Two things this makes explicit. The guest sees a plain virtio GPU and needs no
+Apple-specific driver. And the acceleration is real rather than a software
+rasteriser: `libGLESv2.dylib` and `libEGL.dylib` link `Metal.framework`
+directly, and the guest reports the renderer as
+`ANGLE (Apple, ANGLE Metal Renderer: <chip>)`.
+
+This chain is unchanged by the QEMU 11.1.1 move. That work touched the
+interrupt controller and the GL scanout plumbing — how a rendered texture is
+handed to the Cocoa window — not the rendering backend.
+
+Note that the upstream tap this builds from is named
+`homebrew-qemu-virgl-kosmickrisp`, but KosmicKrisp, Mesa's Vulkan-to-Metal
+driver, is not part of this path.
+
+### Not yet verified
+
+Window resize across a HiDPI boundary, Mac output-device switching mid-session,
+the shared folder, and clipboard sharing have not been exercised since the
+port. The `dtc` mirror should be reverted once kernel.org returns.
 
 ## Quick start
 
@@ -24,7 +130,33 @@ Try Omarchy is not official or affiliated with Omarchy.
 2. Open the DMG and drag **Try Omarchy** to **Applications**.
 3. Launch **Try Omarchy** from Applications.
 
-Every launch begins at the start menu. Accessibility enables Mac Command-to-guest-Super shortcuts; microphone access is optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
+Every launch begins at the start menu. **Immersive** is on by default and its caption explains how to leave Full Screen. Turn it off to keep Omarchy full screen while letting the Mac menu bar and Dock appear at the screen edges. Accessibility enables Mac Command-to-guest-Super shortcuts; microphone and camera access are optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
+
+Restarting from inside Omarchy reboots the guest in the same Try Omarchy app.
+Shutting down Omarchy closes the app and leaves it closed.
+
+## 1Password
+
+Install 1Password from the Omarchy menu. On ARM64 guests, Try Omarchy downloads
+the current official 1Password application, verifies its signature against the
+pinned 1Password signing key, and installs the ARM64 CLI package. Its launcher
+uses software rendering to avoid the virtual GPU incompatibility affecting the
+Electron interface.
+
+After signing in, use these global shortcuts:
+
+- `Ctrl + Shift + Space` — open 1Password Quick Access
+- `Super + Shift + /` — open the full 1Password app
+
+## Camera sharing
+
+Choose **Allow…** next to **Camera access** on the start menu to make the Mac's
+FaceTime HD camera available in Omarchy as **Mac Camera**. The bridge publishes a
+standard Linux V4L2 camera at `/dev/video42`, so browser calls and Linux camera
+apps can use it without special configuration. Capture is on demand: the Mac
+camera and its indicator turn on only while an Omarchy app is actively using
+the virtual camera. Denying camera permission does not prevent Omarchy from
+launching.
 
 ## Clipboard sharing
 
@@ -47,6 +179,65 @@ first Omarchy account created during
 provisioning. Additional guest accounts can reach the same share, with each
 entry's normal Unix permission bits deciding whether they can modify it.
 
+## Forwarding ports to Omarchy
+
+Use **Configure…** next to **Port forwarding** on the start menu to map a Mac
+localhost port to a service port in Omarchy. Each mapping can use TCP or UDP;
+the same Mac port may be used once for each protocol. Forwarded ports bind only
+to `127.0.0.1`, so other devices on the network cannot connect to them. The
+service inside Omarchy must listen on `0.0.0.0` or the guest network interface,
+not only on the guest's own localhost.
+
+The reverse direction does not need a mapping. From Omarchy, connect to
+`10.0.2.2:<Mac port>` to reach a service running on the Mac.
+
+### SSH access
+
+After completing Omarchy's first-boot account setup, open **Port forwarding**,
+choose **Add SSH**, and save the prefilled TCP mapping from Mac port `2222` to
+Omarchy port `22`. Try Omarchy then requests `sshd` for boots that contain a TCP
+mapping to guest port 22. It does not change guest accounts, `sshd_config`,
+password policy, or authorized keys.
+
+Connect with the username and password created inside Omarchy (the Mac username
+is not assumed):
+
+```sh
+ssh -p 2222 <guest-user>@127.0.0.1
+```
+
+Once the initial password login works, install a key if desired:
+
+```sh
+ssh-copy-id -p 2222 <guest-user>@127.0.0.1
+```
+
+For a shorter command, add this to `~/.ssh/config` on the Mac:
+
+```sshconfig
+Host omarchy
+  HostName 127.0.0.1
+  Port 2222
+  User <guest-user>
+```
+
+You can then use `ssh omarchy`, and the same alias works with `scp`, `rsync`,
+Git, and VS Code Remote SSH. If you edit the preset's Mac port, substitute that
+port in every command.
+
+Factory Reset creates a new guest host key, and every ephemeral VM has its own
+disposable host key. If OpenSSH reports that the key for the reused endpoint
+changed, remove only that endpoint's old entry and reconnect to verify the new
+fingerprint:
+
+```sh
+ssh-keygen -R '[127.0.0.1]:2222'
+```
+
+Loopback binding prevents devices on Wi-Fi, Ethernet, or the wider LAN from
+connecting. It does not isolate the listener from other users or processes on
+the same Mac; guest SSH authentication is still required.
+
 ## Requirements
 
 - Apple Silicon Mac (`arm64`)
@@ -57,23 +248,54 @@ entry's normal Unix permission bits deciding whether they can modify it.
 
 Normal launches keep one persistent VM under `~/Library/Application Support/Try Omarchy/VM/v1`. Removing the app does not remove this data. The start menu can reset it, and requires confirmation before replacing a disk that is incompatible with a new factory guest build.
 
+### Choosing where the VM lives
+
+**Change…** on the start menu's **VM Location** row moves the VM to any folder
+you pick, including one on an external drive. Omarchy uses exactly the folder
+you choose — it never creates a folder inside it on your behalf.
+
+- The folder must be **empty**, or one Omarchy has already used. A folder with
+  other files in it, or a drive's top level, is turned away with an
+  explanation instead of being restructured; create or pick an empty folder
+  (for example, one named "Try Omarchy") to use instead.
+- The drive must be **APFS**. The VM disk grows as you use it, which only APFS
+  supports here: on exFAT, FAT, or NTFS the same disk would claim its full size
+  the moment it was created. Network volumes are refused because the VM's disk
+  lock is unreliable on them. Anything else is turned away when you pick it, with
+  the actual format named.
+- You need roughly 7 GB free to create the VM, and up to 30 GB as it fills. The
+  disk is sparse, so it only ever occupies what the guest has actually written.
+- **Changing the location does not move your existing VM.** It stays where it
+  is, and switching back reaches it again.
+- Do not disconnect the drive while Omarchy is running. macOS refuses a normal
+  eject while the VM holds the disk, but pulling the cable can damage it. If the
+  volume does disappear, Omarchy shuts the VM down instead of writing on.
+- **If the drive is not connected, Omarchy will not quietly use the default VM
+  instead.** Launching offers to switch back to the default folder; resetting
+  refuses outright, so a reset can never erase a workspace other than the one
+  you confirmed. Opening the folder from the start menu will not recreate it on
+  your startup disk either.
+
 ## Development requirements
 
 - Xcode command-line tools with Swift 6
-- Homebrew
 - Python 3
+- `pkg-config` (Homebrew is the simplest way to install it)
 - A running Docker-compatible engine that supports privileged `linux/arm64`
   containers
-- `zstd`, `pkg-config`, GLib, Pixman, libslirp 4.9.4, and SDL2 2.32.70
 - Roughly 20 GB free for guest, runtime, caches, and assembled output
 
-Install the Homebrew dependencies with:
+Install the one Homebrew build tool with:
 
 ```sh
-brew install zstd pkg-config glib pixman libslirp sdl2
+brew install pkg-config
 ```
 
-`make doctor` performs the basic preflight. `make runtime` checks the exact libslirp and SDL2 versions against the pinned runtime contract.
+`make doctor` performs the basic preflight. `make runtime` downloads a
+checksum-pinned `arm64_sequoia` dependency set, builds QEMU for macOS 15.0,
+and rejects any runtime image that raises that minimum or strongly imports an
+API unavailable on the declared platform. Installed Homebrew library versions
+are never copied into the app.
 
 ## Build and run
 

@@ -73,6 +73,87 @@ struct QEMUGPULaunchRequestTests {
 
 }
 
+@Suite("QEMU runtime environment")
+struct QEMUGPURuntimeEnvironmentTests {
+    @Test("ordinary launches strip build-only controls")
+    func sanitizesLaunch() {
+        let environment = QEMUGPURuntimeEnvironment.sanitizedForLaunch([
+            "KEEP_ME": "yes",
+            QEMUGPURuntimeEnvironment.inspectOnlyKey: "1",
+            QEMUGPURuntimeEnvironment.dryRunKey: "1",
+        ])
+
+        #expect(environment == ["KEEP_ME": "yes"])
+    }
+
+    @Test("storage reset ignores inherited integration settings")
+    func sanitizesReset() {
+        let controlledKeys = [
+            AudioLaunchConfiguration.inheritedSDLDeviceNameKey,
+            AudioLaunchConfiguration.outputDeviceNameKey,
+            AudioLaunchConfiguration.inputDeviceNameKey,
+            SharedFolderPolicy.environmentKey,
+            PortForwardPolicy.environmentKey,
+            QEMUGPURuntimeEnvironment.inspectOnlyKey,
+            QEMUGPURuntimeEnvironment.dryRunKey,
+        ]
+        var inherited = ["KEEP_ME": "yes"]
+        for key in controlledKeys {
+            inherited[key] = "untrusted inherited value"
+        }
+
+        #expect(QEMUGPURuntimeEnvironment.sanitizedForReset(inherited)
+            == ["KEEP_ME": "yes"])
+    }
+}
+
+@Suite("QEMU standard-error drain")
+struct QEMUStandardErrorDrainTests {
+    @Test("drains a bounded tail without waiting for EOF and restores descriptor flags")
+    func boundedNonblockingDrain() throws {
+        let pipe = Pipe()
+        var writerClosed = false
+        defer {
+            pipe.fileHandleForReading.closeFile()
+            if !writerClosed {
+                pipe.fileHandleForWriting.closeFile()
+            }
+        }
+
+        let payload = Data("trailing QEMU diagnostic".utf8)
+        try pipe.fileHandleForWriting.write(contentsOf: payload)
+        let descriptor = pipe.fileHandleForReading.fileDescriptor
+        let originalFlags = Darwin.fcntl(descriptor, F_GETFL)
+        #expect(originalFlags >= 0)
+
+        let first = QEMUGPUProcessSupervisor.drainAvailableStandardError(
+            from: pipe.fileHandleForReading,
+            maximumBytes: 8
+        )
+        #expect(first.data == Data(payload.prefix(8)))
+        #expect(!first.reachedEnd)
+        #expect(Darwin.fcntl(descriptor, F_GETFL) == originalFlags)
+
+        let second = QEMUGPUProcessSupervisor.drainAvailableStandardError(
+            from: pipe.fileHandleForReading,
+            maximumBytes: 1_024
+        )
+        #expect(second.data == Data(payload.dropFirst(8)))
+        #expect(!second.reachedEnd)
+        #expect(Darwin.fcntl(descriptor, F_GETFL) == originalFlags)
+
+        pipe.fileHandleForWriting.closeFile()
+        writerClosed = true
+        let end = QEMUGPUProcessSupervisor.drainAvailableStandardError(
+            from: pipe.fileHandleForReading,
+            maximumBytes: 1_024
+        )
+        #expect(end.data.isEmpty)
+        #expect(end.reachedEnd)
+        #expect(Darwin.fcntl(descriptor, F_GETFL) == originalFlags)
+    }
+}
+
 @Suite("QEMU storage-space estimate")
 struct QEMUGPUStorageSpaceEstimateTests {
     @Test("shows the app data folder while keeping the VM layout versioned")
@@ -117,6 +198,39 @@ struct QEMUGPUStorageSpaceEstimateTests {
                 environment: invalidEnvironment
             ) == nil)
         }
+    }
+
+    @Test("a chosen data folder replaces the default without the versioned suffix")
+    func honorsStoredPreference() throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("omarchy-launcher-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+        let preference = StorageLocationPreference(containerPath: container.path)
+
+        // A chosen workspace is the state root itself, exactly as the launcher
+        // script treats OMARCHY_QEMU_GPU_STATE_ROOT — the picked folder is
+        // used directly, with no folder nested inside it.
+        let expected = URL(fileURLWithPath: container.path, isDirectory: true)
+            .standardizedFileURL
+        #expect(QEMUGPUStorageSpaceEstimate.dataDirectoryURL(
+            environment: [:],
+            preference: preference
+        ) == expected)
+        #expect(QEMUGPUStorageSpaceEstimate.storageRootURL(
+            environment: [:],
+            preference: preference
+        ) == expected)
+    }
+
+    @Test("the development override still wins over a stored preference")
+    func overrideBeatsPreference() {
+        let configured = "/private/tmp/try-omarchy-override"
+        let expected = URL(fileURLWithPath: configured, isDirectory: true).standardizedFileURL
+        #expect(QEMUGPUStorageSpaceEstimate.storageRootURL(
+            environment: ["OMARCHY_QEMU_GPU_STATE_ROOT": configured],
+            preference: StorageLocationPreference(containerPath: "/Volumes/Ignored")
+        ) == expected)
     }
 
     @Test("formats allocated bytes as a readable decimal gigabyte estimate")

@@ -1,25 +1,7 @@
-From: Try Omarchy contributors
-Subject: [PATCH] cocoa: publish the live backing display through virtio-gpu
-
-Applies after startergo/homebrew-qemu-virgl-kosmickrisp v1.0.27:
-
-* upstream QEMU cf3e71d8fc8ba681266759bb6cb2e45a45983e3e
-* qemu-texture-borrowing.patch sha256
-  428528d3203fe487e7aac21f313bc83e53ad22168e8fd39aa9eb1791bc157903
-* gpu-spike-resolution-fix.patch sha256
-  2b0a589d5821fbbfaa65177c97395ec50382373373e5c6860821279f07d62bb2
-
-Keep startergo's VirGL/ANGLE/Metal rendering path unchanged. Report Cocoa
-backing pixels and the current screen refresh through QEMU UI info, including a
-reliable maximumFramesPerSecond fallback for variable-refresh displays. Encode
-the Cocoa backing scale as a stable virtual EDID density so the guest can match
-macOS 1x and 2x scale after every resize or screen change. Start at a 1920x1080
-backing-pixel window when the host has room for it.
-
 diff --git a/ui/cocoa.m b/ui/cocoa.m
 --- a/ui/cocoa.m
 +++ b/ui/cocoa.m
-@@ -675,7 +675,7 @@
+@@ -692,7 +692,7 @@
  {
      /* Must be called with the BQL, i.e. via updateUIInfo */
      NSSize frameSize;
@@ -28,7 +10,7 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
  
      if (!qemu_console_is_graphic(dcl.con)) {
          return;
-@@ -684,25 +684,45 @@
+@@ -701,25 +701,45 @@
      if ([self window]) {
          NSDictionary *description = [[[self window] screen] deviceDescription];
          CGDirectDisplayID display = [[description objectForKey:@"NSScreenNumber"] unsignedIntValue];
@@ -44,8 +26,8 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
              CVTime period = CVDisplayLinkGetNominalOutputVideoRefreshPeriod(displayLink);
              CVDisplayLinkRelease(displayLink);
 -            if (!(period.flags & kCVTimeIsIndefinite)) {
--                update_displaychangelistener(&dcl,
--                                             1000 * period.timeValue / period.timeScale);
+-                qemu_console_listener_set_refresh(&dcl,
+-                                                  1000 * period.timeValue / period.timeScale);
 -                info.refresh_rate = (int64_t)1000 * period.timeScale / period.timeValue;
 +            if (!(period.flags & kCVTimeIsIndefinite) &&
 +                period.timeValue > 0 && period.timeScale > 0) {
@@ -64,8 +46,8 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
 +        }
 +
 +        if (refreshRate) {
-+            update_displaychangelistener(&dcl,
-+                                         MAX(1u, 1000000u / refreshRate));
++            qemu_console_listener_set_refresh(&dcl,
++                                              MAX(1u, 1000000u / refreshRate));
 +            info.refresh_rate = refreshRate;
 +        }
 +
@@ -82,7 +64,7 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
      } else {
          frameSize = [self frame].size;
          info.width_mm = 0;
-@@ -711,8 +731,17 @@
+@@ -728,8 +748,17 @@
  
      info.xoff = 0;
      info.yoff = 0;
@@ -100,13 +82,12 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
 +                      (uint32_t)backingFrameSize.height / cleanScaleDivisor *
 +                          cleanScaleDivisor);
  
-     dpy_set_ui_info(dcl.con, &info, TRUE);
+     qemu_console_set_ui_info(dcl.con, &info, TRUE);
  }
-@@ -1290,7 +1319,25 @@
- - (IBAction) do_about_menu_item: (id) sender;
+@@ -1308,6 +1337,24 @@
  - (void)adjustSpeed:(id)sender;
  @end
-+
+ 
 +static NSRect cocoa_initial_window_frame(void)
 +{
 +    NSScreen *hostScreen = [NSScreen mainScreen];
@@ -121,14 +102,14 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
 +        size.width = floor(size.width * fit);
 +        size.height = floor(size.height * fit);
 +    }
- 
++
 +    return NSMakeRect(0.0, 0.0, size.width, size.height);
 +}
 +
  @implementation QemuCocoaAppController
  #ifdef CONFIG_OPENGL
  - (id) initWithCGL:(BOOL)cgl
-@@ -1304,7 +1351,7 @@
+@@ -1321,7 +1368,7 @@
  
      self = [super init];
      if (self) {
@@ -137,20 +118,20 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
  
          // create a view and add it to the window
  #ifdef CONFIG_OPENGL
-@@ -1398,17 +1445,28 @@
+@@ -1413,17 +1460,28 @@
  
  - (void)windowDidChangeScreen:(NSNotification *)notification
  {
 +    [cocoaView updateScale];
-     [cocoaView updateUIInfo];
- }
- 
-+- (void)windowDidChangeBackingProperties:(NSNotification *)notification
-+{
-+    [cocoaView updateScale];
 +    [cocoaView updateUIInfo];
 +}
 +
++- (void)windowDidChangeBackingProperties:(NSNotification *)notification
++{
++    [cocoaView updateScale];
+     [cocoaView updateUIInfo];
+ }
+ 
  - (void)windowDidEnterFullScreen:(NSNotification *)notification
  {
 +    [cocoaView updateScale];

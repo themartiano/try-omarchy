@@ -59,6 +59,25 @@ def main() -> None:
     )
     check(spec["runtime"]["virtualMachineMonitor"] == "qemu-system-aarch64", "runtime uses native ARM QEMU")
     check(spec["runtime"]["hypervisor"] == "hvf", "runtime uses Apple Hypervisor.framework")
+    check(
+        spec["runtime"]["network"].get("sshAccess")
+        == {
+            "activation": {
+                "guestPort": 22,
+                "kernelToken": "tryomarchy.ssh_access=1",
+                "protocol": "tcp",
+                "scope": "boot",
+                "service": "sshd.service",
+            },
+            "preset": {
+                "guestPort": 22,
+                "hostAddress": "127.0.0.1",
+                "hostPort": 2222,
+                "protocol": "tcp",
+            },
+        },
+        "SSH preset and boot activation are an exact loopback-only runtime contract",
+    )
     check(spec["runtime"]["storage"]["expandedSizeMiB"] == 24576, "working disk expands to 24 GiB")
     check(set(spec["inputs"]) == {"packages", "packageLock", "pacmanConfig"}, "spec has a minimal input set")
     for path in spec["inputs"].values():
@@ -68,16 +87,20 @@ def main() -> None:
     verbatim_trees = authenticity["verbatimRuntimeTrees"]
     backported_trees = authenticity["backportedRuntimeTrees"]
     check(
-        "shell" not in verbatim_trees
-        and backported_trees == ["shell"]
+        not {"bin", "shell"} & set(verbatim_trees)
+        and backported_trees == ["bin", "shell"]
         and not set(verbatim_trees) & set(backported_trees),
-        "patched shell tree is separated from verbatim upstream runtime trees",
+        "patched bin and shell trees are separated from verbatim upstream runtime trees",
     )
     backports = authenticity["backports"]
     check(
         [backport.get("id") for backport in backports]
-        == ["notification-hover-close", "notification-screen-privacy"],
-        "notification backports are explicitly ordered and identified",
+        == [
+            "1password-arm64-installer",
+            "notification-hover-close",
+            "notification-screen-privacy",
+        ],
+        "Omarchy backports are explicitly ordered and identified",
     )
     for backport in backports:
         patch_path = GUEST / backport["patch"]
@@ -96,6 +119,25 @@ def main() -> None:
                 and re.fullmatch(r"[0-9a-f]{64}", target.get("afterSha256", "")) is not None,
                 f"backport target digests are pinned: {backport['id']} {target['path']}",
             )
+
+    post_build_installers = authenticity["postBuildUserInstallers"]
+    check(
+        post_build_installers
+        == [
+            {
+                "id": "1password-arm64",
+                "userInitiated": True,
+                "delivery": "mutable-vendor-release",
+                "applicationUrl": "https://downloads.1password.com/linux/tar/stable/aarch64/1password-latest.tar.gz",
+                "signingKeyUrl": "https://downloads.1password.com/linux/keys/1password.asc",
+                "signingFingerprint": "3FEF9748469ADBE15DA7CA80AC2D62742012EA22",
+                "cliSource": "https://aur.archlinux.org/packages/1password-cli",
+                "runtimePackages": ["which"],
+                "factoryProvenance": "excluded",
+            }
+        ],
+        "mutable post-build 1Password installation is an explicit trust boundary",
+    )
 
     pacman_conf = read(GUEST / spec["inputs"]["pacmanConfig"])
     check(
@@ -117,8 +159,8 @@ def main() -> None:
         "factory pacman retains the ARM Omarchy keyring repository",
     )
     check(
-        "IgnorePkg = linux-aarch64" in pacman_conf,
-        "factory pacman holds the QEMU-booted kernel",
+        "IgnorePkg = linux-aarch64 hyprland" in pacman_conf,
+        "factory pacman holds the QEMU-booted kernel and patched compositor",
     )
     arm_mirrorlist = read(GUEST / "mirrorlist.aarch64")
     check(
@@ -141,6 +183,10 @@ def main() -> None:
         for line in package_text.decode().splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     }
+    check(
+        "openssh" in requested_packages and "openssh" in packages,
+        "SSH access explicitly requests and locks OpenSSH",
+    )
     check(
         "fakeroot" in requested_packages and "fakeroot" in packages,
         "factory transaction includes fakeroot for AUR package builds",
@@ -195,6 +241,89 @@ def main() -> None:
         },
         "official ttfx ARM64 source build and package recipe are fully pinned",
     )
+    hyprland = spec.get("supplyChain", {}).get("hyprland", {})
+    check(
+        hyprland
+        == {
+            "version": "0.56.1",
+            "pkgrel": "3.2",
+            "upstreamPackageVersion": "0.56.1-3",
+            "repository": "https://github.com/hyprwm/Hyprland",
+            "commit": "5c9377c15f85c50648f35ca5a213754f95b93ca0",
+            "url": "https://github.com/hyprwm/Hyprland/releases/download/v0.56.1/source-v0.56.1.tar.gz",
+            "sha256": "c5b26eb377360358d01839a1de43fdc004a33e56d6a5d442fdad69b9f3a10549",
+            "upstreamPackageSha256": "4fcb1b5efe019e184a85b234f75151e68fd8f60ace9b06ff59e7ffbd8a280f7a",
+            "patch": "patches/hyprland/rounded-border-coverage.patch",
+            "patchSha256": "5da431cbca37bdd9a66edeb77c3d677b7033d5f91449158e3ffa58a4eb515828",
+            "glazeVersion": "7.2.0",
+            "glazeCommit": "b518eec7a22e56ffa238b072c07f47efa7cea97f",
+            "glazeUrl": "https://github.com/stephenberry/glaze/archive/refs/tags/v7.2.0.tar.gz",
+            "glazeSha256": "17dba19ae63ae48f94994f00d49d5cb3c8f1306db1046c534c4828662490b7d4",
+            "glazeLicenseSha256": "5d49e66411a0807a7c8d6b911b9a26b59e940c71aebe561a3ad8b0b80ac4b7b6",
+            "binarySha256": "c668b05275f2d5cbff66fdb8f4ea4cbbfb7d5a7f9e682f358f3fbcff8494c68a",
+            "license": "BSD-3-Clause",
+            "issue": "https://github.com/themartiano/try-omarchy/issues/5",
+            "buildPackages": {
+                "base-devel": "1-2",
+                "binutils": "2.46+r70+g155188ea10a7-1",
+                "cmake": "4.4.3-1",
+                "gcc": "16.1.1+r12+g301eb08fa2c5-1",
+                "gcc-libs": "16.1.1+r12+g301eb08fa2c5-1",
+                "glibc": "2.43+r22+g8362e8ce10b2-2",
+                "hyprland": "0.56.1-3",
+                "hyprland-protocols": "0.7.0-1",
+                "make": "4.4.1-3",
+                "meson": "1.12.0-1",
+                "ninja": "1.13.2-3",
+                "pkgconf": "3.0.6-1",
+                "xorgproto": "2025.1-1",
+            },
+        }
+        and packages.get("hyprland") == hyprland["upstreamPackageVersion"],
+        "rounded-border Hyprland source, toolchain, and upstream package are fully pinned",
+    )
+    hyprland_patch = GUEST / hyprland["patch"]
+    check(
+        hyprland_patch.is_file()
+        and hashlib.sha256(hyprland_patch.read_bytes()).hexdigest() == hyprland["patchSha256"],
+        "rounded-border Hyprland patch digest matches the build spec",
+    )
+    launcher = read(REPO / "macos/run-qemu-gpu.sh")
+    hyprland_identity = hashlib.sha256(
+        json.dumps(
+            hyprland,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    check(
+        'supply_chain.get("hyprland")' in launcher
+        and '"build spec hyprland component"' in launcher
+        and '"build spec hyprland build packages"' in launcher
+        and hyprland_identity in launcher,
+        "native launcher accepts and pins the patched Hyprland component",
+    )
+    hyprland_patch_text = read(hyprland_patch)
+    check(
+        "roundingWithBorderCoverage" in hyprland_patch_text
+        and "0.985/0.96 compositor opacity" in hyprland_patch_text
+        and "SURFACE_CONTENT_OPAQUE" in hyprland_patch_text
+        and "inverseOpaque.empty()" in hyprland_patch_text
+        and "RENDERED_BORDER_SIZE >= 2" in hyprland_patch_text
+        and "SHADER_ROUNDING_BORDER_SIZE" in hyprland_patch_text
+        and "m_data.mainSurface" in hyprland_patch_text
+        and "innerCoverage * outerCoverage" in hyprland_patch_text
+        and "src/render/shaders/glsl/ext.frag" in hyprland_patch_text
+        and "roundingWithEdgeBias" not in hyprland_patch_text
+        and "+    if (ROUNDING_BORDER_SIZE <= 0.F)" in hyprland_patch_text
+        and "-    rounding -= 1; // to fix a border issue" in hyprland_patch_text,
+        "Hyprland backport handles Omarchy opacity and branchless rounded-border coverage",
+    )
+    check(
+        "linux-aarch64-headers" in packages and "v4l2loopback-dkms" in packages,
+        "camera kernel module and matching ARM64 headers are locked",
+    )
 
     container = read(GUEST / "build-container.sh")
     check("linux/arm64" in container and '"$guest_dir/Containerfile"' in container, "container builder targets ARM64")
@@ -232,12 +361,42 @@ def main() -> None:
     )
     check("omarchy-native-audio-bridge" in configure, "guest installs native host-audio integration")
     check(
+        "default.target.wants/omarchy-native-camera-bridge.service" in configure,
+        "guest starts the native camera integration for every provisioned user",
+    )
+    check(
         "graphical-session.target.wants/omarchy-native-clipboard-bridge.service" in configure,
         "guest starts clipboard sharing with the graphical session",
     )
     check(
         spec["runtime"]["clipboard"]["port"] == "dev.tryomarchy.clipboard",
         "clipboard contract names the virtio port",
+    )
+    camera = spec["runtime"]["camera"]
+    check(
+        camera
+        == {
+            "activation": "on-demand",
+            "device": "virtserialport",
+            "framesPerSecond": 30,
+            "guestDevice": "/dev/video42",
+            "height": 720,
+            "pixelFormat": "NV12",
+            "port": "dev.tryomarchy.camera",
+            "protocolVersion": 1,
+            "width": 1280,
+        },
+        "camera contract exposes an on-demand 720p NV12 stream over virtio",
+    )
+    camera_launcher = read(REPO / "macos/run-qemu-gpu.sh")
+    camera_entitlements = read(REPO / "macos/omarchy-vm-helper.entitlements")
+    check(
+        "virtserialport,bus=omarchy-serial.0,nr=4" in camera_launcher
+        and "name=dev.tryomarchy.camera" in camera_launcher
+        and "--bridge-native-camera" in camera_launcher
+        and "camera_bridge_restarts < 5" in camera_launcher
+        and "com.apple.security.device.camera" in camera_entitlements,
+        "Mac launcher carries the camera entitlement and supervised virtio bridge",
     )
     check(
         '"$root/usr/local/bin/omarchy-native-mac-share"' in configure
@@ -261,17 +420,21 @@ def main() -> None:
     )
     local_repository = read(GUEST / "scripts/register-local-repository.sh")
     check(
-        'install -m 0644 "$root/etc/pacman.conf" "$root/usr/share/try-omarchy/pacman.conf"'
+        'install -m 0644 "$pacman_conf" "$root/usr/share/try-omarchy/pacman.conf"'
         in local_repository
         and 'install -m 0644 "$root/etc/pacman.d/mirrorlist" "$root/usr/share/try-omarchy/mirrorlist"'
         in local_repository,
         "pacman recovery files snapshot the final local-repository configuration",
     )
     check(
-        "expected_archive_count=4" in local_repository
+        "expected_archive_count=5" in local_repository
         and "factory repository is missing pinned ttfx" in local_repository
-        and "factory repository is missing pinned yay" in local_repository,
-        "immutable local repository requires the pinned ttfx and yay packages",
+        and "factory repository is missing pinned yay" in local_repository
+        and "factory repository is missing patched Hyprland" in local_repository
+        and "immutable local repository does not have priority" in local_repository
+        and "resolves the patched Hyprland package locally" in local_repository
+        and "refusing canonical unsafe root" in local_repository,
+        "immutable local repository requires and prioritizes the patched Hyprland",
     )
     shared_folder = spec["runtime"]["sharedFolder"]
     check(
@@ -366,6 +529,35 @@ def main() -> None:
         and 'arch-chroot "$root" /usr/bin/ttfx --version' in register_ttfx,
         "guest builds and packages verified ttfx before sealing its local repository",
     )
+    register_hyprland = read(GUEST / "scripts/register-patched-hyprland.sh")
+    check(
+        "register-patched-hyprland.sh" in build
+        and build.index("register-patched-hyprland.sh")
+        < build.index("register-local-repository.sh")
+        and "Hyprland source archive has an unsafe member set" in register_hyprland
+        and "Hyprland patch digest mismatch" in register_hyprland
+        and "git apply --check" in register_hyprland
+        and "FETCHCONTENT_SOURCE_DIR_GLAZE" in register_hyprland
+        and "reproducible binary digest mismatch" in register_hyprland
+        and "upstream package digest mismatch" in register_hyprland
+        and "installed Hyprland binary digest mismatch" in register_hyprland
+        and "could not generate patched Hyprland mtree" in register_hyprland
+        and "pacman -Qkk" in register_hyprland
+        and "Glaze license digest mismatch" in register_hyprland
+        and "LICENSE.glaze" in register_hyprland
+        and "build_package_records[@]} == 13" in register_hyprland
+        and "builder_pacman_config" in register_hyprland
+        and "could not derive the Hyprland builder pacman configuration" in register_hyprland
+        and 'pacman -Syy --noconfirm --config "$builder_pacman_config"' in register_hyprland
+        and register_hyprland.index(
+            'pacman -Syy --noconfirm --config "$builder_pacman_config"'
+        )
+        < register_hyprland.index(
+            'pacman --noconfirm --config "$builder_pacman_config" -S --needed'
+        )
+        and "refusing canonical unsafe root" in register_hyprland,
+        "guest builds and packages the verified Hyprland rounded-border backport",
+    )
     third_party_notices = read(REPO / "THIRD_PARTY_NOTICES.md")
     check(
         "**yay**" in third_party_notices and "GPL-3.0-or-later" in third_party_notices,
@@ -376,6 +568,29 @@ def main() -> None:
         and "TerminalTextEffects" in third_party_notices
         and "MIT" in third_party_notices,
         "third-party notices cover ttfx and its TerminalTextEffects attribution",
+    )
+    check(
+        "**Hyprland**" in third_party_notices and "BSD-3-Clause" in third_party_notices,
+        "third-party notices cover the patched Hyprland redistribution",
+    )
+    check(
+        "**Glaze**" in third_party_notices and "MIT" in third_party_notices,
+        "third-party notices cover the Hyprland build's bundled Glaze headers",
+    )
+    check(
+        "**1Password**" in third_party_notices
+        and "not redistributed" in third_party_notices
+        and "mutable post-build inputs" in third_party_notices
+        and "excluded from factory provenance" in third_party_notices,
+        "third-party notices distinguish mutable 1Password installation from redistribution",
+    )
+    architecture = read(REPO / "docs/architecture.md")
+    check(
+        "Optional, user-initiated installers" in architecture
+        and "separate trust boundary" in architecture
+        and "not redistributed in the app" in architecture
+        and post_build_installers[0]["factoryProvenance"] == "excluded",
+        "architecture documents mutable post-build user installation boundaries",
     )
 
     finalizer = read(GUEST / "scripts/finalize-rootfs.sh")
@@ -389,6 +604,28 @@ def main() -> None:
         and "Obsolete ttfx compatibility command shadows" in finalizer,
         "finalizer requires packaged ttfx without a shadowing compatibility command",
     )
+    check(
+        "pacman -Q hyprland" in finalizer
+        and "Rounded-border Hyprland backport is missing" in finalizer
+        and "Rounded-border Hyprland binary digest mismatch" in finalizer,
+        "finalizer requires the exact rounded-border Hyprland package",
+    )
+
+    ssh_generator_path = (
+        GUEST
+        / "native-overlay/usr/lib/systemd/system-generators/try-omarchy-ssh-access"
+    )
+    ssh_generator = read(ssh_generator_path)
+    check(
+        ssh_generator_path.is_file()
+        and ssh_generator_path.stat().st_mode & stat.S_IXUSR != 0
+        and "tryomarchy.ssh_access=1" in ssh_generator
+        and "/proc/cmdline" in ssh_generator
+        and "multi-user.target.wants" in ssh_generator
+        and '"$wants/sshd.service"' in ssh_generator
+        and "/etc" not in ssh_generator,
+        "SSH generator requests only the boot-scoped vendor sshd unit",
+    )
 
     manifest_writer = read(GUEST / "scripts/write-guest-manifest.py")
     check('"kind": "try-omarchy-guest-artifacts"' in manifest_writer, "new artifacts use the native manifest identity")
@@ -398,6 +635,23 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         py_compile.compile(str(audio_bridge), cfile=str(Path(temporary) / "audio.pyc"), doraise=True)
     check(True, "native audio bridge compiles")
+
+    camera_bridge = GUEST / "native-overlay/usr/local/bin/omarchy-native-camera-bridge"
+    check(camera_bridge.stat().st_mode & stat.S_IXUSR != 0, "native camera bridge is executable")
+    with tempfile.TemporaryDirectory() as temporary:
+        py_compile.compile(str(camera_bridge), cfile=str(Path(temporary) / "camera.pyc"), doraise=True)
+    check(True, "native camera bridge compiles")
+    camera_unit = read(GUEST / "native-overlay/usr/lib/systemd/user/omarchy-native-camera-bridge.service")
+    camera_rule = read(GUEST / "native-overlay/etc/udev/rules.d/94-omarchy-native-camera.rules")
+    camera_module = read(GUEST / "native-overlay/etc/modprobe.d/90-try-omarchy-camera.conf")
+    check(
+        "omarchy-native-camera-bridge" in camera_unit
+        and "Restart=always" in camera_unit
+        and 'ATTR{name}=="dev.tryomarchy.camera"' in camera_rule
+        and 'KERNEL=="video42"' in camera_rule
+        and "exclusive_caps=1" in camera_module,
+        "camera service reconnects its virtio port to an exclusive-capability V4L2 device",
+    )
 
     clipboard_bridge = GUEST / "native-overlay/usr/local/bin/omarchy-native-clipboard-bridge"
     check(clipboard_bridge.stat().st_mode & stat.S_IXUSR != 0, "native clipboard bridge is executable")
@@ -766,6 +1020,65 @@ HOTPLUG=1
                         == target["afterSha256"],
                         f"backport produces reviewed postimage: {backport['id']} {target['path']}",
                     )
+
+            onepassword_installer_path = (
+                staged_omarchy / "bin/omarchy-install-service-1password"
+            )
+            subprocess.run(["bash", "-n", str(onepassword_installer_path)], check=True)
+            onepassword_installer = read(onepassword_installer_path)
+            onepassword_boundary = post_build_installers[0]
+            check(
+                "[[ $(uname -m) == aarch64 ]]" in onepassword_installer
+                and onepassword_boundary["applicationUrl"] in onepassword_installer
+                and onepassword_boundary["signingKeyUrl"] in onepassword_installer
+                and onepassword_boundary["signingFingerprint"] in onepassword_installer
+                and "curl --fail --location --proto '=https' --tlsv1.2" in onepassword_installer
+                and 'GNUPGHOME="$gpg_home" yay -S --noconfirm --needed \\\n'
+                "    --answerclean None --answerdiff None 1password-cli"
+                in onepassword_installer
+                and "omarchy-pkg-add which" in onepassword_installer
+                and "omarchy-pkg-add 1password 1password-cli" in onepassword_installer,
+                "1Password uses its declared mutable ARM64 boundary and preserves the package path",
+            )
+            check(
+                "install -dm700 \"$gpg_home\"" in onepassword_installer
+                and "gpg --homedir \"$gpg_home\"" in onepassword_installer
+                and "gpg --batch" not in onepassword_installer
+                and "--status-fd 1 --verify" in onepassword_installer
+                and '$2 == "VALIDSIG" { print $3 }' in onepassword_installer
+                and '[[ $valid_signer != "$ONEPASSWORD_SIGNING_FINGERPRINT" ]]'
+                in onepassword_installer,
+                "1Password signature verification is isolated and bound to the expected signer",
+            )
+            check(
+                'sudo chown -R root:root /opt/1Password' in onepassword_installer
+                and onepassword_installer.index("sudo chown -R root:root /opt/1Password")
+                < onepassword_installer.index("sudo /opt/1Password/after-install.sh"),
+                "1Password is root-owned before its vendor post-install script runs",
+            )
+            check(
+                "sudo tee /usr/local/bin/1password" in onepassword_installer
+                and "export LIBGL_ALWAYS_SOFTWARE=1" in onepassword_installer
+                and 'exec /opt/1Password/1password --disable-gpu "$@"'
+                in onepassword_installer
+                and "Exec=/usr/local/bin/1password %U" in onepassword_installer
+                and 'echo "Quick Access: Ctrl + Shift + Space"'
+                in onepassword_installer
+                and 'echo "Full 1Password app: Super + Shift + /"'
+                in onepassword_installer
+                and onepassword_installer.index("sudo /opt/1Password/after-install.sh")
+                < onepassword_installer.index("sudo tee /usr/local/bin/1password"),
+                "1Password launchers use software rendering after vendor setup",
+            )
+            applications_bindings = read(
+                staged_omarchy / "default/hypr/bindings/applications.lua"
+            )
+            check(
+                'o.bind("CTRL + SHIFT + SPACE", "1Password Quick Access", '
+                '{ launch = "1password --quick-access" })'
+                in applications_bindings,
+                "1Password Quick Access has a Wayland compositor shortcut",
+            )
 
             notification_card = read(
                 staged_omarchy / "shell/plugins/notifications/components/NotificationCard.qml"

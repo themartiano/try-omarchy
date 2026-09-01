@@ -8,15 +8,53 @@ enum QEMUGPUStorageOption: String, Equatable {
     case resetStorageOnly = "--reset-storage-only"
 }
 
+/// Build-only controls and user-facing integration values must never leak
+/// into an ordinary app launch or a storage reset through the parent process.
+enum QEMUGPURuntimeEnvironment {
+    static let inspectOnlyKey = "OMARCHY_QEMU_GPU_INSPECT_ONLY"
+    static let dryRunKey = "OMARCHY_QEMU_GPU_DRY_RUN"
+
+    static func sanitizedForLaunch(_ base: [String: String]) -> [String: String] {
+        var environment = base
+        environment.removeValue(forKey: inspectOnlyKey)
+        environment.removeValue(forKey: dryRunKey)
+        return environment
+    }
+
+    static func sanitizedForReset(_ base: [String: String]) -> [String: String] {
+        var environment = sanitizedForLaunch(base)
+        for key in [
+            AudioLaunchConfiguration.inheritedSDLDeviceNameKey,
+            AudioLaunchConfiguration.outputDeviceNameKey,
+            AudioLaunchConfiguration.inputDeviceNameKey,
+            SharedFolderPolicy.environmentKey,
+            PortForwardPolicy.environmentKey,
+        ] {
+            environment.removeValue(forKey: key)
+        }
+        return environment
+    }
+}
+
 enum QEMUGPUStorageSpaceEstimate {
     private static let stateRootEnvironmentKey = "OMARCHY_QEMU_GPU_STATE_ROOT"
 
+    /// Resolution order is the environment override, then the stored
+    /// preference, then Application Support. The override stays first because
+    /// it is the documented development and test knob, and the persistent
+    /// storage suite drives the whole library through it.
     static func dataDirectoryURL(
         environment: [String: String] = ProcessInfo.processInfo.environment,
+        preference: StorageLocationPreference = .default,
         fileManager: FileManager = .default
     ) -> URL? {
         if let configuredRoot = environment[stateRootEnvironmentKey], !configuredRoot.isEmpty {
             return validatedConfiguredRoot(configuredRoot)
+        }
+        if let container = preference.containerPath {
+            return validatedConfiguredRoot(
+                StorageLocationPolicy.stateRoot(forContainer: container)
+            )
         }
         guard let applicationSupport = fileManager.urls(
             for: .applicationSupportDirectory,
@@ -27,12 +65,21 @@ enum QEMUGPUStorageSpaceEstimate {
             .standardizedFileURL
     }
 
+    /// A chosen workspace is the state root itself, exactly as the launcher
+    /// script treats `OMARCHY_QEMU_GPU_STATE_ROOT`. Only the default location
+    /// carries the historical `VM/v1` suffix.
     static func storageRootURL(
         environment: [String: String] = ProcessInfo.processInfo.environment,
+        preference: StorageLocationPreference = .default,
         fileManager: FileManager = .default
     ) -> URL? {
         if let configuredRoot = environment[stateRootEnvironmentKey], !configuredRoot.isEmpty {
             return validatedConfiguredRoot(configuredRoot)
+        }
+        if let container = preference.containerPath {
+            return validatedConfiguredRoot(
+                StorageLocationPolicy.stateRoot(forContainer: container)
+            )
         }
         return dataDirectoryURL(environment: environment, fileManager: fileManager)?
             .appendingPathComponent("VM/v1", isDirectory: true)
@@ -41,10 +88,12 @@ enum QEMUGPUStorageSpaceEstimate {
 
     static func dataDirectoryDisplayPath(
         environment: [String: String] = ProcessInfo.processInfo.environment,
+        preference: StorageLocationPreference = .default,
         fileManager: FileManager = .default
     ) -> String? {
         guard let root = dataDirectoryURL(
             environment: environment,
+            preference: preference,
             fileManager: fileManager
         ) else { return nil }
         let path = root.path
@@ -71,11 +120,13 @@ enum QEMUGPUStorageSpaceEstimate {
     static func formattedReclaimableSpace(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         bundleIdentity: String? = nil,
+        preference: StorageLocationPreference = .default,
         fileManager: FileManager = .default
     ) -> String? {
         guard let bytes = reclaimableBytes(
             environment: environment,
             bundleIdentity: bundleIdentity,
+            preference: preference,
             fileManager: fileManager
         ) else { return nil }
         return format(bytes: bytes)
@@ -84,11 +135,13 @@ enum QEMUGPUStorageSpaceEstimate {
     static func reclaimableBytes(
         environment: [String: String],
         bundleIdentity: String?,
+        preference: StorageLocationPreference = .default,
         fileManager: FileManager = .default
     ) -> Int64? {
         guard let directories = resettableWorkspaceDirectories(
             environment: environment,
             bundleIdentity: bundleIdentity,
+            preference: preference,
             fileManager: fileManager
         ) else { return nil }
 
@@ -121,6 +174,13 @@ enum QEMUGPUStorageSpaceEstimate {
     }
 
     static func bundledIdentity(bundle: Bundle = .main) -> String? {
+        bundledMetrics(bundle: bundle)?.identity
+    }
+
+    /// Reads the guest identity and disk sizes that `build-app.sh` signs into
+    /// `Resources/guest/launch.plist`. The sizes drive the free-space guard, so
+    /// a plist missing either one yields nil rather than a guess.
+    static func bundledMetrics(bundle: Bundle = .main) -> BundledGuestMetrics? {
         guard let resourceURL = bundle.resourceURL,
               let data = try? Data(
                 contentsOf: resourceURL.appendingPathComponent("guest/launch.plist")
@@ -132,8 +192,16 @@ enum QEMUGPUStorageSpaceEstimate {
               ),
               let dictionary = propertyList as? [String: Any],
               let identity = dictionary["bundleIdentity"] as? String,
-              isIdentity(identity) else { return nil }
-        return identity
+              isIdentity(identity),
+              let sourceBytes = dictionary["sourceDiskBytes"] as? Int,
+              let workingBytes = dictionary["workingDiskBytes"] as? Int,
+              sourceBytes > 0,
+              workingBytes >= sourceBytes else { return nil }
+        return BundledGuestMetrics(
+            identity: identity,
+            sourceDiskBytes: Int64(sourceBytes),
+            workingDiskBytes: Int64(workingBytes)
+        )
     }
 
     static func storageKey(
@@ -154,6 +222,7 @@ enum QEMUGPUStorageSpaceEstimate {
     private static func resettableWorkspaceDirectories(
         environment: [String: String],
         bundleIdentity: String?,
+        preference: StorageLocationPreference,
         fileManager: FileManager
     ) -> [URL]? {
         guard let storageKey = storageKey(
@@ -162,6 +231,7 @@ enum QEMUGPUStorageSpaceEstimate {
         ) else { return nil }
         guard let root = storageRootURL(
             environment: environment,
+            preference: preference,
             fileManager: fileManager
         ) else { return nil }
         let disks = root.appendingPathComponent("disks", isDirectory: true)
@@ -358,6 +428,13 @@ enum MicrophoneAuthorizationState: Equatable {
     case notDetermined
 }
 
+enum CameraAuthorizationState: Equatable {
+    case authorized
+    case denied
+    case restricted
+    case notDetermined
+}
+
 enum AccessibilityAuthorizationState: Equatable {
     case authorized
     case unavailable
@@ -407,6 +484,33 @@ struct MicrophoneLaunchDecision: Equatable {
     }
 }
 
+struct CameraLaunchDecision: Equatable {
+    let allowsLaunch: Bool
+    let warning: String?
+
+    static func make(for state: CameraAuthorizationState) -> Self {
+        switch state {
+        case .authorized:
+            Self(allowsLaunch: true, warning: nil)
+        case .denied:
+            Self(
+                allowsLaunch: true,
+                warning: "Camera access is denied. Omarchy will continue without the Mac camera. Enable Try Omarchy in System Settings > Privacy & Security > Camera, then relaunch."
+            )
+        case .restricted:
+            Self(
+                allowsLaunch: true,
+                warning: "Camera access is restricted by macOS policy. Omarchy will continue without the Mac camera. Ask the Mac administrator to allow camera access for Try Omarchy."
+            )
+        case .notDetermined:
+            Self(
+                allowsLaunch: true,
+                warning: "Camera access was not requested. Omarchy will continue without the Mac camera until access is enabled."
+            )
+        }
+    }
+}
+
 enum MicrophonePreflight {
     static func authorizationState() -> MicrophoneAuthorizationState {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -432,12 +536,50 @@ enum MicrophonePreflight {
     }
 }
 
+enum CameraPreflight {
+    static func authorizationState() -> CameraAuthorizationState {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            return .authorized
+        case .denied:
+            return .denied
+        case .restricted:
+            return .restricted
+        case .notDetermined:
+            return .notDetermined
+        @unknown default:
+            return .restricted
+        }
+    }
+
+    static func requestAccess(completion: @escaping (Bool) -> Void) {
+        AVCaptureDevice.requestAccess(for: .video, completionHandler: completion)
+    }
+
+    static func decision() -> CameraLaunchDecision {
+        .make(for: authorizationState())
+    }
+}
+
 final class QEMUGPUProcessSupervisor: @unchecked Sendable {
     enum LaunchEvent: Equatable {
         case virtualMachineReady
     }
 
+    struct StandardErrorDrain {
+        let data: Data
+        let reachedEnd: Bool
+    }
+
+    private struct StandardErrorConsumption {
+        let reachedEnd: Bool
+        let reportsVirtualMachineStart: Bool
+    }
+
+    private static let standardErrorReadBudget = 64 * 1_024
+
     private let lock = NSLock()
+    private let standardErrorReadLock = NSLock()
     private var child: Process?
     private var errorPipe: Pipe?
     private var errorBuffer = ""
@@ -459,19 +601,32 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
         process.standardOutput = FileHandle.standardOutput
         process.standardError = pipe
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else {
+            guard let self else {
                 handle.readabilityHandler = nil
                 return
             }
-            try? FileHandle.standardError.write(contentsOf: data)
-            if self?.recordStandardError(data) == true {
+            let consumption = self.consumeAvailableStandardError(from: handle)
+            if consumption.reachedEnd {
+                handle.readabilityHandler = nil
+            }
+            if consumption.reportsVirtualMachineStart {
                 DispatchQueue.main.async {
                     launchEvent(.virtualMachineReady)
                 }
             }
         }
         process.terminationHandler = { [weak self] process in
+            pipe.fileHandleForReading.readabilityHandler = nil
+            // QEMU inherits this pipe from the shell launcher and can outlive
+            // it after a crash. Drain only bytes available now; waiting for
+            // EOF here could strand process completion for the QEMU lifetime.
+            if self?.consumeAvailableStandardError(
+                from: pipe.fileHandleForReading
+            ).reportsVirtualMachineStart == true {
+                DispatchQueue.main.async {
+                    launchEvent(.virtualMachineReady)
+                }
+            }
             self?.clear(process)
             let status = Self.status(for: process)
             // NSApplication owns a synchronous AppKit run loop. Dispatching a
@@ -507,6 +662,12 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
         return child?.isRunning == true
     }
 
+    var recentStandardError: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return errorBuffer
+    }
+
     func forward(signal: Int32) {
         lock.lock()
         defer { lock.unlock() }
@@ -522,6 +683,102 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
             errorPipe = nil
         }
         lock.unlock()
+    }
+
+    private func consumeAvailableStandardError(
+        from handle: FileHandle
+    ) -> StandardErrorConsumption {
+        standardErrorReadLock.lock()
+        defer { standardErrorReadLock.unlock() }
+
+        let drain = Self.drainAvailableStandardError(
+            from: handle,
+            maximumBytes: Self.standardErrorReadBudget
+        )
+        guard !drain.data.isEmpty else {
+            return StandardErrorConsumption(
+                reachedEnd: drain.reachedEnd,
+                reportsVirtualMachineStart: false
+            )
+        }
+        try? FileHandle.standardError.write(contentsOf: drain.data)
+        return StandardErrorConsumption(
+            reachedEnd: drain.reachedEnd,
+            reportsVirtualMachineStart: recordStandardError(drain.data)
+        )
+    }
+
+    static func drainAvailableStandardError(
+        from handle: FileHandle,
+        maximumBytes: Int
+    ) -> StandardErrorDrain {
+        guard maximumBytes > 0 else {
+            return StandardErrorDrain(data: Data(), reachedEnd: false)
+        }
+
+        let descriptor = handle.fileDescriptor
+        let originalFlags = fileStatusFlags(for: descriptor)
+        guard originalFlags >= 0 else {
+            return StandardErrorDrain(data: Data(), reachedEnd: false)
+        }
+
+        let changedFlags = originalFlags & O_NONBLOCK == 0
+        if changedFlags,
+           !setFileStatusFlags(originalFlags | O_NONBLOCK, for: descriptor) {
+            return StandardErrorDrain(data: Data(), reachedEnd: false)
+        }
+        defer {
+            if changedFlags {
+                _ = setFileStatusFlags(originalFlags, for: descriptor)
+            }
+        }
+
+        var data = Data()
+        var reachedEnd = false
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while data.count < maximumBytes {
+            let requestedBytes = min(buffer.count, maximumBytes - data.count)
+            let count = buffer.withUnsafeMutableBytes { bytes in
+                Darwin.read(descriptor, bytes.baseAddress, requestedBytes)
+            }
+            if count > 0 {
+                data.append(contentsOf: buffer.prefix(count))
+                continue
+            }
+            if count == 0 {
+                reachedEnd = true
+                break
+            }
+            if errno == EINTR {
+                continue
+            }
+            if errno == EAGAIN || errno == EWOULDBLOCK {
+                break
+            }
+            break
+        }
+        return StandardErrorDrain(data: data, reachedEnd: reachedEnd)
+    }
+
+    private static func fileStatusFlags(for descriptor: Int32) -> Int32 {
+        while true {
+            let result = Darwin.fcntl(descriptor, F_GETFL)
+            if result >= 0 || errno != EINTR {
+                return result
+            }
+        }
+    }
+
+    private static func setFileStatusFlags(_ flags: Int32, for descriptor: Int32) -> Bool {
+        while true {
+            let result = Darwin.fcntl(descriptor, F_SETFL, flags)
+            if result >= 0 {
+                return true
+            }
+            if errno != EINTR {
+                return false
+            }
+        }
     }
 
     private func recordStandardError(_ data: Data) -> Bool {

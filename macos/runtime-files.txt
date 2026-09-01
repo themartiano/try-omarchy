@@ -1,0 +1,16 @@
+bin/qemu-system-aarch64
+bin/zstd
+lib/libEGL.dylib
+lib/libGLESv2.dylib
+lib/libSDL2-2.0.0.dylib
+lib/libSDL3.dylib
+lib/libepoxy.0.dylib
+lib/libglib-2.0.0.dylib
+lib/libintl.8.dylib
+lib/liblz4.1.dylib
+lib/liblzma.5.dylib
+lib/libpcre2-8.0.dylib
+lib/libpixman-1.0.dylib
+lib/libslirp.0.dylib
+lib/libvirglrenderer.1.dylib
+lib/libzstd.1.dylib

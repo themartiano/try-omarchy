@@ -1,0 +1,124 @@
+From: Try Omarchy contributors
+Subject: [PATCH] cocoa: make full grab opt into immersive fullscreen
+
+Applies after the Try Omarchy product-identity and dynamic-display patches.
+
+QEMU's Cocoa fullscreen always replaces AppKit's auto-hidden menu bar and Dock
+with hard-hidden variants. Treat the existing full-grab display option as the
+user's immersive-mode choice: full grab keeps today's hidden chrome and guest
+Command-key capture, while standard fullscreen preserves AppKit's top-edge
+reveal and routes Command chords to the host even after the guest view grabs
+input. Both modes remain fullscreen and keep normal guest pointer handling.
+The View menu also follows the current state so its exit action stays obvious.
+
+`fullScreenMenuItem` is a file-scope static, matching `full_grab_enabled`
+above it, rather than a `QemuCocoaAppController` ivar: `create_initial_menus`
+is a plain C function with no `self`, so a bare ivar reference there does not
+compile.
+
+diff --git a/ui/cocoa.m b/ui/cocoa.m
+--- a/ui/cocoa.m
++++ b/ui/cocoa.m
+@@ -89,6 +89,8 @@
+ static int cursor_hide = 1;
+ static int left_command_key_enabled = 1;
+ static bool swap_opt_cmd;
++static bool full_grab_enabled;
++static NSMenuItem *fullScreenMenuItem;
+ 
+ static bool zoom_interpolation;
+ static NSTextField *pauseLabel;
+@@ -1013,7 +1014,8 @@
+ 
+                 /* Don't pass command key changes to guest unless mouse is grabbed */
+                 case kVK_Command:
+-                    if (isMouseGrabbed &&
++                    if (full_grab_enabled &&
++                        isMouseGrabbed &&
+                         !!(modifiers & NSEventModifierFlagCommand) &&
+                         left_command_key_enabled) {
+                         if (swap_opt_cmd) {
+@@ -1025,7 +1027,8 @@
+                     break;
+ 
+                 case kVK_RightCommand:
+-                    if (isMouseGrabbed &&
++                    if (full_grab_enabled &&
++                        isMouseGrabbed &&
+                         !!(modifiers & NSEventModifierFlagCommand)) {
+                         if (swap_opt_cmd) {
+                             [self toggleKey:Q_KEY_CODE_ALT_R];
+@@ -1039,8 +1042,10 @@
+         case NSEventTypeKeyDown:
+             keycode = cocoa_keycode_to_qemu([event keyCode]);
+ 
+-            // forward command key combos to the host UI unless the mouse is grabbed
+-            if (!isMouseGrabbed && ([event modifierFlags] & NSEventModifierFlagCommand)) {
++            // Keep Command chords with the host when ungrabbed or when the
++            // user selected standard, non-immersive fullscreen.
++            if ((!isMouseGrabbed || !full_grab_enabled) &&
++                ([event modifierFlags] & NSEventModifierFlagCommand)) {
+                 return false;
+             }
+ 
+@@ -1077,7 +1082,8 @@
+ 
+             // don't pass the guest a spurious key-up if we treated this
+             // command-key combo as a host UI action
+-            if (!isMouseGrabbed && ([event modifierFlags] & NSEventModifierFlagCommand)) {
++            if ((!isMouseGrabbed || !full_grab_enabled) &&
++                ([event modifierFlags] & NSEventModifierFlagCommand)) {
+                 return true;
+             }
+ 
+@@ -1458,12 +1465,14 @@
+ - (void)windowDidEnterFullScreen:(NSNotification *)notification
+ {
++    [fullScreenMenuItem setTitle:@"Exit Full Screen"];
+     [cocoaView updateScale];
+     [cocoaView updateUIInfo];
+     [cocoaView grabMouse];
+ }
+ 
+ - (void)windowDidExitFullScreen:(NSNotification *)notification
+ {
++    [fullScreenMenuItem setTitle:@"Enter Full Screen"];
+     [cocoaView resizeWindow];
+     [cocoaView updateScale];
+     [cocoaView updateUIInfo];
+@@ -1493,6 +1502,10 @@
+                                      willUseFullScreenPresentationOptions:(NSApplicationPresentationOptions)proposedOptions;
+ 
+ {
++    if (!full_grab_enabled) {
++        return proposedOptions;
++    }
++
+     return (proposedOptions & ~(NSApplicationPresentationAutoHideDock | NSApplicationPresentationAutoHideMenuBar)) |
+            NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar;
+ }
+@@ -1834,6 +1847,7 @@
+     // View menu
+     menu = [[NSMenu alloc] initWithTitle:@"View"];
+-    [menu addItem: [[[NSMenuItem alloc] initWithTitle:@"Enter Fullscreen" action:@selector(doToggleFullScreen:) keyEquivalent:@"f"] autorelease]]; // Fullscreen
++    fullScreenMenuItem = [[[NSMenuItem alloc] initWithTitle:@"Enter Full Screen" action:@selector(doToggleFullScreen:) keyEquivalent:@"f"] autorelease];
++    [menu addItem:fullScreenMenuItem];
+     menuItem = [[[NSMenuItem alloc] initWithTitle:@"Zoom To Fit" action:@selector(zoomToFit:) keyEquivalent:@""] autorelease];
+     [menuItem setState: [[cocoaView window] styleMask] & NSWindowStyleMaskResizable ? NSControlStateValueOn : NSControlStateValueOff];
+     [menu addItem: menuItem];
+@@ -2584,11 +2598,14 @@
+         dcl.ops = &dcl_ops;
+     }
+ 
++    full_grab_enabled = opts->u.cocoa.has_full_grab &&
++                        opts->u.cocoa.full_grab;
++
+     /* if fullscreen mode is to be used */
+     if (opts->has_full_screen && opts->full_screen) {
+         [[cocoaView window] toggleFullScreen: nil];
+     }
+-    if (opts->u.cocoa.has_full_grab && opts->u.cocoa.full_grab) {
++    if (full_grab_enabled) {
+         [controller setFullGrab: nil];
+     }
+ 

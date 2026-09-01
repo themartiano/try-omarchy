@@ -1,0 +1,291 @@
+diff --git a/src/render/ElementRenderer.cpp b/src/render/ElementRenderer.cpp
+index 50b5a79..3ded22d 100644
+--- a/src/render/ElementRenderer.cpp
++++ b/src/render/ElementRenderer.cpp
+@@ -285,7 +285,29 @@ void IElementRenderer::drawSurface(WP<CSurfacePassElement> element, const CRegio
+     float rounding      = m_data.rounding;
+     float roundingPower = m_data.roundingPower;
+
+-    rounding -= 1; // to fix a border issue
++    const auto SCALED_BORDER_SIZE = m_data.pWindow ? std::round(m_data.pWindow->getRealBorderSize() * m_data.pMonitor->m_scale) : 0;
++    const auto RENDERED_BORDER_SIZE = std::round(SCALED_BORDER_SIZE * m_renderData.renderModif.combinedScale());
++
++    CRegion inverseOpaque;
++    if (m_data.surface && m_data.surface->m_current.size.x > 0 && m_data.surface->m_current.size.y > 0) {
++        pixman_box32_t surfaceBox = {0, 0, m_data.surface->m_current.size.x, m_data.surface->m_current.size.y};
++        inverseOpaque             = m_data.surface->m_current.opaque;
++        inverseOpaque.invert(&surfaceBox).intersect(0, 0, m_data.surface->m_current.size.x, m_data.surface->m_current.size.y);
++    }
++
++    // Omarchy deliberately applies 0.985/0.96 compositor opacity to ordinary windows. That must
++    // not disable geometric coverage for a client buffer which is itself opaque. Keep the client
++    // under the border's inner AA, then apply the configured window alpha normally to both passes.
++    const bool SURFACE_CONTENT_OPAQUE = TEXTURE->m_opaque ||
++        (m_data.surface && m_data.surface->m_current.size.x > 0 && m_data.surface->m_current.size.y > 0 && inverseOpaque.empty());
++    const bool SURFACE_COVERS_WINDOW_EDGE = m_data.mainSurface ||
++        (m_data.pWindow && m_data.pWindow->getSolitaryResource() == m_data.surface);
++    const float ROUNDING_BORDER_SIZE =
++        SURFACE_COVERS_WINDOW_EDGE && !m_data.popup && m_data.decorate && !m_data.dontRound && rounding > 0 && RENDERED_BORDER_SIZE >= 2 && SURFACE_CONTENT_OPAQUE ?
++        RENDERED_BORDER_SIZE : 0.F;
++
++    if (ROUNDING_BORDER_SIZE <= 0.F)
++        rounding -= 1; // retain Hyprland's fallback where coverage cannot safely overlap
+
+     if (m_data.dontRound) {
+         rounding      = 0;
+@@ -313,6 +335,7 @@ void IElementRenderer::drawSurface(WP<CSurfacePassElement> element, const CRegio
+                             .overallA              = OVERALL_ALPHA,
+                             .round                 = rounding,
+                             .roundingPower         = roundingPower,
++                            .roundingBorderSize    = ROUNDING_BORDER_SIZE,
+                             .blur                  = true,
+                             .blockBlurOptimization = m_data.blockBlurOptimization,
+                             .allowCustomUV         = true,
+@@ -332,6 +355,7 @@ void IElementRenderer::drawSurface(WP<CSurfacePassElement> element, const CRegio
+                             .a              = ALPHA * OVERALL_ALPHA,
+                             .round          = rounding,
+                             .roundingPower  = roundingPower,
++                            .roundingBorderSize = ROUNDING_BORDER_SIZE,
+                             .discardActive  = false,
+                             .allowCustomUV  = true,
+                             .surface        = m_data.surface,
+@@ -353,6 +377,7 @@ void IElementRenderer::drawSurface(WP<CSurfacePassElement> element, const CRegio
+                             .overallA              = OVERALL_ALPHA,
+                             .round                 = rounding,
+                             .roundingPower         = roundingPower,
++                            .roundingBorderSize    = ROUNDING_BORDER_SIZE,
+                             .blur                  = true,
+                             .blockBlurOptimization = true,
+                             .allowCustomUV         = true,
+@@ -372,6 +397,7 @@ void IElementRenderer::drawSurface(WP<CSurfacePassElement> element, const CRegio
+                             .a              = ALPHA * OVERALL_ALPHA,
+                             .round          = rounding,
+                             .roundingPower  = roundingPower,
++                            .roundingBorderSize = ROUNDING_BORDER_SIZE,
+                             .discardActive  = false,
+                             .allowCustomUV  = true,
+                             .surface        = m_data.surface,
+diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
+index 29e0d76..3b40c2f 100644
+--- a/src/render/OpenGL.cpp
++++ b/src/render/OpenGL.cpp
+@@ -1447,6 +1447,7 @@ WP<CShader> CHyprOpenGLImpl::renderToFBInternal(SP<ITexture> tex, const STexture
+     shader->setUniformFloat2(SHADER_FULL_SIZE, FULLSIZE.x, FULLSIZE.y);
+     shader->setUniformFloat(SHADER_RADIUS, data.round);
+     shader->setUniformFloat(SHADER_ROUNDING_POWER, data.roundingPower);
++    shader->setUniformFloat(SHADER_ROUNDING_BORDER_SIZE, data.roundingBorderSize);
+
+     if (data.motionBlur.enabled) {
+         CBox motionPrev   = data.motionBlur.previous;
+@@ -2032,6 +2033,7 @@ void CHyprOpenGLImpl::renderTextureWithBlurInternal(SP<ITexture> tex, const CBox
+                               .a                           = data.a,
+                               .round                       = data.round,
+                               .roundingPower               = data.roundingPower,
++                              .roundingBorderSize          = data.roundingBorderSize,
+                               .discardActive               = true,
+                               .allowCustomUV               = true,
+                               .wrapX                       = data.wrapX,
+@@ -2088,6 +2090,7 @@ void CHyprOpenGLImpl::renderTextureWithBlurInternal(SP<ITexture> tex, const CBox
+                                   .a              = (*PBLURIGNOREOPACITY ? data.blurA : data.a * data.blurA) * data.overallA,
+                                   .round          = data.round,
+                                   .roundingPower  = data.roundingPower,
++                                  .roundingBorderSize = data.roundingBorderSize,
+                                   .discardActive  = false,
+                                   .allowCustomUV  = true,
+                                   .noAA           = false,
+@@ -2119,6 +2122,7 @@ void CHyprOpenGLImpl::renderTextureWithBlurInternal(SP<ITexture> tex, const CBox
+                               .a              = data.a * data.overallA,
+                               .round          = data.round,
+                               .roundingPower  = data.roundingPower,
++                              .roundingBorderSize = data.roundingBorderSize,
+                               .discardActive  = *PBLEND && NEEDS_STENCIL,
+                               .allowCustomUV  = true,
+                               .allowDim       = true,
+diff --git a/src/render/OpenGL.hpp b/src/render/OpenGL.hpp
+index fc0e345..09eb4fa 100644
+--- a/src/render/OpenGL.hpp
++++ b/src/render/OpenGL.hpp
+@@ -169,6 +169,7 @@ namespace Render::GL {
+             float                  a             = 1.F;
+             int                    round         = 0;
+             float                  roundingPower = 2.F;
++            float                  roundingBorderSize = 0.F;
+             bool                   discardActive = false;
+             bool                   allowCustomUV = false;
+             bool                   allowDim      = true;
+diff --git a/src/render/Shader.cpp b/src/render/Shader.cpp
+index ab15ca8..95b9d43 100644
+--- a/src/render/Shader.cpp
++++ b/src/render/Shader.cpp
+@@ -187,6 +187,7 @@ void CShader::getUniformLocations() {
+     m_uniformLocations[SHADER_RADIUS]                    = getUniform("radius");
+     m_uniformLocations[SHADER_RADIUS_OUTER]              = getUniform("radiusOuter");
+     m_uniformLocations[SHADER_ROUNDING_POWER]            = getUniform("roundingPower");
++    m_uniformLocations[SHADER_ROUNDING_BORDER_SIZE]      = getUniform("roundingBorderSize");
+     m_uniformLocations[SHADER_THICK]                     = getUniform("thick");
+     m_uniformLocations[SHADER_HALFPIXEL]                 = getUniform("halfpixel");
+     m_uniformLocations[SHADER_RANGE]                     = getUniform("range");
+diff --git a/src/render/Shader.hpp b/src/render/Shader.hpp
+index 5b1de39..75c2786 100644
+--- a/src/render/Shader.hpp
++++ b/src/render/Shader.hpp
+@@ -41,6 +41,7 @@ enum eShaderUniform : uint8_t {
+     SHADER_RADIUS,
+     SHADER_RADIUS_OUTER,
+     SHADER_ROUNDING_POWER,
++    SHADER_ROUNDING_BORDER_SIZE,
+     SHADER_THICK,
+     SHADER_HALFPIXEL,
+     SHADER_RANGE,
+diff --git a/src/render/gl/GLElementRenderer.cpp b/src/render/gl/GLElementRenderer.cpp
+index a92391d..c336ab0 100644
+--- a/src/render/gl/GLElementRenderer.cpp
++++ b/src/render/gl/GLElementRenderer.cpp
+@@ -121,6 +121,7 @@ void CGLElementRenderer::draw(WP<CTexPassElement> element, const CRegion& damage
+             .a              = m_data.a,
+             .round          = m_data.round,
+             .roundingPower  = m_data.roundingPower,
++            .roundingBorderSize = m_data.roundingBorderSize,
+             .discardActive  = m_data.discardActive,
+             .allowCustomUV  = m_data.allowCustomUV,
+             .wrapX          = m_data.wrapX,
+diff --git a/src/render/pass/TexPassElement.hpp b/src/render/pass/TexPassElement.hpp
+index 30a264c..14b985e 100644
+--- a/src/render/pass/TexPassElement.hpp
++++ b/src/render/pass/TexPassElement.hpp
+@@ -40,6 +40,7 @@ class CTexPassElement : public IPassElement {
+         CRegion                damage;
+         int                    round               = 0;
+         float                  roundingPower       = 2.0f;
++        float                  roundingBorderSize  = 0.0f;
+         bool                   flipEndFrame        = false;
+         bool                   useMirrorProjection = false;
+         CBox                   clipBox;
+diff --git a/src/render/shaders/glsl/border.glsl b/src/render/shaders/glsl/border.glsl
+index 57b68be..aa2988c 100644
+--- a/src/render/shaders/glsl/border.glsl
++++ b/src/render/shaders/glsl/border.glsl
+@@ -59,24 +59,16 @@ vec4
+
+ #if USE_ROUNDING
+     if (min(pixCoord.x, pixCoord.y) > 0.0 && radius > 0.0) {
+-        float dist      = pow(pow(pixCoord.x, roundingPower) + pow(pixCoord.y, roundingPower), 1.0 / roundingPower);
+-        float distOuter = pow(pow(pixCoordOuter.x, roundingPower) + pow(pixCoordOuter.y, roundingPower), 1.0 / roundingPower);
+-        float h         = (thick / 2.0);
++        // Keep both sides of the annulus in one analytic mask. The old mutually-exclusive
++        // lower/higher branches can leave the entire corner band uncovered after VirGL/ANGLE
++        // translation, even though the straight portions retain their full thickness.
++        float innerDistance = distanceWithRounding(max(pixCoord, vec2(0.0)), roundingPower) - (radius - thick);
++        float outerDistance = distanceWithRounding(max(pixCoordOuter, vec2(0.0)), roundingPower) - radiusOuter;
++        float innerCoverage = smoothstep(-SMOOTHING_CONSTANT, SMOOTHING_CONSTANT, innerDistance);
++        float outerCoverage = 1.0 - smoothstep(-SMOOTHING_CONSTANT, SMOOTHING_CONSTANT, outerDistance);
+
+-        if (dist < radius - h) {
+-            // lower
+-            float normalized = smoothstep(0.0, 1.0, (dist - radius + thick + SMOOTHING_CONSTANT) / (SMOOTHING_CONSTANT * 2.0));
+-            additionalAlpha *= normalized;
+-            done = true;
+-        } else if (min(pixCoordOuter.x, pixCoordOuter.y) > 0.0) {
+-            // higher
+-            float normalized = 1.0 - smoothstep(0.0, 1.0, (distOuter - radiusOuter + SMOOTHING_CONSTANT) / (SMOOTHING_CONSTANT * 2.0));
+-            additionalAlpha *= normalized;
+-            done = true;
+-        } else if (distOuter < radiusOuter - h) {
+-            additionalAlpha = 1.0;
+-            done            = true;
+-        }
++        additionalAlpha *= innerCoverage * outerCoverage;
++        done = true;
+     }
+ #endif
+
+diff --git a/src/render/shaders/glsl/ext.frag b/src/render/shaders/glsl/ext.frag
+index 1c614bd..016dbdc 100644
+--- a/src/render/shaders/glsl/ext.frag
++++ b/src/render/shaders/glsl/ext.frag
+@@ -13,6 +13,7 @@ uniform float              radius;
+ uniform float              roundingPower;
+ uniform vec2               topLeft;
+ uniform vec2               fullSize;
++uniform float              roundingBorderSize;
+ #include "rounding.glsl"
+
+ uniform int  discardOpaque;
+@@ -37,7 +38,7 @@ void main() {
+     }
+
+     if (radius > 0.0)
+-        pixColor = rounding(pixColor, radius, roundingPower, topLeft, fullSize);
++        pixColor = roundingWithBorderCoverage(pixColor, radius, roundingPower, topLeft, fullSize, roundingBorderSize);
+
+     fragColor = pixColor * alpha;
+ }
+diff --git a/src/render/shaders/glsl/rounding.glsl b/src/render/shaders/glsl/rounding.glsl
+index 64c6bcb..91d50b7 100644
+--- a/src/render/shaders/glsl/rounding.glsl
++++ b/src/render/shaders/glsl/rounding.glsl
+@@ -8,7 +8,7 @@ float distanceWithRounding(vec2 coords, float roundingPower) {
+     return pow(pow(coords.x, roundingPower) + pow(coords.y, roundingPower), 1.0 / roundingPower);
+ }
+
+-vec4 rounding(vec4 color, float radius, float roundingPower, vec2 topLeft, vec2 fullSize) {
++vec4 roundingWithBorderCoverage(vec4 color, float radius, float roundingPower, vec2 topLeft, vec2 fullSize, float borderSize) {
+     vec2 pixCoord = vec2(gl_FragCoord);
+     pixCoord -= topLeft + fullSize * 0.5;
+     pixCoord *= vec2(lessThan(pixCoord, vec2(0.0))) * -2.0 + 1.0;
+@@ -18,14 +18,21 @@ vec4 rounding(vec4 color, float radius, float roundingPower, vec2 topLeft, vec2
+     if (pixCoord.x + pixCoord.y > radius) {
+         float dist = distanceWithRounding(pixCoord, roundingPower);
+
+-        if (dist > radius + SMOOTHING_CONSTANT)
++        float fadeStart = borderSize > 0.0 ? SMOOTHING_CONSTANT : -SMOOTHING_CONSTANT;
++        float fadeEnd   = borderSize > 0.0 ? min(SMOOTHING_CONSTANT * 3.0, borderSize - SMOOTHING_CONSTANT) : SMOOTHING_CONSTANT;
++
++        if (dist > radius + fadeEnd)
+             discard;
+
+-        float normalized = 1.0 - smoothstep(0.0, 1.0, (dist - radius + SMOOTHING_CONSTANT) / (SMOOTHING_CONSTANT * 2.0));
++        float normalized = 1.0 - smoothstep(fadeStart, fadeEnd, dist - radius);
+
+         color *= normalized;
+     }
+
+     return color;
+ }
+-#endif
+\ No newline at end of file
++
++vec4 rounding(vec4 color, float radius, float roundingPower, vec2 topLeft, vec2 fullSize) {
++    return roundingWithBorderCoverage(color, radius, roundingPower, topLeft, fullSize, 0.0);
++}
++#endif
+diff --git a/src/render/shaders/glsl/surface.frag b/src/render/shaders/glsl/surface.frag
+index db7b8a9..7d13ee0 100644
+--- a/src/render/shaders/glsl/surface.frag
++++ b/src/render/shaders/glsl/surface.frag
+@@ -34,6 +34,7 @@ uniform float radius;
+ uniform float roundingPower;
+ uniform vec2  topLeft;
+ uniform vec2  fullSize;
++uniform float roundingBorderSize;
+ #include "rounding.glsl"
+ #else
+ const float radius        = 0.0;
+@@ -131,7 +132,7 @@ void main() {
+ #endif
+
+ #if USE_ROUNDING && !USE_MOTION_BLUR
+-    pixColor = rounding(pixColor, radius, roundingPower, topLeft, fullSize);
++    pixColor = roundingWithBorderCoverage(pixColor, radius, roundingPower, topLeft, fullSize, roundingBorderSize);
+ #endif
+ #if !USE_CM
+     pixColor *= alpha;
+@@ -166,7 +167,7 @@ void main() {
+ #endif
+
+ #if USE_ROUNDING && !USE_MOTION_BLUR
+-    mirrorColor = rounding(mirrorColor, radius, roundingPower, topLeft, fullSize);
++    mirrorColor = roundingWithBorderCoverage(mirrorColor, radius, roundingPower, topLeft, fullSize, roundingBorderSize);
+ #endif
+ #if !USE_CM
+     mirrorColor *= alpha;

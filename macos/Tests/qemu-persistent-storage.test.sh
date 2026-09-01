@@ -130,18 +130,30 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+# Runtime filesystem checks must use macOS BSD stat even when Homebrew
+# coreutils shadows it in the caller's PATH.
+shadow_bin="$test_root/path-shadow"
+mkdir "$shadow_bin"
+printf '%s\n' \
+  '#!/bin/bash' \
+  'echo "qemu-persistent-storage.test: PATH stat was invoked" >&2' \
+  'exit 97' \
+  >"$shadow_bin/stat"
+chmod 700 "$shadow_bin/stat"
+export PATH="$shadow_bin:$PATH"
+
 export OMARCHY_QEMU_GPU_STATE_ROOT="$test_root/state"
 export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=1
 source_disk="$test_root/source.ext4"
 dd if=/dev/zero of="$source_disk" bs=4096 count=1 >/dev/null 2>&1
 printf 'immutable-base' | dd of="$source_disk" bs=1 seek=32 conv=notrunc >/dev/null 2>&1
 printf '\x53\xef' | dd of="$source_disk" bs=1 seek=1080 conv=notrunc >/dev/null 2>&1
-source_bytes=$(stat -f '%z' "$source_disk")
+source_bytes=$(/usr/bin/stat -f '%z' "$source_disk")
 source_sha=$(shasum -a 256 "$source_disk" | awk '{print $1}')
 source_disk_b="$test_root/source-b.ext4"
 /bin/cp "$source_disk" "$source_disk_b"
 printf 'updated-factory' | dd of="$source_disk_b" bs=1 seek=64 conv=notrunc >/dev/null 2>&1
-source_bytes_b=$(stat -f '%z' "$source_disk_b")
+source_bytes_b=$(/usr/bin/stat -f '%z' "$source_disk_b")
 source_sha_b=$(shasum -a 256 "$source_disk_b" | awk '{print $1}')
 identity_a=$(printf 'bundle-a' | shasum -a 256 | awk '{print $1}')
 identity_b=$(printf 'bundle-b' | shasum -a 256 | awk '{print $1}')
@@ -153,12 +165,16 @@ identity_compressed=$(printf 'bundle-compressed' | shasum -a 256 | awk '{print $
 # A compressed app payload is expanded once into the private immutable-image
 # cache, verified against the raw manifest digest, and reused thereafter.
 compressed_disk="$test_root/source.ext4.zst"
-zstd_source=$(command -v zstd)
 zstd_test="$test_root/zstd"
-printf '#!/bin/bash\nexec %q "$@"\n' "$zstd_source" >"$zstd_test"
+cp "$source_disk" "$compressed_disk"
+cat >"$zstd_test" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+[[ $# == 5 && $1 == -d && $2 == -f && $4 == -o ]] || exit 64
+/bin/cp "$3" "$5"
+EOF
 chmod 700 "$zstd_test"
-zstd -q -f "$source_disk" -o "$compressed_disk"
-compressed_bytes=$(stat -f '%z' "$compressed_disk")
+compressed_bytes=$(/usr/bin/stat -f '%z' "$compressed_disk")
 qemu_persistent_storage_materialize_source \
   "$identity_compressed" "$compressed_disk" "$compressed_bytes" \
   "$source_sha" "$source_bytes" "$zstd_test"
@@ -175,7 +191,7 @@ expanded_bytes=$((source_bytes + 16384))
 qemu_persistent_storage_select \
   persistent "$identity_expanded" "$source_disk" "$source_sha" "$source_bytes" '' "$expanded_bytes"
 expanded_disk=$QEMU_SELECTED_DISK
-assert_eq "$(stat -f '%z' "$expanded_disk")" "$expanded_bytes"
+assert_eq "$(/usr/bin/stat -f '%z' "$expanded_disk")" "$expanded_bytes"
 printf 'expanded-persistence' | dd of="$expanded_disk" bs=1 seek="$source_bytes" conv=notrunc >/dev/null 2>&1
 qemu_persistent_storage_release_lock
 qemu_persistent_storage_select \
@@ -189,7 +205,7 @@ persistent_a=$QEMU_SELECTED_DISK
 assert_eq "$QEMU_SELECTED_STORAGE_MODE" persistent
 assert test -f "$persistent_a"
 assert test -f "${persistent_a%/*}/metadata.json"
-assert_eq "$(stat -f '%Lp' "$persistent_a")" 600
+assert_eq "$(/usr/bin/stat -f '%Lp' "$persistent_a")" 600
 printf 'saved-user-data' | dd of="$persistent_a" bs=1 seek=128 conv=notrunc >/dev/null 2>&1
 qemu_persistent_storage_release_lock
 
@@ -618,5 +634,100 @@ export OMARCHY_QEMU_GPU_STATE_ROOT=/
 assert_fails qemu_persistent_storage_select \
   persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
 export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_state_root
+
+# A volume the workspace cannot live on is refused before anything is written.
+# exFAT ignores chmod, so the exact 0700 assertions could never pass there.
+unsupported_root="$test_root/unsupported-state"
+export OMARCHY_QEMU_GPU_STATE_ROOT=$unsupported_root
+export OMARCHY_QEMU_GPU_TEST_FS_TYPE=exfat
+assert_fails qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+assert_fails qemu_persistent_storage_materialize_source \
+  "$identity_compressed" "$compressed_disk" "$compressed_bytes" \
+  "$source_sha" "$source_bytes" "$zstd_test"
+unset OMARCHY_QEMU_GPU_TEST_FS_TYPE
+assert test ! -e "$unsupported_root/disks"
+assert test ! -e "$unsupported_root/images"
+export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_state_root
+
+# A volume without room fails before the multi-gigabyte decompression and before
+# a workspace is created, rather than part-way through either.
+cramped_root="$test_root/cramped-state"
+export OMARCHY_QEMU_GPU_STATE_ROOT=$cramped_root
+export OMARCHY_QEMU_GPU_TEST_FREE_BYTES=1024
+assert_fails qemu_persistent_storage_materialize_source \
+  "$identity_compressed" "$compressed_disk" "$compressed_bytes" \
+  "$source_sha" "$source_bytes" "$zstd_test"
+assert_fails qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+unset OMARCHY_QEMU_GPU_TEST_FREE_BYTES
+assert test ! -e "$cramped_root/disks/current"
+assert_eq "$(find "$cramped_root/images" -type f | wc -l | tr -d '[:space:]')" 0
+export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_state_root
+
+# The same volume succeeds once the room is there, proving the guard is what
+# rejected it rather than anything else about the location. Release behavior
+# keeps the single "current" workspace, so assert that rather than the
+# identity-keyed development layout the surrounding cases use.
+export OMARCHY_QEMU_GPU_STATE_ROOT=$cramped_root
+saved_cramped_multi_disk=$OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK
+export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=0
+qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+assert_eq "$QEMU_SELECTED_DISK" "$cramped_root/disks/current/rootfs.ext4"
+qemu_persistent_storage_release_lock
+export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=$saved_cramped_multi_disk
+export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_state_root
+
+# The state-root marker is what tells the launcher a folder is one of ours, and
+# the start menu's picker mirrors these same rules so a bad marker is reported
+# while the user can still choose another folder. Pin the rules here so the two
+# sides cannot drift apart silently.
+marker_root="$test_root/marker-state"
+mkdir -p "$marker_root"
+chmod 700 "$marker_root"
+marker_file="$marker_root/.omarchy-qemu-storage"
+
+# A marker this library wrote itself validates.
+_qps_write_root_marker "$marker_file"
+assert _qps_validate_root_marker "$marker_file"
+assert_eq "$(/usr/bin/stat -f '%Lp' "$marker_file")" 600
+assert_eq "$(<"$marker_file")" "$QEMU_PERSISTENT_STORAGE_ROOT_MARKER"
+
+# Empty, wrong-token, and wrong-mode markers are all refused.
+: >"$marker_file"
+chmod 600 "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+
+printf '%s\n' 'omarchy-qemu-storage-root-v2' >"$marker_file"
+chmod 600 "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+
+printf '%s\n' "$QEMU_PERSISTENT_STORAGE_ROOT_MARKER" >"$marker_file"
+chmod 644 "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+
+# A symlink pointing at otherwise-valid content is still refused: the check is
+# on the marker itself, not on whatever it happens to resolve to.
+rm -f "$marker_file"
+printf '%s\n' "$QEMU_PERSISTENT_STORAGE_ROOT_MARKER" >"$marker_root/real-marker"
+chmod 600 "$marker_root/real-marker"
+ln -s "$marker_root/real-marker" "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+rm -f "$marker_file" "$marker_root/real-marker"
+
+# A directory in the marker's place is refused rather than crashing the read.
+mkdir "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+rmdir "$marker_file"
+
+# A state root carrying a damaged marker refuses to prepare at all, so a launch
+# never proceeds against a workspace the app cannot vouch for.
+printf 'bogus\n' >"$marker_file"
+chmod 600 "$marker_file"
+saved_marker_state_root=$OMARCHY_QEMU_GPU_STATE_ROOT
+export OMARCHY_QEMU_GPU_STATE_ROOT=$marker_root
+assert_fails _qps_prepare_state_root
+export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_marker_state_root
 
 printf 'qemu-persistent-storage.test: PASS\n'
