@@ -217,11 +217,12 @@ way to opt into the complete new factory.
 
 Optional, user-initiated installers run after the factory image has been built
 and are a separate trust boundary. They may resolve a mutable current release
-from a vendor or community package source, but the resulting payload is written
-only to the user's persistent guest disk; it is not redistributed in the app,
-recorded as a factory-image input, or covered by guest provenance. Each such
-exception must be declared in `guest/spec.json`, documented in
-`THIRD_PARTY_NOTICES.md`, and contract-tested to ensure that its installer uses
-the declared sources and authenticates downloaded vendor artifacts against an
-explicit signing identity. Invoking an optional installer is the user's
+from a vendor or community package source, or download an exact vendor artifact
+pinned by version and digest. The resulting payload is written only to the
+user's persistent guest disk; it is not redistributed in the app or covered by
+factory provenance. Each such exception must be declared in `guest/spec.json`,
+documented in `THIRD_PARTY_NOTICES.md`, and contract-tested to ensure that its
+installer uses the declared sources and authenticates downloaded vendor
+artifacts against an explicit signing identity. Invoking an optional installer
+is the user's
 decision to cross that post-build boundary.

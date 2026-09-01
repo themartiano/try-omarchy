@@ -98,7 +98,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$stage/usr/bin" "$stage/usr/local/bin" "$stage/usr/share" "$stage/usr/share/licenses"
+mkdir -p \
+  "$stage/usr/bin" \
+  "$stage/usr/local/bin" \
+  "$stage/usr/local/lib/try-omarchy" \
+  "$stage/usr/local/share/try-omarchy/vivaldi" \
+  "$stage/usr/share" \
+  "$stage/usr/share/licenses"
 cp -a "$root/usr/share/omarchy" "$stage/usr/share/omarchy"
 cp -a "$root/usr/share/licenses/omarchy" "$stage/usr/share/licenses/omarchy"
 
@@ -109,6 +115,14 @@ cursor_restore="$root/usr/local/bin/omarchy-native-cursor-restore"
 [[ -f $cursor_restore && -x $cursor_restore && ! -L $cursor_restore ]] ||
   fail "native screensaver cursor helper is missing or unsafe"
 cp -a "$cursor_restore" "$stage/usr/local/bin/omarchy-native-cursor-restore"
+
+vivaldi_installer="$root/usr/local/lib/try-omarchy/install-vivaldi-arm64"
+vivaldi_key="$root/usr/local/share/try-omarchy/vivaldi/linux_signing_key.pub"
+[[ -f $vivaldi_installer && -x $vivaldi_installer && ! -L $vivaldi_installer ]] ||
+  fail "Vivaldi ARM64 installer is missing or unsafe"
+[[ -f $vivaldi_key && ! -L $vivaldi_key ]] || fail "Vivaldi package key is missing or unsafe"
+cp -a "$vivaldi_installer" "$stage/usr/local/lib/try-omarchy/install-vivaldi-arm64"
+cp -a "$vivaldi_key" "$stage/usr/local/share/try-omarchy/vivaldi/linux_signing_key.pub"
 
 shopt -s nullglob
 runtime_commands=("$root/usr/bin/omarchy" "$root/usr/bin"/omarchy-*)

@@ -1,0 +1,170 @@
+diff --git a/bin/omarchy-default-browser b/bin/omarchy-default-browser
+index f53ccf9a..b4916e4a 100755
+--- a/bin/omarchy-default-browser
++++ b/bin/omarchy-default-browser
+@@ -1,8 +1,8 @@
+ #!/bin/bash
+ 
+ # omarchy:summary=Set the default browser for Omarchy and XDG handlers
+-# omarchy:args=[chromium|chrome|brave|brave-origin|edge|firefox|zen]
+-# omarchy:examples=omarchy default browser firefox | omarchy default browser brave
++# omarchy:args=[chromium|chrome|brave|brave-origin|edge|firefox|vivaldi|zen]
++# omarchy:examples=omarchy default browser firefox | omarchy default browser vivaldi
+ 
+ if (($# == 0)); then
+   case "$(env -u BROWSER xdg-settings get default-web-browser)" in
+@@ -11,6 +11,7 @@ if (($# == 0)); then
+   brave-browser.desktop) echo "brave" ;;
+   brave-origin.desktop) echo "brave-origin" ;;
+   microsoft-edge.desktop) echo "edge" ;;
++  vivaldi-stable.desktop) echo "vivaldi" ;;
+   firefox.desktop) echo "firefox" ;;
+   zen.desktop) echo "zen" ;;
+   *) env -u BROWSER xdg-settings get default-web-browser ;;
+@@ -19,6 +20,7 @@ if (($# == 0)); then
+ fi
+ 
+ case "$1" in
++vivaldi) desktop_id="vivaldi-stable.desktop"; name="Vivaldi"; glyph=󰆟 ;;
+ chromium) desktop_id="chromium.desktop"; name="Chromium"; glyph= ;;
+ chrome) desktop_id="google-chrome.desktop"; name="Chrome"; glyph=󰊯 ;;
+ brave) desktop_id="brave-browser.desktop"; name="Brave"; glyph=󰖟 ;;
+@@ -27,7 +29,7 @@ edge) desktop_id="microsoft-edge.desktop"; name="Edge"; glyph=󰇩 ;;
+ firefox) desktop_id="firefox.desktop"; name="Firefox"; glyph=󰈹 ;;
+ zen) desktop_id="zen.desktop"; name="Zen"; glyph=󰖟 ;;
+ *)
+-  echo "Usage: omarchy-default-browser <chromium|chrome|brave|brave-origin|edge|firefox|zen>"
++  echo "Usage: omarchy-default-browser <chromium|chrome|brave|brave-origin|edge|firefox|vivaldi|zen>"
+   exit 1
+   ;;
+ esac
+diff --git a/bin/omarchy-install-browser b/bin/omarchy-install-browser
+index f332ce77..6c2de158 100755
+--- a/bin/omarchy-install-browser
++++ b/bin/omarchy-install-browser
+@@ -1,8 +1,8 @@
+ #!/bin/bash
+ 
+ # omarchy:summary=Install a supported browser
+-# omarchy:args=<chrome|brave|brave-origin|edge|firefox|zen>
+-# omarchy:examples=omarchy install browser firefox | omarchy install browser brave
++# omarchy:args=<chrome|brave|brave-origin|edge|firefox|vivaldi|zen>
++# omarchy:examples=omarchy install browser firefox | omarchy install browser vivaldi
+ 
+ source "$OMARCHY_PATH/install/helpers/browser-policy.sh"
+ 
+@@ -64,6 +64,15 @@ brave-origin)
+   omarchy-theme-set-browser
+   announce_browser_installed "Brave Origin"
+   ;;
++vivaldi)
++  echo "Installing Vivaldi..."
++  /usr/local/lib/try-omarchy/install-vivaldi-arm64 || exit 1
++
++  setup_chromium_policy_directory /etc/opt/vivaldi/policies/managed
++  copy_chromium_flags ~/.config/vivaldi-stable.conf
++  omarchy-theme-set-browser
++  announce_browser_installed "Vivaldi"
++  ;;
+ firefox)
+   echo "Installing Firefox..."
+   omarchy-pkg-add firefox || exit 1
+@@ -81,7 +90,7 @@ zen)
+   announce_browser_installed "Zen"
+   ;;
+ *)
+-  echo "Usage: omarchy-install-browser <chrome|brave|brave-origin|edge|firefox|zen>"
++  echo "Usage: omarchy-install-browser <chrome|brave|brave-origin|edge|firefox|vivaldi|zen>"
+   exit 1
+   ;;
+ esac
+diff --git a/bin/omarchy-remove-browser b/bin/omarchy-remove-browser
+index 02fb6246..61f7ae36 100755
+--- a/bin/omarchy-remove-browser
++++ b/bin/omarchy-remove-browser
+@@ -1,8 +1,8 @@
+ #!/bin/bash
+ 
+ # omarchy:summary=Remove a supported browser and clean up Omarchy browser defaults
+-# omarchy:args=<chrome|brave|brave-origin|edge|firefox|zen>
+-# omarchy:examples=omarchy remove browser firefox | omarchy remove browser brave
++# omarchy:args=<chrome|brave|brave-origin|edge|firefox|vivaldi|zen>
++# omarchy:examples=omarchy remove browser firefox | omarchy remove browser vivaldi
+ # omarchy:requires-sudo=true
+ 
+ set_fallback_default_browser() {
+@@ -53,6 +53,13 @@ brave-origin)
+     sudo rm -rf /etc/brave
+   fi
+   ;;
++vivaldi)
++  echo "Removing Vivaldi..."
++  set_fallback_default_browser vivaldi-stable.desktop
++  omarchy-pkg-drop vivaldi
++  rm -f ~/.config/vivaldi-stable.conf
++  sudo rm -f /etc/opt/vivaldi/policies/managed/color.json
++  ;;
+ firefox)
+   echo "Removing Firefox..."
+   set_fallback_default_browser firefox.desktop
+@@ -64,7 +71,7 @@ zen)
+   omarchy-pkg-drop zen-browser-bin
+   ;;
+ *)
+-  echo "Usage: omarchy-remove-browser <chrome|brave|brave-origin|edge|firefox|zen>"
++  echo "Usage: omarchy-remove-browser <chrome|brave|brave-origin|edge|firefox|vivaldi|zen>"
+   exit 1
+   ;;
+ esac
+diff --git a/bin/omarchy-theme-set-browser b/bin/omarchy-theme-set-browser
+index 612e586f..43d6e603 100755
+--- a/bin/omarchy-theme-set-browser
++++ b/bin/omarchy-theme-set-browser
+@@ -1,6 +1,6 @@
+ #!/bin/bash
+ 
+-# omarchy:summary=Apply the current theme color to Chromium, Chrome, Edge, and Brave
++# omarchy:summary=Apply the current theme color to Chromium, Chrome, Edge, Brave, and Vivaldi
+ # omarchy:hidden=true
+ 
+ source "$OMARCHY_PATH/install/helpers/browser-policy.sh"
+@@ -32,5 +32,6 @@ refresh_running_browser brave brave
+ # Match on the binary path: the running process is named plain "brave", and a
+ # bare -f brave-origin pattern would also match the installer's own terminal.
+ refresh_running_browser /opt/brave-origin-bin/ brave-origin -f
++refresh_running_browser /opt/vivaldi/ vivaldi-stable -f
+ 
+ exit "$failed"
+diff --git a/bin/omarchy-theme-set-browser-policy b/bin/omarchy-theme-set-browser-policy
+index ccd07722..58012d3b 100755
+--- a/bin/omarchy-theme-set-browser-policy
++++ b/bin/omarchy-theme-set-browser-policy
+@@ -24,6 +24,7 @@ POLICY_DIRS=(
+   /etc/chromium/policies/managed
+   /etc/opt/chrome/policies/managed
+   /etc/opt/edge/policies/managed
++  /etc/opt/vivaldi/policies/managed
+   /etc/brave/policies/managed
+ )
+ 
+diff --git a/install/helpers/browser-policy.sh b/install/helpers/browser-policy.sh
+index c2c93d8e..412dcb06 100644
+--- a/install/helpers/browser-policy.sh
++++ b/install/helpers/browser-policy.sh
+@@ -8,6 +8,7 @@ BROWSER_POLICY_MANAGED_DIRS=(
+   /etc/chromium/policies/managed
+   /etc/opt/chrome/policies/managed
+   /etc/opt/edge/policies/managed
++  /etc/opt/vivaldi/policies/managed
+   /etc/brave/policies/managed
+ )
+ 
+@@ -20,6 +21,8 @@ BROWSER_POLICY_PARENT_DIRS=(
+   /etc/opt/chrome/policies
+   /etc/opt/edge
+   /etc/opt/edge/policies
++  /etc/opt/vivaldi
++  /etc/opt/vivaldi/policies
+   /etc/brave
+   /etc/brave/policies
+ )

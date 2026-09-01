@@ -32,6 +32,13 @@ code.
   mutable post-build inputs are excluded from factory provenance and are
   declared separately in `guest/spec.json`; the application archive is accepted
   only when its signature validates to 1Password's pinned signing fingerprint.
+- **Vivaldi** — proprietary software not redistributed by Try Omarchy. When a
+  user explicitly selects Vivaldi, the guest downloads the exact official ARM64
+  RPM pinned in `guest/spec.json`, verifies its checksum and signature against
+  Vivaldi's pinned package-composer key, and repackages the verified payload as
+  a Pacman-owned local package. This installer-only input remains outside the
+  factory image and factory provenance. Vivaldi permits open-source Linux
+  distributions to integrate its browser; see <https://vivaldi.com/partners/linux/>.
 
 See `guest/spec.json`, `guest/packages.lock.json`, and
 `macos/build-qemu-gpu-runtime.sh` for exact source identities and checksums.

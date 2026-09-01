@@ -1,0 +1,299 @@
+#!/bin/bash
+
+set -euo pipefail
+
+fail() {
+  echo "install-vivaldi-arm64: $*" >&2
+  exit 1
+}
+
+[[ $(uname -m) == aarch64 ]] || fail "the pinned Vivaldi package supports only aarch64"
+
+spec=/usr/share/try-omarchy/build-spec.json
+key=/usr/local/share/try-omarchy/vivaldi/linux_signing_key.pub
+[[ -f $spec && ! -L $spec ]] || fail "the Try Omarchy build spec is missing or unsafe"
+[[ -f $key && ! -L $key ]] || fail "the Vivaldi package key is missing or unsafe"
+
+for command in bsdtar curl gpg gzip pacman python3 sha256sum tar vercmp zstd; do
+  command -v "$command" >/dev/null || fail "$command is required"
+done
+
+mapfile -t metadata < <(python3 - "$spec" <<'PY'
+import json
+import pathlib
+import sys
+
+spec = json.loads(pathlib.Path(sys.argv[1]).read_text())
+component = spec["supplyChain"]["vivaldi"]
+for field in (
+    "version",
+    "rpmRelease",
+    "pkgrel",
+    "repository",
+    "rpmUrl",
+    "rpmSha256",
+    "signingKeySha256",
+    "signingFingerprint",
+    "reportedVersion",
+    "license",
+):
+    print(component[field])
+print(spec["image"]["sourceDateEpoch"])
+PY
+) || fail "could not read the pinned Vivaldi metadata"
+(( ${#metadata[@]} == 11 )) || fail "the pinned Vivaldi metadata is incomplete"
+
+version=${metadata[0]}
+rpm_release=${metadata[1]}
+pkgrel=${metadata[2]}
+repository=${metadata[3]}
+rpm_url=${metadata[4]}
+rpm_sha256=${metadata[5]}
+key_sha256=${metadata[6]}
+fingerprint=${metadata[7]}
+reported_version=${metadata[8]}
+license=${metadata[9]}
+source_date_epoch=${metadata[10]}
+
+[[ $version =~ ^[0-9]+(\.[0-9]+){3}$ ]] || fail "invalid Vivaldi version: $version"
+[[ $rpm_release =~ ^[1-9][0-9]*$ ]] || fail "invalid Vivaldi RPM release: $rpm_release"
+[[ $pkgrel =~ ^[1-9][0-9]*$ ]] || fail "invalid Vivaldi package release: $pkgrel"
+[[ $repository == https://repo.vivaldi.com/stable ]] || fail "unexpected Vivaldi repository"
+expected_url="https://downloads.vivaldi.com/stable/vivaldi-stable-$version-$rpm_release.aarch64.rpm"
+[[ $rpm_url == "$expected_url" ]] || fail "Vivaldi RPM URL does not match the pinned release"
+[[ $rpm_sha256 =~ ^[0-9a-f]{64}$ ]] || fail "invalid Vivaldi RPM digest"
+[[ $key_sha256 =~ ^[0-9a-f]{64}$ ]] || fail "invalid Vivaldi key digest"
+[[ $fingerprint =~ ^[0-9A-F]{40}$ ]] || fail "invalid Vivaldi signing fingerprint"
+[[ $reported_version == "Vivaldi $version" ]] || fail "invalid Vivaldi reported version"
+[[ $license == "Multiple, see https://www.vivaldi.com/" ]] || fail "unexpected Vivaldi license"
+[[ $source_date_epoch =~ ^[0-9]+$ ]] || fail "invalid source date epoch"
+
+package_version="$version-$pkgrel"
+if installed=$(pacman -Q vivaldi 2>/dev/null); then
+  installed_version=${installed#vivaldi }
+  if (( $(vercmp "$installed_version" "$package_version") >= 0 )); then
+    echo "Vivaldi $installed_version is already installed"
+    exit 0
+  fi
+fi
+
+if ! command -v rpmkeys >/dev/null || ! command -v rpm >/dev/null; then
+  omarchy-pkg-add rpm-tools || fail "could not install the RPM signature verifier"
+fi
+
+work=$(mktemp -d /tmp/try-omarchy-vivaldi.XXXXXX)
+cleanup() {
+  rm -rf "$work"
+}
+trap cleanup EXIT
+
+rpm_archive="$work/vivaldi-stable-$version-$rpm_release.aarch64.rpm"
+curl \
+  --fail \
+  --location \
+  --proto '=https' \
+  --tlsv1.2 \
+  --silent \
+  --show-error \
+  "$rpm_url" \
+  --output "$rpm_archive" || fail "Vivaldi RPM download failed"
+
+printf '%s  %s\n' "$rpm_sha256" "$rpm_archive" | sha256sum -c - >/dev/null ||
+  fail "Vivaldi RPM digest mismatch"
+printf '%s  %s\n' "$key_sha256" "$key" | sha256sum -c - >/dev/null ||
+  fail "Vivaldi package key digest mismatch"
+
+gpg_home="$work/gpg"
+install -d -m 0700 "$gpg_home"
+actual_fingerprint=$(
+  gpg --batch --homedir "$gpg_home" --with-colons --show-keys --fingerprint "$key" 2>/dev/null |
+    awk -F: '$1 == "fpr" { print $10; exit }'
+)
+[[ $actual_fingerprint == "$fingerprint" ]] || fail "Vivaldi package key fingerprint mismatch"
+
+rpm_db="$work/rpmdb"
+install -d -m 0700 "$rpm_db"
+rpmkeys --dbpath "$rpm_db" --import "$key" || fail "could not import the pinned Vivaldi package key"
+signature_status=$(LC_ALL=C rpmkeys --dbpath "$rpm_db" -Kv "$rpm_archive") ||
+  fail "Vivaldi RPM signature verification failed"
+fingerprint_lower=${fingerprint,,}
+grep -Eiq "Header OpenPGP .* signature, key fingerprint: $fingerprint_lower: OK" <<<"$signature_status" ||
+  fail "Vivaldi RPM signature used an unexpected key"
+grep -Fq "Header SHA256 digest: OK" <<<"$signature_status" || fail "Vivaldi RPM header digest failed"
+grep -Fq "Payload SHA256 digest: OK" <<<"$signature_status" || fail "Vivaldi RPM payload digest failed"
+
+rpm_identity=$(
+  rpm --dbpath "$rpm_db" -qp \
+    --queryformat '%{NAME}|%{VERSION}|%{RELEASE}|%{ARCH}|%{LICENSE}|%{VENDOR}' \
+    "$rpm_archive"
+)
+expected_identity="vivaldi-stable|$version|$rpm_release|aarch64|$license|Vivaldi Technologies AS"
+[[ $rpm_identity == "$expected_identity" ]] || fail "Vivaldi RPM identity mismatch: $rpm_identity"
+
+archive_members="$work/archive-members.txt"
+bsdtar -tf "$rpm_archive" >"$archive_members" || fail "could not inspect the Vivaldi RPM payload"
+python3 - "$archive_members" <<'PY' || fail "Vivaldi RPM contains unsafe paths"
+import pathlib
+import sys
+
+required = {
+    "opt/vivaldi/LICENSE.html",
+    "opt/vivaldi/vivaldi",
+    "opt/vivaldi/vivaldi-bin",
+    "opt/vivaldi/vivaldi-sandbox",
+    "usr/bin/vivaldi-stable",
+    "usr/share/applications/vivaldi-stable.desktop",
+}
+seen = set()
+for raw in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    rendered = raw.removeprefix("./")
+    path = pathlib.PurePosixPath(rendered)
+    if not rendered or path.is_absolute() or ".." in path.parts:
+        raise SystemExit(1)
+    seen.add(rendered.rstrip("/"))
+if not required <= seen:
+    raise SystemExit(1)
+PY
+
+stage="$work/package"
+install -d -m 0755 "$stage"
+bsdtar -xf "$rpm_archive" -C "$stage" ./opt ./usr/bin ./usr/share ||
+  fail "could not extract the Vivaldi RPM payload"
+for required in \
+  opt/vivaldi/LICENSE.html \
+  opt/vivaldi/vivaldi \
+  opt/vivaldi/vivaldi-bin \
+  opt/vivaldi/vivaldi-sandbox \
+  usr/share/applications/vivaldi-stable.desktop; do
+  [[ -f $stage/$required && ! -L $stage/$required ]] || fail "Vivaldi payload is missing $required"
+done
+[[ -L $stage/usr/bin/vivaldi-stable ]] || fail "Vivaldi command is not a symlink"
+[[ $(readlink "$stage/usr/bin/vivaldi-stable") == /opt/vivaldi/vivaldi ]] ||
+  fail "Vivaldi command has an unexpected target"
+
+python3 - "$stage/opt/vivaldi/vivaldi" <<'PY' || fail "could not add Vivaldi user flags support"
+import pathlib
+import sys
+
+launcher = pathlib.Path(sys.argv[1])
+text = launcher.read_text()
+environment_marker = "export GNOME_DISABLE_CRASH_DIALOG=SET_BY_GOOGLE_CHROME\n\n"
+exec_marker = 'exec -a "$0" "$HERE/vivaldi-bin" "$@"\n'
+if text.count(environment_marker) != 1 or text.count(exec_marker) != 1:
+    raise SystemExit(1)
+flags = r'''XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+VIVALDI_USER_FLAGS=()
+if [[ -f "$XDG_CONFIG_HOME/vivaldi-$CHROME_VERSION_EXTRA.conf" ]]; then
+  while IFS= read -r flag; do
+    trimmed=${flag#"${flag%%[![:space:]]*}"}
+    [[ -z $trimmed || ${trimmed:0:1} == "#" ]] || VIVALDI_USER_FLAGS+=("$flag")
+  done <"$XDG_CONFIG_HOME/vivaldi-$CHROME_VERSION_EXTRA.conf"
+fi
+
+'''
+text = text.replace(environment_marker, environment_marker + flags)
+text = text.replace(exec_marker, 'exec -a "$0" "$HERE/vivaldi-bin" "${VIVALDI_USER_FLAGS[@]}" "$@"\n')
+launcher.write_text(text)
+PY
+
+chmod 0755 "$stage/opt/vivaldi/vivaldi"
+chmod 4755 "$stage/opt/vivaldi/vivaldi-sandbox"
+if [[ ! -e $stage/usr/bin/vivaldi && ! -L $stage/usr/bin/vivaldi ]]; then
+  ln -s /opt/vivaldi/vivaldi "$stage/usr/bin/vivaldi"
+fi
+
+installed_size=$(python3 - "$stage/opt" "$stage/usr" <<'PY'
+import pathlib
+import sys
+
+total = 0
+for root in sys.argv[1:]:
+    for path in pathlib.Path(root).rglob("*"):
+        if not path.is_dir():
+            total += path.lstat().st_size
+print(total)
+PY
+)
+
+cat >"$stage/.PKGINFO" <<EOF
+pkgname = vivaldi
+pkgbase = vivaldi
+pkgver = $package_version
+pkgdesc = An advanced browser made with the power user in mind
+url = https://vivaldi.com
+builddate = $source_date_epoch
+packager = Try Omarchy signed ARM64 installer
+size = $installed_size
+arch = aarch64
+license = custom
+provides = vivaldi-stable
+provides = www-browser
+depend = alsa-lib
+depend = at-spi2-core
+depend = cairo
+depend = libcups
+depend = libxcomposite
+depend = libxdamage
+depend = libxkbcommon
+depend = libxrandr
+depend = libxss
+depend = mesa
+depend = nss
+depend = pango
+depend = ttf-font
+depend = desktop-file-utils
+depend = shared-mime-info
+depend = hicolor-icon-theme
+optdepend = org.freedesktop.secrets: better secret storage in gnome-keyring or kwallet
+optdepend = libnotify: native notifications
+optdepend = pipewire: WebRTC desktop sharing under Wayland
+optdepend = gtk3: GTK3 integration
+optdepend = gtk4: GTK4 integration
+optdepend = qt5-base: Qt5 integration
+optdepend = qt6-base: Qt6 integration
+optdepend = upower: Battery Status API support
+EOF
+
+# Include Pacman's full-file integrity index so `pacman -Qkk vivaldi` verifies
+# hashes, modes, sizes, ownership, and links rather than only package metadata.
+find "$stage" -exec touch -h -d "@$source_date_epoch" {} +
+(
+  cd "$stage"
+  LC_ALL=C find . -mindepth 1 ! -name .MTREE -print0 |
+    LC_ALL=C sort -z |
+    bsdtar -cnf - \
+      --format=mtree \
+      --uid 0 \
+      --gid 0 \
+      --options='!all,use-set,type,uid,gid,mode,time,size,md5,sha256,link' \
+      --no-recursion \
+      --null \
+      --files-from - |
+    gzip -n -9 >.MTREE
+)
+chmod 0644 "$stage/.MTREE"
+[[ -s $stage/.MTREE && ! -L $stage/.MTREE ]] || fail "could not generate the Vivaldi package mtree"
+
+package_archive="$work/vivaldi-$package_version-aarch64.pkg.tar.zst"
+tar \
+  --sort=name \
+  --mtime="@$source_date_epoch" \
+  --owner=0 \
+  --group=0 \
+  --numeric-owner \
+  --format=gnu \
+  -C "$stage" \
+  -cf - .PKGINFO .MTREE opt usr |
+  zstd --force --quiet -12 --threads=1 -o "$package_archive"
+
+[[ $(pacman -Qp "$package_archive") == "vivaldi $package_version" ]] ||
+  fail "the generated Vivaldi package has an unexpected identity"
+sudo pacman -U --needed --noconfirm "$package_archive" || fail "could not install Vivaldi"
+[[ $(pacman -Q vivaldi) == "vivaldi $package_version" ]] || fail "the installed Vivaldi version is unexpected"
+pacman -Qkk vivaldi >/dev/null || fail "the installed Vivaldi package is incomplete"
+actual_reported_version=$(/opt/vivaldi/vivaldi-bin --version)
+actual_reported_version=$(python3 -c 'import sys; print(sys.argv[1].strip())' "$actual_reported_version")
+[[ $actual_reported_version == "$reported_version" ]] ||
+  fail "the installed Vivaldi binary reported an unexpected identity"
+
+echo "Installed signed official ARM64 $reported_version"

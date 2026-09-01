@@ -108,6 +108,19 @@
       "license": "GPL-3.0-or-later",
       "licenseUrl": "https://raw.githubusercontent.com/Jguer/yay/v13.0.1/LICENSE",
       "licenseSha256": "589ed823e9a84c56feb95ac58e7cf384626b9cbf4fda2a907bc36e103de1bad2"
+    },
+    "vivaldi": {
+      "version": "8.2.4133.33",
+      "rpmRelease": 1,
+      "pkgrel": 2,
+      "repository": "https://repo.vivaldi.com/stable",
+      "rpmUrl": "https://downloads.vivaldi.com/stable/vivaldi-stable-8.2.4133.33-1.aarch64.rpm",
+      "rpmSha256": "99fe7542199ba11d16d9af02783540c8c03554c37d80597a219595751414503d",
+      "signingKey": "keys/vivaldi-package-composer-key11.asc",
+      "signingKeySha256": "5c67d85c0aca9c0d166edb5bc5e6ebc21d67bce4e67c645e7bd76d299fd337ef",
+      "signingFingerprint": "8D1FA52AEF58A09D889DD4221256C34716BD9233",
+      "reportedVersion": "Vivaldi 8.2.4133.33",
+      "license": "Multiple, see https://www.vivaldi.com/"
     }
   },
   "themes": [
@@ -128,11 +141,11 @@
       "applications",
       "config",
       "default",
-      "install",
       "migrations"
     ],
     "backportedRuntimeTrees": [
       "bin",
+      "install",
       "shell"
     ],
     "backports": [
@@ -152,6 +165,45 @@
             "path": "default/hypr/bindings/applications.lua",
             "beforeSha256": "6ef93bfe3df6f3b93379e0b194f3ec925cd84cfdb30115c6ece18198f21e0e3e",
             "afterSha256": "e71e1cd7a2eaab92d4fb3f92f0ede2fb5c8519222dce1cdb38ae80c76148cf63"
+          }
+        ]
+      },
+      {
+        "id": "vivaldi-arm64-browser",
+        "description": "Add Vivaldi to Omarchy's browser workflows and install its signed official ARM64 RPM as a Pacman-owned package.",
+        "reference": "https://github.com/basecamp/omarchy/commit/346e69e1cec6c4e8924531874af6ba010a1bc99e",
+        "patch": "patches/omarchy/vivaldi-browser-integration.patch",
+        "patchSha256": "555f83e6ca8e28eb4c836076c3f7206af298c3b5b5f97b25c5effa6ba2a05f87",
+        "targets": [
+          {
+            "path": "bin/omarchy-install-browser",
+            "beforeSha256": "bd9e97178359eafda0f2a5a47b63322514298e3c8681fe76d0de7044a7e9a1f7",
+            "afterSha256": "33313c59d4a41e1e50dae3740112170f92033f8e0a91c68efe4a2b6625582508"
+          },
+          {
+            "path": "bin/omarchy-remove-browser",
+            "beforeSha256": "9e7d4bead390ddd4859e7bcf2381ce15f5c91176be6941db2ed2a4a118b1e136",
+            "afterSha256": "96258b4a77c07ec7fb9f0145c9d85adf785400f29be80849bf941a3c0dc5f6f1"
+          },
+          {
+            "path": "bin/omarchy-default-browser",
+            "beforeSha256": "4c8254a3fdf4948013901caec2ed847e2eb580b045a4b1322271ab2d94c1bc1f",
+            "afterSha256": "7c4f8ec22567e3c33967746c99a6d1242c70d6b4c94f981140c07492b0904112"
+          },
+          {
+            "path": "bin/omarchy-theme-set-browser",
+            "beforeSha256": "fe364314149eb2c86681d671f1f4fb77953c9d47eb5c8708fde20f2ff9a246a7",
+            "afterSha256": "ecf2c673a926a0a9bdc976fa2df46c6f567f67bf215442f63d2c504f3159a5c7"
+          },
+          {
+            "path": "bin/omarchy-theme-set-browser-policy",
+            "beforeSha256": "644aefa2176223e606c36552dd4c047be6ca8ded6635de90f298a3a086b89180",
+            "afterSha256": "f24b153ac1b91cb7b57da660a31db9577238852daa4c16fbb662fd9cacc83301"
+          },
+          {
+            "path": "install/helpers/browser-policy.sh",
+            "beforeSha256": "ee6742bbfbbf1a68f00352bf23dbca9a2e1c221b2743378e6b54f4c98dbe6174",
+            "afterSha256": "23cfd6b2f2fe6d611770a28f4ed9b9b96723744afbef797bfe316c52ee15b683"
           }
         ]
       },
@@ -190,6 +242,19 @@
       }
     ],
     "postBuildUserInstallers": [
+      {
+        "id": "vivaldi-arm64",
+        "userInitiated": true,
+        "delivery": "pinned-signed-vendor-rpm",
+        "applicationUrl": "https://downloads.vivaldi.com/stable/vivaldi-stable-8.2.4133.33-1.aarch64.rpm",
+        "applicationSha256": "99fe7542199ba11d16d9af02783540c8c03554c37d80597a219595751414503d",
+        "signingKey": "keys/vivaldi-package-composer-key11.asc",
+        "signingFingerprint": "8D1FA52AEF58A09D889DD4221256C34716BD9233",
+        "runtimePackages": [
+          "rpm-tools"
+        ],
+        "factoryProvenance": "installer-only"
+      },
       {
         "id": "1password-arm64",
         "userInitiated": true,

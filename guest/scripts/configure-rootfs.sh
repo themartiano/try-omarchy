@@ -79,7 +79,15 @@ chmod 0755 \
   "$root/usr/local/bin/omarchy-native-cursor-restore" \
   "$root/usr/local/bin/omarchy-native-display-sync" \
   "$root/usr/local/bin/omarchy-native-mac-share" \
+  "$root/usr/local/lib/try-omarchy/install-vivaldi-arm64" \
   "$root/usr/lib/systemd/system-generators/try-omarchy-ssh-access"
+
+vivaldi_key=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["supplyChain"]["vivaldi"]["signingKey"])' "$spec")
+[[ $vivaldi_key == keys/vivaldi-package-composer-key11.asc ]] || fail "unexpected Vivaldi key path"
+[[ -f $guest_dir/$vivaldi_key && ! -L $guest_dir/$vivaldi_key ]] || fail "Vivaldi package key is missing or unsafe"
+install -d -m 0755 "$root/usr/local/share/try-omarchy/vivaldi"
+install -m 0644 "$guest_dir/$vivaldi_key" \
+  "$root/usr/local/share/try-omarchy/vivaldi/linux_signing_key.pub"
 for native_command in \
   omarchy-audio-input-set-default \
   omarchy-screensaver \

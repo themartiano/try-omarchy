@@ -512,6 +512,7 @@ supply_chain_keys = {
     "omarchyPackagesCommit",
     "omarchyPackagesRepository",
     "ttfx",
+    "vivaldi",
     "yay",
 }
 supply_chain = exact_keys(spec.get("supplyChain"), supply_chain_keys, "build spec supply chain")
@@ -655,6 +656,37 @@ if yay != {
     "licenseSha256": "589ed823e9a84c56feb95ac58e7cf384626b9cbf4fda2a907bc36e103de1bad2",
 }:
     fail("factory yay component is not the reviewed ARM64 release")
+vivaldi = exact_keys(
+    supply_chain.get("vivaldi"),
+    {
+        "license",
+        "pkgrel",
+        "reportedVersion",
+        "repository",
+        "rpmRelease",
+        "rpmSha256",
+        "rpmUrl",
+        "signingFingerprint",
+        "signingKey",
+        "signingKeySha256",
+        "version",
+    },
+    "build spec Vivaldi component",
+)
+if vivaldi != {
+    "version": "8.2.4133.33",
+    "rpmRelease": 1,
+    "pkgrel": 2,
+    "repository": "https://repo.vivaldi.com/stable",
+    "rpmUrl": "https://downloads.vivaldi.com/stable/vivaldi-stable-8.2.4133.33-1.aarch64.rpm",
+    "rpmSha256": "99fe7542199ba11d16d9af02783540c8c03554c37d80597a219595751414503d",
+    "signingKey": "keys/vivaldi-package-composer-key11.asc",
+    "signingKeySha256": "5c67d85c0aca9c0d166edb5bc5e6ebc21d67bce4e67c645e7bd76d299fd337ef",
+    "signingFingerprint": "8D1FA52AEF58A09D889DD4221256C34716BD9233",
+    "reportedVersion": "Vivaldi 8.2.4133.33",
+    "license": "Multiple, see https://www.vivaldi.com/",
+}:
+    fail("Vivaldi installer is not pinned to the reviewed signed ARM64 release")
 
 command_line = runtime.get("kernelCommandLine")
 if not isinstance(command_line, str) or not command_line or any(character in command_line for character in "\x00\r\n\t"):

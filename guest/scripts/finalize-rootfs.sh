@@ -52,6 +52,33 @@ printf '%s  %s\n' "$expected_hyprland_sha256" /usr/bin/Hyprland | sha256sum -c -
   echo "Screensaver cursor helper is not owned by the Omarchy runtime package" >&2
   exit 1
 }
+if pacman -Qq vivaldi >/dev/null 2>&1; then
+  echo "Vivaldi must remain a user-initiated post-build install" >&2
+  exit 1
+fi
+vivaldi_installer=/usr/local/lib/try-omarchy/install-vivaldi-arm64
+vivaldi_key=/usr/local/share/try-omarchy/vivaldi/linux_signing_key.pub
+[[ -x $vivaldi_installer && ! -L $vivaldi_installer ]] || {
+  echo "Vivaldi ARM64 installer is missing or unsafe" >&2
+  exit 1
+}
+[[ -f $vivaldi_key && ! -L $vivaldi_key ]] || {
+  echo "Vivaldi package key is missing or unsafe" >&2
+  exit 1
+}
+[[ $(pacman -Qoq "$vivaldi_installer") == try-omarchy-runtime ]] || {
+  echo "Vivaldi ARM64 installer is not owned by the Omarchy runtime package" >&2
+  exit 1
+}
+[[ $(pacman -Qoq "$vivaldi_key") == try-omarchy-runtime ]] || {
+  echo "Vivaldi package key is not owned by the Omarchy runtime package" >&2
+  exit 1
+}
+expected_vivaldi_key_sha256=$(read_spec '["supplyChain"]["vivaldi"]["signingKeySha256"]')
+printf '%s  %s\n' "$expected_vivaldi_key_sha256" "$vivaldi_key" | sha256sum -c - >/dev/null || {
+  echo "Vivaldi package key digest mismatch" >&2
+  exit 1
+}
 [[ ! -e /usr/local/bin/ttfx && ! -L /usr/local/bin/ttfx ]] || {
   echo "Obsolete ttfx compatibility command shadows the packaged binary" >&2
   exit 1
