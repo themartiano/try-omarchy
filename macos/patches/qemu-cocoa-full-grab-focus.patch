@@ -20,6 +20,11 @@ Standard, non-immersive fullscreen is unaffected: full_grab_enabled is
 false, isKeyboardCaptured is then always NO, and Command chords reach the
 host exactly as the immersive-mode patch intends.
 
+The two Command modifier cases move to the same predicate as the chord
+handling. Leaving them on isMouseGrabbed would toggle Super in the guest on
+a different condition than the chords themselves, which strands a held
+Super whenever the pointer leaves the view.
+
 Chords macOS routes through symbolic hot keys are consumed above any event
 tap and still never arrive; Command-Tab therefore remains a way out of a
 fullscreen guest.
@@ -44,7 +49,30 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
          COCOA_DEBUG("Global events tap: qemu handled the event, capturing!\n");
          return NULL;
      }
-@@ -1061,9 +1062,9 @@
+@@ -1031,10 +1032,9 @@
+                     }
+                     break;
+ 
+-                /* Don't pass command key changes to guest unless mouse is grabbed */
++                /* Don't pass command key changes to guest unless we captured the keyboard */
+                 case kVK_Command:
+-                    if (full_grab_enabled &&
+-                        isMouseGrabbed &&
++                    if ([self isKeyboardCaptured] &&
+                         !!(modifiers & NSEventModifierFlagCommand) &&
+                         left_command_key_enabled) {
+                         if (swap_opt_cmd) {
+@@ -1046,8 +1046,7 @@
+                     break;
+ 
+                 case kVK_RightCommand:
+-                    if (full_grab_enabled &&
+-                        isMouseGrabbed &&
++                    if ([self isKeyboardCaptured] &&
+                         !!(modifiers & NSEventModifierFlagCommand)) {
+                         if (swap_opt_cmd) {
+                             [self toggleKey:KEY_RIGHTALT];
+@@ -1061,9 +1060,9 @@
          case NSEventTypeKeyDown:
              keycode = cocoa_keycode_to_linux([event keyCode]);
  
@@ -57,7 +85,7 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
                  ([event modifierFlags] & NSEventModifierFlagCommand)) {
                  return false;
              }
-@@ -1101,7 +1102,7 @@
+@@ -1101,7 +1100,7 @@
  
              // don't pass the guest a spurious key-up if we treated this
              // command-key combo as a host UI action
@@ -66,7 +94,7 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
                  ([event modifierFlags] & NSEventModifierFlagCommand)) {
                  return true;
              }
-@@ -1295,6 +1296,30 @@
+@@ -1295,6 +1294,30 @@
  - (BOOL) isMouseGrabbed {return isMouseGrabbed;}
  
  /*
