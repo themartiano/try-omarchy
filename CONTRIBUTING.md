@@ -35,7 +35,7 @@ Pin an official upstream release, refresh the complete ARM64 transaction lock,
 and verify the source contract with one command:
 
 ```sh
-make update-omarchy OMARCHY_RELEASE=4.0.1
+make update-omarchy OMARCHY_RELEASE=4.0.2
 ```
 
 The command keeps a complete shallow source checkout under `.build/upstream/`,

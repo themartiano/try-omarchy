@@ -6,7 +6,7 @@
     "filesystemLabel": "omarchy-factory",
     "filesystemUuid": "89054943-1f4e-4f14-b934-d6db3fba4254",
     "sizeMiB": 6144,
-    "sourceDateEpoch": 1787652758
+    "sourceDateEpoch": 1788130066
   },
   "guest": {
     "profile": "factory",
@@ -23,10 +23,10 @@
   },
   "upstream": {
     "repository": "https://github.com/basecamp/omarchy",
-    "commit": "13f18b2cb7286fb54f87daf571a031aa6af3d8f0",
-    "tree": "c458272b5d2b895185633255de88a3ce563c5028",
-    "treeSha256": "3613aca0bf1861d2beee24768d11d3e61e2c719af35c12145a23081f288a2abb",
-    "release": "4.0.1",
+    "commit": "346e69e1cec6c4e8924531874af6ba010a1bc99e",
+    "tree": "24ff1b25bf85aeffa234c95c3474b7703a062c08",
+    "treeSha256": "677f90b302dc1c622a3342ca2929084475caafb12db62790f13a9f4aea8f49ae",
+    "release": "4.0.2",
     "version": "4.0.0.alpha",
     "channel": "quattro",
     "license": "MIT"
@@ -157,15 +157,15 @@
       },
       {
         "id": "notification-hover-close",
-        "description": "Restore the upstream hover-revealed notification dismiss control omitted from v4.0.1.",
+        "description": "Restore the upstream hover-revealed notification dismiss control omitted from v4.0.2.",
         "reference": "https://github.com/basecamp/omarchy/commit/9b72edcc94513cba016f145b1ac4ffdaea54b577",
         "patch": "patches/omarchy/notification-hover-close.patch",
         "patchSha256": "f9c57fba4e3ce99cbfa32c2e497a58c1afd8627302991454ca023c1f9e149d95",
         "targets": [
           {
             "path": "shell/plugins/notifications/components/NotificationCard.qml",
-            "beforeSha256": "3ffb66ebc065886fc05b6215bd6fff9cd9e5769fac15f807748d550c91efc2f4",
-            "afterSha256": "03db278b7301b41e5b21925bf22f92f3f3ff718a74d5b17121da993cd2342ae3"
+            "beforeSha256": "3f023446cfe26b9f70570d7088baab31e56ca374c4a206a7c098b09d36cdff3d",
+            "afterSha256": "e1b5bae943d2e3b495741bc845b4fd981c274be538ea01799c46026f9db0fe49"
           }
         ]
       },
