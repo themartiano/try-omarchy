@@ -902,7 +902,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 guard let self else { return }
                 self.microphoneRequestInFlight = false
                 self.render()
-                self.window.makeKeyAndOrderFront(nil)
+                self.restoreAfterPermissionRequest()
             }
         }
     }
@@ -923,9 +923,17 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 guard let self else { return }
                 self.cameraRequestInFlight = false
                 self.render()
-                self.window.makeKeyAndOrderFront(nil)
+                self.restoreAfterPermissionRequest()
             }
         }
+    }
+
+    private func restoreAfterPermissionRequest() {
+        // The system permission prompt can leave another process active. Since
+        // this launcher is an accessory app, ordering its window alone does not
+        // reliably raise it above windows belonging to that active app.
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 
     @objc private func openCameraSettings() {
