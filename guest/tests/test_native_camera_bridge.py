@@ -8,6 +8,7 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 import struct
 import unittest
+from unittest import mock
 
 
 GUEST = Path(__file__).resolve().parents[1]
@@ -68,6 +69,24 @@ class NativeCameraBridgeTests(unittest.TestCase):
         self.assertEqual(bridge.VIDIOC_S_FMT, 0xC0D05605)
         self.assertEqual(bridge.VIDIOC_DQEVENT, 0x80885659)
         self.assertEqual(bridge.VIDIOC_SUBSCRIBE_EVENT, 0x4020565A)
+        self.assertEqual(bridge.V4L2_EVENT_SUB_FL_SEND_INITIAL, 0x0001)
+
+    def test_camera_subscription_requests_initial_client_usage(self) -> None:
+        with (
+            mock.patch.object(bridge.fcntl, "ioctl") as ioctl,
+            mock.patch.object(bridge, "write_frame"),
+        ):
+            bridge.configure_camera(42)
+
+        self.assertEqual(ioctl.call_count, 2)
+        subscription_call = ioctl.call_args_list[1]
+        self.assertEqual(subscription_call.args[1], bridge.VIDIOC_SUBSCRIBE_EVENT)
+        subscription = subscription_call.args[2]
+        self.assertEqual(subscription.type, bridge.V4L2_EVENT_PRI_CLIENT_USAGE)
+        self.assertEqual(
+            subscription.flags,
+            bridge.V4L2_EVENT_SUB_FL_SEND_INITIAL,
+        )
 
     def test_wire_header_is_little_endian_and_fixed_size(self) -> None:
         self.assertEqual(bridge.HEADER.size, 16)
