@@ -1,7 +1,7 @@
 diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
 --- a/audio/sdlaudio.c
 +++ b/audio/sdlaudio.c
-@@ -46,6 +46,11 @@
+@@ -57,6 +57,11 @@
      int initialized;
      Audiodev *dev;
      SDL_AudioDeviceID devid;
@@ -13,7 +13,7 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
  } SDLVoiceOut;
  
  typedef struct SDLVoiceIn {
-@@ -54,6 +59,11 @@
+@@ -65,6 +70,11 @@
      int initialized;
      Audiodev *dev;
      SDL_AudioDeviceID devid;
@@ -24,8 +24,8 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
 +    bool enabled;
  } SDLVoiceIn;
  
- static void G_GNUC_PRINTF (1, 2) sdl_logerr (const char *fmt, ...)
-@@ -160,8 +170,73 @@
+ static int aud_to_sdlfmt (AudioFormat fmt)
+@@ -157,8 +167,73 @@
      return 0;
  }
  
@@ -100,7 +100,7 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
  {
      SDL_AudioDeviceID devid;
  #ifndef _WIN32
-@@ -181,7 +256,18 @@
+@@ -178,7 +253,18 @@
      }
  #endif
  
@@ -118,9 +118,9 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
 +        }
 +    }
      if (!devid) {
-         sdl_logerr("SDL_OpenAudioDevice for %s failed\n",
-                    rec ? "recording" : "playback");
-@@ -287,12 +373,193 @@
+         error_report("SDL_OpenAudioDevice for %s failed: %s",
+                    rec ? "recording" : "playback", SDL_GetError());
+@@ -280,12 +366,193 @@
      }
  }
  
@@ -314,7 +314,7 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
          SDL_LockAudioDevice(sdl->devid);                       \
          ret = glue(audio_generic_, name)args;                  \
          SDL_UnlockAudioDevice(sdl->devid);                     \
-@@ -305,6 +572,7 @@
+@@ -298,6 +565,7 @@
      {                                                          \
          glue(SDLVoice, dir) *sdl = (glue(SDLVoice, dir) *)hw;  \
                                                                 \
@@ -322,7 +322,7 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
          SDL_LockAudioDevice(sdl->devid);                       \
          glue(audio_generic_, name)args;                        \
          SDL_UnlockAudioDevice(sdl->devid);                     \
-@@ -331,6 +599,8 @@
+@@ -324,6 +592,8 @@
      SDLVoiceOut *sdl = (SDLVoiceOut *)hw;
  
      sdl_close_out(sdl);
@@ -330,8 +330,8 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
 +    sdl->next_route_check = 0;
  }
  
- static int sdl_init_out(HWVoiceOut *hw, struct audsettings *as,
-@@ -353,7 +623,9 @@
+ static int sdl_init_out(HWVoiceOut *hw, struct audsettings *as)
+@@ -345,7 +615,9 @@
      req.userdata = sdl;
  
      sdl->dev = dev;
@@ -342,7 +342,7 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
      if (!sdl->devid) {
          return -1;
      }
-@@ -371,8 +643,12 @@
+@@ -363,8 +635,12 @@
      hw->samples = (spdo->has_buffer_count ? spdo->buffer_count : 4) *
          obt.samples;
  
@@ -355,7 +355,7 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
      return 0;
  }
  
-@@ -380,7 +656,18 @@
+@@ -372,7 +648,18 @@
  {
      SDLVoiceOut *sdl = (SDLVoiceOut *)hw;
  
@@ -375,7 +375,7 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
  }
  
  static void sdl_fini_in(HWVoiceIn *hw)
-@@ -388,6 +675,8 @@
+@@ -380,6 +667,8 @@
      SDLVoiceIn *sdl = (SDLVoiceIn *)hw;
  
      sdl_close_in(sdl);
@@ -383,19 +383,27 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
 +    sdl->next_route_check = 0;
  }
  
- static int sdl_init_in(HWVoiceIn *hw, audsettings *as, void *drv_opaque)
-@@ -409,7 +698,9 @@
+ static int sdl_init_in(HWVoiceIn *hw, audsettings *as)
+@@ -401,10 +690,13 @@
      req.userdata = sdl;
  
      sdl->dev = dev;
 -    sdl->devid = sdl_open(&req, &obt, 1);
+-    if (!sdl->devid) {
+-        return -1;
+-    }
 +    sdl->device_name = sdl_initial_device_name(1);
-+    sdl->devid = sdl_open(&req, &obt, 1, sdl->device_name,
-+                          &sdl->route_matches);
-     if (!sdl->devid) {
-         return -1;
-     }
-@@ -430,8 +721,12 @@
++    /*
++     * Opening a recording device starts CoreAudio capture and trips macOS's
++     * privacy indicator. SDL is called with allowed_changes=0, so a
++     * successful open cannot change this requested spec; defer the real open
++     * until the guest enables a recording stream.
++     */
++    obt = req;
+-
+     err = sdl_to_audfmt(obt.format, &obt_as.fmt, &obt_as.big_endian);
+     if (err) {
+@@ -422,6 +715,9 @@
      hw->buf_emul = g_malloc(hw->size_emul);
      hw->pos_emul = hw->pending_emul = 0;
  
@@ -404,11 +412,8 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
 +    sdl->reopen_spec.userdata = sdl;
      sdl->initialized = 1;
      sdl->exit = 0;
-+    sdl_release_in(sdl);
      return 0;
- }
- 
-@@ -439,7 +734,18 @@
+@@ -431,7 +727,18 @@
  {
      SDLVoiceIn *sdl = (SDLVoiceIn *)hw;
  
@@ -427,4 +432,4 @@ diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
 +    SDL_PauseAudioDevice(sdl->devid, 0);
  }
  
- static void *sdl_audio_init(Audiodev *dev, Error **errp)
+ static bool audio_sdl_realize(AudioBackend *abe, Audiodev *dev, Error **errp)

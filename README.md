@@ -62,6 +62,11 @@ device, and QEMU links sdl2-compat over SDL3 where pausing a logical device
 leaves the physical one running. The device being held was not even from
 playback — `sdl_init_out` opens one at startup purely to negotiate a format,
 and nothing released it. The host resampled silence for the life of the VM.
+Microphone capture is stricter: its initial device open is deferred until an
+Omarchy application actually records, and the device is closed again when the
+guest capture stream stops. The first recording may therefore take one device
+open longer to begin, but merely launching Try Omarchy does not activate the
+Mac microphone.
 
 **An unconditional re-render every refresh tick.** The vendored
 GPU-resolution patch cleared `gl_dirty` inside an `if (cocoa_gl_trace_enabled())`
