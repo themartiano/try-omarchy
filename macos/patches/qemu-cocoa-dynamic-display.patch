@@ -84,32 +84,31 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
  
      qemu_console_set_ui_info(dcl.con, &info, TRUE);
  }
-@@ -1308,6 +1337,24 @@
+@@ -1308,6 +1337,23 @@
  - (void)adjustSpeed:(id)sender;
  @end
  
 +static NSRect cocoa_initial_window_frame(void)
 +{
 +    NSScreen *hostScreen = [NSScreen mainScreen];
-+    CGFloat backingScale = hostScreen ? [hostScreen backingScaleFactor] : 1.0;
-+    NSSize size = NSMakeSize(1920.0 / MAX(backingScale, 1.0),
-+                             1080.0 / MAX(backingScale, 1.0));
-+
-+    if (hostScreen) {
-+        NSSize available = [hostScreen visibleFrame].size;
-+        CGFloat fit = MIN(1.0, MIN(available.width * 0.9 / size.width,
-+                                   available.height * 0.9 / size.height));
-+        size.width = floor(size.width * fit);
-+        size.height = floor(size.height * fit);
++    if (!hostScreen) {
++        return NSMakeRect(0.0, 0.0, 1280.0, 720.0);
 +    }
 +
-+    return NSMakeRect(0.0, 0.0, size.width, size.height);
++    NSRect available = [hostScreen visibleFrame];
++    CGFloat unit = floor(MIN(NSWidth(available) * 0.75 / 16.0,
++                             NSHeight(available) * 0.75 / 9.0));
++    NSSize size = NSMakeSize(16.0 * unit, 9.0 * unit);
++
++    return NSMakeRect(floor(NSMidX(available) - size.width / 2.0),
++                      floor(NSMidY(available) - size.height / 2.0),
++                      size.width, size.height);
 +}
 +
  @implementation QemuCocoaAppController
  #ifdef CONFIG_OPENGL
  - (id) initWithCGL:(BOOL)cgl
-@@ -1321,7 +1368,7 @@
+@@ -1321,7 +1367,7 @@
  
      self = [super init];
      if (self) {
@@ -118,7 +117,7 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
  
          // create a view and add it to the window
  #ifdef CONFIG_OPENGL
-@@ -1413,17 +1460,28 @@
+@@ -1413,17 +1459,28 @@
  
  - (void)windowDidChangeScreen:(NSNotification *)notification
  {

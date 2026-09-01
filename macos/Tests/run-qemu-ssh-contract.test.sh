@@ -90,7 +90,8 @@ case " $* " in
       '-add-fd fd=fd,set=set[,opaque=opaque]' \
       '-action reboot=reset|shutdown' \
       '-action shutdown=poweroff|pause' \
-      'full-grab=on|off'
+      'full-grab=on|off' \
+      'immersive=on|off'
     ;;
   *' -machine virt -netdev help '*) printf '%s\n' user ;;
   *' -machine virt -audiodev help '*) printf '%s\n' sdl ;;
@@ -236,7 +237,14 @@ disabled_qemu=$(<"$test_root/disabled/qemu.log")
 assert_line_pair "$test_root/disabled/qemu.log" -netdev 'user,id=omarchy-net'
 assert_not_contains "$disabled_qemu" hostfwd
 assert_not_contains "$disabled_qemu" tryomarchy.ssh_access
+assert_contains "$disabled_qemu" \
+  'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,immersive=on,swap-opt-cmd=off'
 assert_contains "$(<"$test_root/disabled/storage.log")" create
+
+run_scenario non-immersive 0 '' OMARCHY_QEMU_GPU_IMMERSIVE=0
+non_immersive_qemu=$(<"$test_root/non-immersive/qemu.log")
+assert_contains "$non_immersive_qemu" \
+  'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,immersive=off,swap-opt-cmd=off'
 
 run_scenario enabled 0 '' OMARCHY_QEMU_GPU_PORT_FORWARDS=tcp:2223:22
 enabled_qemu=$(<"$test_root/enabled/qemu.log")

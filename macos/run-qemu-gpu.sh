@@ -106,6 +106,9 @@ printf '%s\n' "$qemu_help" | grep -Fq -- '-action shutdown=poweroff|pause' || {
 printf '%s\n' "$qemu_help" | grep -Fq 'full-grab=on|off' || {
   fail "staged QEMU cannot capture macOS system key combinations"
 }
+printf '%s\n' "$qemu_help" | grep -Fq 'immersive=on|off' || {
+  fail "staged QEMU cannot select its fullscreen presentation"
+}
 qemu_netdevs=$("$qemu_bin" -machine virt -netdev help 2>&1) || {
   fail "cannot inspect staged QEMU network backends"
 }
@@ -1035,8 +1038,8 @@ if ((reset_only)); then
 fi
 
 case ${OMARCHY_QEMU_GPU_IMMERSIVE:-1} in
-  1) cocoa_full_grab=on ;;
-  0) cocoa_full_grab=off ;;
+  1) cocoa_immersive=on ;;
+  0) cocoa_immersive=off ;;
   *) fail "OMARCHY_QEMU_GPU_IMMERSIVE must be 0 or 1" ;;
 esac
 
@@ -1069,10 +1072,10 @@ qemu_args=(
   -device "$gpu_device"
   # Cocoa forwards its live backing-pixel dimensions and the current host
   # display refresh rate through Virtio GPU EDID. Its accessibility-backed
-  # Immersive mode uses Cocoa's full grab to capture system/global Command
-  # chords and hard-hide Mac chrome. Standard mode stays full screen but lets
-  # Cocoa reveal the Mac menu bar and Dock at the screen edges.
-  -display "cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=$cocoa_full_grab,swap-opt-cmd=off"
+  # Full grab keeps every Command chord with the focused guest in either
+  # presentation mode. Immersive controls only whether Cocoa hard-hides the
+  # Mac menu bar and Dock instead of using standard fullscreen auto-hide.
+  -display "cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,immersive=$cocoa_immersive,swap-opt-cmd=off"
   -device 'virtio-keyboard-pci,romfile='
   -device 'virtio-tablet-pci,romfile='
   -object 'rng-random,id=omarchy-rng,filename=/dev/urandom'

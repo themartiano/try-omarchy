@@ -130,7 +130,7 @@ port. The `dtc` mirror should be reverted once kernel.org returns.
 2. Open the DMG and drag **Try Omarchy** to **Applications**.
 3. Launch **Try Omarchy** from Applications.
 
-Every launch begins at the start menu. **Immersive** is on by default and its caption explains how to leave Full Screen. Turn it off to keep Omarchy full screen while letting the Mac menu bar and Dock appear at the screen edges. Accessibility enables Mac Command-to-guest-Super shortcuts; microphone and camera access are optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
+Every launch begins at the start menu. **Immersive** is on by default and controls only the Full Screen presentation. Turn it off to keep Omarchy full screen while letting the Mac menu bar and Dock appear at the screen edges. Whenever the Omarchy window is focused, Command belongs to the guest as Super in either mode; Accessibility permission lets system shortcuts such as Command-Space reach it before macOS. Microphone and camera access are optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
 
 Restarting from inside Omarchy reboots the guest in the same Try Omarchy app.
 Shutting down Omarchy closes the app and leaves it closed.

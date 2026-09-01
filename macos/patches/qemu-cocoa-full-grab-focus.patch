@@ -4,8 +4,8 @@ Subject: [PATCH] cocoa: keep the full grab while our window is key
 Applies after the Try Omarchy product-identity, dynamic-display and
 immersive-mode patches.
 
-Immersive mode installs a global CGEventTap so system and application
-Command chords reach the guest as Super, but upstream only lets that tap
+Full grab installs a global CGEventTap so system and application Command
+chords reach the guest as Super, but upstream only lets that tap
 swallow an event while the mouse is grabbed. Try Omarchy runs an absolute
 pointing device, and notifyMouseModeChange releases the grab the moment the
 guest virtio-tablet driver binds; mouseExited releases it again whenever the
@@ -13,21 +13,20 @@ pointer leaves the view. From then on every host Command chord is handed
 back to macOS mid-session, so guest Super bindings work only until the first
 mode change and then intermittently after a click.
 
-Gate keyboard capture on our key window instead. The mouse grab keeps its
+Keep the upstream mouse-grab behavior, but let full grab additionally capture
+the keyboard whenever our window is key. Full grab is independent of the
+immersive presentation setting, so focused shortcuts reach the guest in both
+fullscreen styles and after leaving fullscreen. The mouse grab keeps its
 upstream meaning for cursor association and window titling.
-
-Standard, non-immersive fullscreen is unaffected: full_grab_enabled is
-false, isKeyboardCaptured is then always NO, and Command chords reach the
-host exactly as the immersive-mode patch intends.
 
 The two Command modifier cases move to the same predicate as the chord
 handling. Leaving them on isMouseGrabbed would toggle Super in the guest on
 a different condition than the chords themselves, which strands a held
 Super whenever the pointer leaves the view.
 
-Chords macOS routes through symbolic hot keys are consumed above any event
-tap and still never arrive; Command-Tab therefore remains a way out of a
-fullscreen guest.
+The HID-level event tap receives system Command shortcuts before normal host
+dispatch. When Accessibility permission is available, full grab therefore
+keeps those shortcuts with the focused guest as well.
 
 diff --git a/ui/cocoa.m b/ui/cocoa.m
 --- a/ui/cocoa.m
@@ -72,15 +71,14 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
                          !!(modifiers & NSEventModifierFlagCommand)) {
                          if (swap_opt_cmd) {
                              [self toggleKey:KEY_RIGHTALT];
-@@ -1061,9 +1060,9 @@
+@@ -1060,8 +1059,9 @@
          case NSEventTypeKeyDown:
              keycode = cocoa_keycode_to_linux([event keyCode]);
  
--            // Keep Command chords with the host when ungrabbed or when the
--            // user selected standard, non-immersive fullscreen.
+-            // Keep Command chords with the host unless full grab owns them.
 -            if ((!isMouseGrabbed || !full_grab_enabled) &&
-+            // Keep Command chords with the host unless we captured the
-+            // keyboard: standard fullscreen never captures, immersive does.
++            // Keep Command chords with the host unless the focused guest
++            // captured the keyboard.
 +            if (![self isKeyboardCaptured] &&
                  ([event modifierFlags] & NSEventModifierFlagCommand)) {
                  return false;
@@ -94,7 +92,7 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
                  ([event modifierFlags] & NSEventModifierFlagCommand)) {
                  return true;
              }
-@@ -1295,6 +1294,30 @@
+@@ -1295,6 +1294,24 @@
  - (BOOL) isMouseGrabbed {return isMouseGrabbed;}
  
  /*
@@ -103,22 +101,16 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
 + * the grab as soon as the guest driver comes up, and mouseExited drops it
 + * again whenever the pointer leaves the view; keying capture off the grab
 + * would hand host Command chords back to macOS mid-session, at a moment the
-+ * user never asked for. With immersive mode selected, our key window owns
-+ * every chord the tap is allowed to see instead.
-+ *
-+ * Standard fullscreen is unchanged: full_grab_enabled is false, so Command
-+ * always reaches the host and AppKit keeps its top-edge reveal.
-+ *
-+ * Chords macOS dispatches as symbolic hot keys (Spotlight's Command-Space,
-+ * Command-Tab) are consumed above the tap and still never reach the guest;
-+ * they also remain the way out of a fullscreen guest.
++ * user never asked for. With full grab enabled, our key window owns the
++ * keyboard in either fullscreen presentation and in windowed mode. Testing
++ * key-window focus independently of the event tap also preserves ordinary
++ * Command chords if Accessibility permission is unavailable; only system
++ * shortcuts that require the HID tap can then escape to macOS.
 + */
 +- (BOOL) isKeyboardCaptured
 +{
-+    if (!full_grab_enabled) {
-+        return NO;
-+    }
-+    return isMouseGrabbed || (eventsTap != NULL && [[self window] isKeyWindow]);
++    return isMouseGrabbed ||
++           (full_grab_enabled && [[self window] isKeyWindow]);
 +}
 +
 +/*

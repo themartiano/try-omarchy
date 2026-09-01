@@ -163,11 +163,11 @@ struct StartMenuPresentationTests {
         ])
     }
 
-    @Test("full-screen guidance explains the exit path for each mode")
+    @Test("immersive guidance describes fullscreen presentation only")
     func immersiveGuidance() {
         #expect(StartMenuPresentation.immersiveDetail(isEnabled: true)
-            .contains("Control-Option-G, then Command-F"))
+            == "Mac menu bar and Dock stay hidden while Omarchy is Full Screen.")
         #expect(StartMenuPresentation.immersiveDetail(isEnabled: false)
-            .contains("View › Exit Full Screen"))
+            == "Mac menu bar and Dock remain available at the screen edges while Omarchy is Full Screen.")
     }
 }

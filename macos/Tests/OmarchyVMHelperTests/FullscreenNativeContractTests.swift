@@ -3,43 +3,54 @@ import Testing
 
 @Suite("Immersive Full Screen native contract")
 struct FullscreenNativeContractTests {
-    @Test("Runner keeps both modes full screen and maps the grab policy")
+    @Test("Runner keeps focused keyboard capture independent of presentation")
     func runnerMapping() throws {
         let runner = try source(named: "run-qemu-gpu.sh")
 
         #expect(runner.contains("case ${OMARCHY_QEMU_GPU_IMMERSIVE:-1} in"))
-        #expect(runner.contains("1) cocoa_full_grab=on ;;"))
-        #expect(runner.contains("0) cocoa_full_grab=off ;;"))
+        #expect(runner.contains("1) cocoa_immersive=on ;;"))
+        #expect(runner.contains("0) cocoa_immersive=off ;;"))
         #expect(runner.contains("OMARCHY_QEMU_GPU_IMMERSIVE must be 0 or 1"))
         #expect(runner.contains(
-            "full-screen=on,full-grab=$cocoa_full_grab,swap-opt-cmd=off"
+            "full-screen=on,full-grab=on,immersive=$cocoa_immersive,swap-opt-cmd=off"
         ))
+        #expect(!runner.contains("cocoa_full_grab"))
     }
 
-    @Test("Cocoa standard mode reveals host controls and keeps the exit action accurate")
+    @Test("Cocoa separates fullscreen presentation from focused keyboard capture")
     func cocoaBehavior() throws {
-        let patch = try source(named: "patches/qemu-cocoa-immersive-mode.patch")
+        let immersivePatch = try source(named: "patches/qemu-cocoa-immersive-mode.patch")
+        let keyboardPatch = try source(named: "patches/qemu-cocoa-full-grab-focus.patch")
 
-        #expect(patch.contains("if (!full_grab_enabled)"))
-        #expect(patch.contains("return proposedOptions;"))
-        #expect(patch.contains("(!isMouseGrabbed || !full_grab_enabled)"))
-        #expect(patch.contains("[fullScreenMenuItem setTitle:@\"Exit Full Screen\"]"))
-        #expect(patch.contains("[fullScreenMenuItem setTitle:@\"Enter Full Screen\"]"))
+        #expect(immersivePatch.contains("'*immersive': 'bool'"))
+        #expect(immersivePatch.contains("if (!immersive_mode_enabled)"))
+        #expect(immersivePatch.contains("return proposedOptions;"))
+        #expect(immersivePatch.contains("[fullScreenMenuItem setTitle:@\"Exit Full Screen\"]"))
+        #expect(immersivePatch.contains("[fullScreenMenuItem setTitle:@\"Enter Full Screen\"]"))
 
-        #expect(patch.contains(
-            " static bool swap_opt_cmd;\n" +
-            "+static bool full_grab_enabled;\n" +
-            "+static NSMenuItem *fullScreenMenuItem;\n" +
-            " \n" +
-            " static bool zoom_interpolation;"
+        let fileScopeState = [
+            " static bool swap_opt_cmd;",
+            "+static bool full_grab_enabled;",
+            "+static bool immersive_mode_enabled = true;",
+            "+static NSMenuItem *fullScreenMenuItem;",
+            " ",
+            " static bool zoom_interpolation;",
+        ].joined(separator: "\n")
+        #expect(immersivePatch.contains(fileScopeState))
+        #expect(!immersivePatch.contains("+    NSMenuItem *fullScreenMenuItem;"))
+
+        #expect(keyboardPatch.contains(
+            "return isMouseGrabbed ||\n" +
+            "+           (full_grab_enabled && [[self window] isKeyWindow]);"
         ))
-        #expect(!patch.contains("+    NSMenuItem *fullScreenMenuItem;"))
+        #expect(keyboardPatch.contains("if ([view isKeyboardCaptured]"))
+        #expect(keyboardPatch.contains("if (![self isKeyboardCaptured]"))
 
         let configuration = try #require(
-            patch.range(of: "full_grab_enabled = opts->u.cocoa.has_full_grab")
+            immersivePatch.range(of: "immersive_mode_enabled = !opts->u.cocoa.has_immersive")
         )
         let fullScreenEntry = try #require(
-            patch.range(of: "[[cocoaView window] toggleFullScreen: nil]")
+            immersivePatch.range(of: "[[cocoaView window] toggleFullScreen: nil]")
         )
         #expect(configuration.lowerBound < fullScreenEntry.lowerBound)
     }

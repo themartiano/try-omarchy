@@ -172,7 +172,7 @@ enum StartMenuPresentation {
 
     static func immersiveDetail(isEnabled: Bool) -> String {
         isEnabled
-            ? "Mac controls stay hidden. First press Control-Option-G, then Command-F to leave Full Screen."
-            : "Move the pointer to the top of the screen, then choose View › Exit Full Screen or press Command-F."
+            ? "Mac menu bar and Dock stay hidden while Omarchy is Full Screen."
+            : "Mac menu bar and Dock remain available at the screen edges while Omarchy is Full Screen."
     }
 }
