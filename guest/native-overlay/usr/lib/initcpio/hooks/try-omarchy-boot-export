@@ -1,0 +1,138 @@
+#!/usr/bin/ash
+
+try_omarchy_boot_export_requested() (
+  command_line=""
+  IFS= read -r command_line </proc/cmdline || exit 1
+
+  # Kernel options are whitespace-separated. Disable pathname expansion so a
+  # malformed option can never turn into an initramfs filename.
+  set -f
+  for argument in $command_line; do
+    [ "$argument" = tryomarchy.export_boot=1 ] && exit 0
+  done
+  exit 1
+)
+
+try_omarchy_boot_export_poweroff() {
+  err "$1"
+  poweroff -f
+  # poweroff only returns if the shutdown failed. Do not let the recovery boot
+  # pivot into the installed userspace in that case.
+  return 1
+}
+
+try_omarchy_boot_export_size_is_safe() (
+  source_path=$1
+  minimum_bytes=$2
+  maximum_bytes=$3
+  source_bytes=$(/usr/bin/stat -c '%s' -- "$source_path") || exit 1
+  case "$source_bytes" in
+    ''|*[!0-9]*) exit 1 ;;
+  esac
+  [ "$source_bytes" -ge "$minimum_bytes" ] \
+    && [ "$source_bytes" -le "$maximum_bytes" ]
+)
+
+run_latehook() {
+  try_omarchy_boot_export_requested || return 0
+
+  # mkinitcpio's base init mounts the selected root filesystem at /new_root
+  # before late hooks run.
+  old_root=/new_root
+  boot_directory=$old_root/boot
+  kernel_source=$boot_directory/Image
+  initramfs_source=$boot_directory/initramfs-linux.img
+  build_spec_source=$old_root/usr/share/try-omarchy/build-spec.json
+  export_mount=/run/try-omarchy-boot-export
+  export_tag=try-omarchy-boot-export
+  if [ ! -d "$old_root" ] || [ -L "$old_root" ] \
+    || [ ! -d "$boot_directory" ] || [ -L "$boot_directory" ] \
+    || [ ! -f "$kernel_source" ] || [ -L "$kernel_source" ] || [ ! -s "$kernel_source" ] \
+    || [ ! -f "$initramfs_source" ] || [ -L "$initramfs_source" ] || [ ! -s "$initramfs_source" ] \
+    || [ ! -f "$build_spec_source" ] || [ -L "$build_spec_source" ] || [ ! -s "$build_spec_source" ]; then
+    try_omarchy_boot_export_poweroff "Try Omarchy boot export source is invalid"
+    return 1
+  fi
+  # Enforce host staging limits before exposing the 9p destination. The old
+  # root filesystem is mounted read-only, so these checked sizes cannot change
+  # underneath the copies.
+  if ! try_omarchy_boot_export_size_is_safe "$kernel_source" 60 536870912 \
+    || ! try_omarchy_boot_export_size_is_safe "$initramfs_source" 6 1073741824 \
+    || ! try_omarchy_boot_export_size_is_safe "$build_spec_source" 1 1048576; then
+    try_omarchy_boot_export_poweroff "Try Omarchy boot export source size is invalid"
+    return 1
+  fi
+
+  if { [ -e "$export_mount" ] || [ -L "$export_mount" ]; } \
+    && { [ ! -d "$export_mount" ] || [ -L "$export_mount" ]; }; then
+    try_omarchy_boot_export_poweroff "Try Omarchy boot export mount point is unsafe"
+    return 1
+  fi
+  mkdir -p "$export_mount" || {
+    try_omarchy_boot_export_poweroff "Could not create the Try Omarchy boot export mount point"
+    return 1
+  }
+  mount -t 9p \
+    -o trans=virtio,version=9p2000.L,msize=1048576,cache=none,nosuid,nodev,noexec \
+    "$export_tag" "$export_mount" || {
+      try_omarchy_boot_export_poweroff "Could not mount the Try Omarchy boot export share"
+      return 1
+    }
+  kernel_temporary=$export_mount/.kernel.tmp
+  initramfs_temporary=$export_mount/.initramfs.tmp
+  build_spec_temporary=$export_mount/.build-spec.json.tmp
+  complete_temporary=$export_mount/.complete.tmp
+  export_failed=0
+  rm -f \
+    "$export_mount/complete" \
+    "$kernel_temporary" \
+    "$initramfs_temporary" \
+    "$build_spec_temporary" \
+    "$complete_temporary" || export_failed=1
+  cp "$kernel_source" "$kernel_temporary" || export_failed=1
+  cp "$initramfs_source" "$initramfs_temporary" || export_failed=1
+  cp "$build_spec_source" "$build_spec_temporary" || export_failed=1
+  if [ "${export_failed:-0}" -eq 0 ]; then
+    sync || export_failed=1
+  fi
+  if [ "${export_failed:-0}" -eq 0 ]; then
+    mv -f "$kernel_temporary" "$export_mount/kernel" || export_failed=1
+    mv -f "$initramfs_temporary" "$export_mount/initramfs" || export_failed=1
+    mv -f "$build_spec_temporary" "$export_mount/build-spec.json" || export_failed=1
+  fi
+  if [ "${export_failed:-0}" -eq 0 ]; then
+    sync || export_failed=1
+  fi
+  if [ "${export_failed:-0}" -eq 0 ]; then
+    printf '%s\n' try-omarchy-boot-export-v1 >"$complete_temporary" || export_failed=1
+  fi
+  if [ "${export_failed:-0}" -eq 0 ]; then
+    sync || export_failed=1
+  fi
+  if [ "${export_failed:-0}" -eq 0 ]; then
+    mv -f "$complete_temporary" "$export_mount/complete" || export_failed=1
+  fi
+  if [ "${export_failed:-0}" -eq 0 ]; then
+    sync || export_failed=1
+  fi
+
+  if [ "${export_failed:-0}" -ne 0 ]; then
+    rm -f "$export_mount/complete" "$complete_temporary" 2>/dev/null || true
+    sync 2>/dev/null || true
+    umount "$export_mount" 2>/dev/null || true
+    try_omarchy_boot_export_poweroff "Try Omarchy boot export failed"
+    return 1
+  fi
+
+  if ! umount "$export_mount"; then
+    # The marker is the launcher's only success signal. Withdraw it while the
+    # share is still mounted if teardown fails, then stop this recovery boot.
+    rm -f "$export_mount/complete" 2>/dev/null || true
+    sync 2>/dev/null || true
+    try_omarchy_boot_export_poweroff "Could not unmount the Try Omarchy boot export share"
+    return 1
+  fi
+  poweroff -f
+  # As above, continuing the recovery boot is never safe if poweroff returns.
+  return 1
+}

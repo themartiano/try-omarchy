@@ -155,8 +155,9 @@ struct StorageLocationResolution: Equatable {
 
 /// Mirrors the launcher's own state-root checks so the start menu can explain a
 /// rejected folder before QEMU ever sees it, and adds the two guards the shell
-/// library cannot express cheaply: the filesystem must be APFS, and there must
-/// be room for the factory image.
+/// library cannot express cheaply: the filesystem must be APFS, and a new VM
+/// must have room for the factory image. An existing VM is launched from its
+/// recorded disk without materializing the current app's factory image.
 enum StorageLocationPolicy {
     static let environmentKey = "OMARCHY_QEMU_GPU_STATE_ROOT"
     static let workspaceDirectoryName = "Try Omarchy"
@@ -310,7 +311,13 @@ enum StorageLocationPolicy {
         }
 
         var warning: String?
-        if let metrics {
+        let hasRecordedPersistentDisk = isExistingWorkspace
+            && QEMUGPUStorageSpaceEstimate.hasRecordedPersistentDisk(
+                stateRoot: root,
+                bundleIdentity: metrics?.identity,
+                fileManager: fileManager
+            )
+        if let metrics, !hasRecordedPersistentDisk {
             let requirement = StorageSpaceRequirement(
                 sourceBytes: metrics.sourceDiskBytes,
                 workingBytes: metrics.workingDiskBytes,

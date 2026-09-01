@@ -11,10 +11,13 @@
 
 QEMU_PERSISTENT_STORAGE_SCHEMA=2
 QEMU_PERSISTENT_STORAGE_KIND='omarchy-qemu-persistent-disk'
+QEMU_PERSISTENT_STORAGE_BOOT_KIT_KIND='omarchy-qemu-boot-kit'
+QEMU_PERSISTENT_STORAGE_BOOT_ABI='qemu-arm64-direct-v1'
 QEMU_PERSISTENT_STORAGE_ROOT_MARKER='omarchy-qemu-storage-root-v1'
 QEMU_PERSISTENT_STORAGE_LOCK_FD=9
 QEMU_PERSISTENT_STORAGE_QEMU_ADD_FD='fd=9,set=77,opaque=omarchy-persistent-lock'
 QEMU_PERSISTENT_STORAGE_INCOMPATIBLE_STATUS=78
+QEMU_PERSISTENT_STORAGE_MISSING_STATUS=79
 # Room the guest needs beyond whatever the workspace itself costs to create.
 QEMU_PERSISTENT_STORAGE_HEADROOM_BYTES=1073741824
 
@@ -25,12 +28,24 @@ QEMU_PERSISTENT_STORAGE_IDENTITY=''
 QEMU_PERSISTENT_STORAGE_LOCK_PATH=''
 QEMU_PERSISTENT_STORAGE_WORKING_BYTES=''
 QEMU_IMMUTABLE_SOURCE_DISK=''
+QEMU_SELECTED_KERNEL=''
+QEMU_SELECTED_INITRAMFS=''
+QEMU_SELECTED_KERNEL_COMMAND_LINE=''
+QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY=0
 QPS_LEGACY_LOCK_PATH=''
 QPS_METADATA_SCHEMA=''
 QPS_METADATA_IDENTITY=''
 QPS_METADATA_SOURCE_SHA=''
 QPS_METADATA_SOURCE_BYTES=''
 QPS_RECORDED_EXISTING_BYTES=''
+QPS_BOOT_IDENTITY=''
+QPS_BOOT_ABI=''
+QPS_BOOT_COMMAND_LINE_BYTES=''
+QPS_BOOT_COMMAND_LINE_SHA=''
+QPS_BOOT_INITRAMFS_BYTES=''
+QPS_BOOT_INITRAMFS_SHA=''
+QPS_BOOT_KERNEL_BYTES=''
+QPS_BOOT_KERNEL_SHA=''
 
 _qps_error() {
   printf 'qemu-persistent-storage: %s\n' "$*" >&2
@@ -68,6 +83,18 @@ _qps_permissions() {
 
 _qps_size() {
   /usr/bin/stat -f '%z' "$1" 2>/dev/null
+}
+
+_qps_sha256() {
+  /usr/bin/shasum -a 256 "$1" 2>/dev/null | awk '{ print $1 }'
+}
+
+_qps_sha256_line() {
+  printf '%s\n' "$1" | /usr/bin/shasum -a 256 2>/dev/null | awk '{ print $1 }'
+}
+
+_qps_line_bytes() {
+  printf '%s\n' "$1" | /usr/bin/wc -c | tr -d '[:space:]'
 }
 
 _qps_file_identity() {
@@ -305,7 +332,7 @@ _qps_prepare_state_root() {
   fi
   _qps_validate_root_marker "$qps_marker" || return 1
 
-  for qps_child in disks images locks; do
+  for qps_child in boot disks images locks; do
     if [[ ! -e $qps_root/$qps_child && ! -L $qps_root/$qps_child ]]; then
       if mkdir "$qps_root/$qps_child" 2>/dev/null; then
         chmod 700 "$qps_root/$qps_child" || return 1
@@ -318,6 +345,7 @@ _qps_prepare_state_root() {
   done
 
   QEMU_PERSISTENT_STORAGE_ROOT=$qps_root
+  QEMU_PERSISTENT_STORAGE_BOOT_ROOT="$qps_root/boot"
   QEMU_PERSISTENT_STORAGE_DISKS_ROOT="$qps_root/disks"
   QEMU_PERSISTENT_STORAGE_IMAGES_ROOT="$qps_root/images"
   QEMU_PERSISTENT_STORAGE_LOCKS_ROOT="$qps_root/locks"
@@ -588,6 +616,429 @@ _qps_clone_disk() {
     _qps_fail "cannot flush the initialized root disk"
     return 1
   }
+}
+
+_qps_validate_kernel_command_line() {
+  local qps_line=$1
+  local qps_argument=''
+  local qps_root_count=0
+  local qps_rw_count=0
+  local qps_rootwait_count=0
+  local qps_console_zero_count=0
+  local qps_console_hvc_count=0
+
+  [[ -n $qps_line && ${#qps_line} -le 16384 ]] || return 1
+  [[ $qps_line != *$'\n'* && $qps_line != *$'\r'* && \
+     $qps_line != *$'\t'* && $qps_line != *'"'* && \
+     $qps_line != *'\\'* ]] || return 1
+  for qps_argument in $qps_line; do
+    case "$qps_argument" in
+      root=/dev/vda) ((qps_root_count += 1)) ;;
+      rw) ((qps_rw_count += 1)) ;;
+      rootwait) ((qps_rootwait_count += 1)) ;;
+      console=tty0) ((qps_console_zero_count += 1)) ;;
+      console=hvc0) ((qps_console_hvc_count += 1)) ;;
+      omarchy.qemu_virgl=*|omarchy.shared_folder_name=*|tryomarchy.ssh_access=*|\
+      tryomarchy.export_boot=*) return 1 ;;
+    esac
+  done
+  (( qps_root_count == 1 && qps_rw_count == 1 && qps_rootwait_count == 1 && \
+     qps_console_zero_count == 1 && qps_console_hvc_count == 1 ))
+}
+
+_qps_assert_boot_source_file() {
+  local qps_path=$1
+  local qps_label=$2
+  local qps_maximum_bytes=$3
+  local qps_bytes=''
+  local qps_magic=''
+
+  [[ -f $qps_path && ! -L $qps_path ]] || {
+    _qps_fail "$qps_label is missing or unsafe: $qps_path"
+    return 1
+  }
+  [[ $(_qps_lstat_kind "$qps_path") == 'Regular File' ]] || {
+    _qps_fail "$qps_label is not a regular file: $qps_path"
+    return 1
+  }
+  qps_bytes=$(_qps_size "$qps_path")
+  _qps_is_positive_integer "$qps_bytes" && (( qps_bytes <= qps_maximum_bytes )) || {
+    _qps_fail "$qps_label has an invalid size: $qps_path"
+    return 1
+  }
+  case "$qps_label" in
+    *kernel)
+      qps_magic=$(/usr/bin/od -An -tc -j 56 -N 4 "$qps_path" | tr -d '[:space:]') || return 1
+      [[ $qps_magic == ARMd ]] || {
+        _qps_fail "$qps_label is not an uncompressed ARM64 Image"
+        return 1
+      }
+      ;;
+    *initramfs)
+      qps_magic=$(/usr/bin/od -An -tx1 -N 6 "$qps_path" | tr -d '[:space:]') || return 1
+      case "$qps_magic" in
+        303730373031|303730373032|28b52ffd????) ;;
+        *)
+        _qps_fail "$qps_label is not a raw newc or zstd initramfs"
+        return 1
+        ;;
+      esac
+      ;;
+  esac
+}
+
+_qps_copy_private_file() {
+  local qps_source=$1
+  local qps_destination=$2
+  local qps_label=$3
+  local qps_expected_bytes=$4
+  local qps_expected_sha=$5
+
+  [[ ! -e $qps_destination && ! -L $qps_destination ]] || return 1
+  if /bin/cp -c "$qps_source" "$qps_destination" 2>/dev/null; then
+    :
+  else
+    [[ ! -e $qps_destination && ! -L $qps_destination ]] || /bin/rm -f "$qps_destination"
+    /bin/cp "$qps_source" "$qps_destination" || {
+      _qps_fail "cannot copy $qps_label"
+      return 1
+    }
+  fi
+  chmod 600 "$qps_destination" || return 1
+  _qps_assert_private_regular_file "$qps_destination" "$qps_label" || return 1
+  [[ $(_qps_size "$qps_destination") == "$qps_expected_bytes" && \
+     $(_qps_sha256 "$qps_destination") == "$qps_expected_sha" ]] || {
+    _qps_fail "$qps_label copy does not match its source"
+    return 1
+  }
+  [[ $(_qps_file_identity "$qps_destination") != $(_qps_file_identity "$qps_source") ]] || {
+    _qps_fail "$qps_label copy aliases its source inode"
+    return 1
+  }
+}
+
+_qps_write_boot_metadata() {
+  local qps_path=$1
+  local qps_identity=$2
+  local qps_command_line_bytes=$3
+  local qps_command_line_sha=$4
+  local qps_kernel_bytes=$5
+  local qps_kernel_sha=$6
+  local qps_initramfs_bytes=$7
+  local qps_initramfs_sha=$8
+
+  (umask 077; set -o noclobber; printf \
+    '{"bootABI":"%s","bundleIdentity":"%s","commandLine":{"bytes":%s,"sha256":"%s"},"initramfs":{"bytes":%s,"sha256":"%s"},"kernel":{"bytes":%s,"sha256":"%s"},"kind":"%s","schemaVersion":1}\n' \
+    "$QEMU_PERSISTENT_STORAGE_BOOT_ABI" \
+    "$qps_identity" \
+    "$qps_command_line_bytes" \
+    "$qps_command_line_sha" \
+    "$qps_initramfs_bytes" \
+    "$qps_initramfs_sha" \
+    "$qps_kernel_bytes" \
+    "$qps_kernel_sha" \
+    "$QEMU_PERSISTENT_STORAGE_BOOT_KIT_KIND" >"$qps_path") 2>/dev/null
+}
+
+_qps_read_boot_metadata() {
+  local qps_path=$1
+  local qps_content=''
+  local qps_pattern='^\{"bootABI":"([A-Za-z0-9._-]+)","bundleIdentity":"([0-9a-f]{64})","commandLine":\{"bytes":([1-9][0-9]*),"sha256":"([0-9a-f]{64})"\},"initramfs":\{"bytes":([1-9][0-9]*),"sha256":"([0-9a-f]{64})"\},"kernel":\{"bytes":([1-9][0-9]*),"sha256":"([0-9a-f]{64})"\},"kind":"omarchy-qemu-boot-kit","schemaVersion":1\}$'
+
+  _qps_assert_private_regular_file "$qps_path" 'boot-kit metadata' || return 1
+  [[ $(_qps_size "$qps_path") -le 16384 ]] || return 1
+  qps_content=$(<"$qps_path")
+  [[ $qps_content =~ $qps_pattern ]] || {
+    _qps_fail 'boot-kit metadata has an unknown format'
+    return 1
+  }
+  QPS_BOOT_ABI=${BASH_REMATCH[1]}
+  QPS_BOOT_IDENTITY=${BASH_REMATCH[2]}
+  QPS_BOOT_COMMAND_LINE_BYTES=${BASH_REMATCH[3]}
+  QPS_BOOT_COMMAND_LINE_SHA=${BASH_REMATCH[4]}
+  QPS_BOOT_INITRAMFS_BYTES=${BASH_REMATCH[5]}
+  QPS_BOOT_INITRAMFS_SHA=${BASH_REMATCH[6]}
+  QPS_BOOT_KERNEL_BYTES=${BASH_REMATCH[7]}
+  QPS_BOOT_KERNEL_SHA=${BASH_REMATCH[8]}
+}
+
+_qps_has_only_boot_contents() (
+  local qps_directory=$1
+  local qps_entry=''
+  local qps_names=''
+
+  shopt -s nullglob dotglob
+  for qps_entry in "$qps_directory"/*; do
+    qps_names+="${qps_entry##*/}"$'\n'
+  done
+  shopt -u nullglob dotglob
+  [[ $qps_names == $'command-line\ninitramfs\nkernel\nmetadata.json\n' ]]
+)
+
+_qps_validate_boot_kit_directory() {
+  local qps_directory=$1
+  local qps_expected_identity=$2
+  local qps_command_line=''
+
+  _qps_assert_private_directory "$qps_directory" 'boot-kit directory' || return 1
+  _qps_has_only_boot_contents "$qps_directory" || {
+    _qps_fail "boot-kit directory contains unexpected files: $qps_directory"
+    return 1
+  }
+  _qps_read_boot_metadata "$qps_directory/metadata.json" || return 1
+  [[ $QPS_BOOT_ABI == "$QEMU_PERSISTENT_STORAGE_BOOT_ABI" ]] || {
+    _qps_incompatible "the saved VM uses unsupported boot ABI $QPS_BOOT_ABI"
+    return $?
+  }
+  [[ $QPS_BOOT_IDENTITY == "$qps_expected_identity" ]] || {
+    _qps_fail 'boot-kit identity does not match its VM disk'
+    return 1
+  }
+  case ${qps_directory##*/} in
+    "$qps_expected_identity"|."$qps_expected_identity".initializing.??????) ;;
+    *)
+      _qps_fail 'boot-kit directory name does not match its VM disk'
+      return 1
+      ;;
+  esac
+  _qps_assert_private_regular_file "$qps_directory/command-line" 'boot-kit command line' || return 1
+  _qps_assert_private_regular_file "$qps_directory/kernel" 'boot-kit kernel' || return 1
+  _qps_assert_private_regular_file "$qps_directory/initramfs" 'boot-kit initramfs' || return 1
+  [[ $(_qps_size "$qps_directory/command-line") == "$QPS_BOOT_COMMAND_LINE_BYTES" && \
+     $(_qps_sha256 "$qps_directory/command-line") == "$QPS_BOOT_COMMAND_LINE_SHA" && \
+     $(_qps_size "$qps_directory/kernel") == "$QPS_BOOT_KERNEL_BYTES" && \
+     $(_qps_sha256 "$qps_directory/kernel") == "$QPS_BOOT_KERNEL_SHA" && \
+     $(_qps_size "$qps_directory/initramfs") == "$QPS_BOOT_INITRAMFS_BYTES" && \
+     $(_qps_sha256 "$qps_directory/initramfs") == "$QPS_BOOT_INITRAMFS_SHA" ]] || {
+    _qps_fail 'boot-kit contents do not match their metadata'
+    return 1
+  }
+  _qps_assert_boot_source_file "$qps_directory/kernel" 'boot-kit kernel' 536870912 || return 1
+  _qps_assert_boot_source_file "$qps_directory/initramfs" 'boot-kit initramfs' 1073741824 || return 1
+  qps_command_line=$(<"$qps_directory/command-line")
+  _qps_validate_kernel_command_line "$qps_command_line" || {
+    _qps_fail 'boot-kit command line is invalid'
+    return 1
+  }
+}
+
+_qps_validate_interrupted_boot_staging() (
+  local qps_staging=$1
+  local qps_identity=$2
+  local qps_kernel_bytes=$3
+  local qps_kernel_sha=$4
+  local qps_initramfs_bytes=$5
+  local qps_initramfs_sha=$6
+  local qps_command_line_bytes=$7
+  local qps_command_line_sha=$8
+  local qps_entry=''
+  local qps_has_kernel=0
+  local qps_has_initramfs=0
+  local qps_has_command_line=0
+  local qps_has_metadata=0
+  local qps_count=0
+
+  case "$qps_staging" in
+    "$QEMU_PERSISTENT_STORAGE_BOOT_ROOT/.${qps_identity}.initializing."??????) ;;
+    *) return 1 ;;
+  esac
+  _qps_assert_private_directory \
+    "$qps_staging" 'interrupted boot-kit staging directory' || return 1
+  shopt -s nullglob dotglob
+  for qps_entry in "$qps_staging"/*; do
+    ((qps_count += 1))
+    case ${qps_entry##*/} in
+      kernel) qps_has_kernel=1 ;;
+      initramfs) qps_has_initramfs=1 ;;
+      command-line) qps_has_command_line=1 ;;
+      metadata.json) qps_has_metadata=1 ;;
+      *) return 1 ;;
+    esac
+  done
+  shopt -u nullglob dotglob
+
+  # The staging sequence is kernel, initramfs, command line, then metadata.
+  # Only prefixes whose bytes exactly match this launch are attributable to us.
+  (( qps_has_kernel == 1 && qps_count >= 1 && qps_count <= 4 )) || return 1
+  (( qps_has_initramfs == 1 || qps_count == 1 )) || return 1
+  (( qps_has_command_line == 1 || qps_count <= 2 )) || return 1
+  (( qps_has_metadata == 1 || qps_count <= 3 )) || return 1
+  _qps_assert_private_regular_file \
+    "$qps_staging/kernel" 'interrupted boot-kit kernel' || return 1
+  [[ $(_qps_size "$qps_staging/kernel") == "$qps_kernel_bytes" && \
+     $(_qps_sha256 "$qps_staging/kernel") == "$qps_kernel_sha" ]] || return 1
+  if (( qps_has_initramfs )); then
+    _qps_assert_private_regular_file \
+      "$qps_staging/initramfs" 'interrupted boot-kit initramfs' || return 1
+    [[ $(_qps_size "$qps_staging/initramfs") == "$qps_initramfs_bytes" && \
+       $(_qps_sha256 "$qps_staging/initramfs") == "$qps_initramfs_sha" ]] || return 1
+  fi
+  if (( qps_has_command_line )); then
+    _qps_assert_private_regular_file \
+      "$qps_staging/command-line" 'interrupted boot-kit command line' || return 1
+    [[ $(_qps_size "$qps_staging/command-line") == "$qps_command_line_bytes" && \
+       $(_qps_sha256 "$qps_staging/command-line") == "$qps_command_line_sha" ]] || return 1
+  fi
+  if (( qps_has_metadata )); then
+    _qps_validate_boot_kit_directory "$qps_staging" "$qps_identity" || return 1
+    [[ $QPS_BOOT_KERNEL_BYTES == "$qps_kernel_bytes" && \
+       $QPS_BOOT_KERNEL_SHA == "$qps_kernel_sha" && \
+       $QPS_BOOT_INITRAMFS_BYTES == "$qps_initramfs_bytes" && \
+       $QPS_BOOT_INITRAMFS_SHA == "$qps_initramfs_sha" && \
+       $QPS_BOOT_COMMAND_LINE_BYTES == "$qps_command_line_bytes" && \
+       $QPS_BOOT_COMMAND_LINE_SHA == "$qps_command_line_sha" ]] || return 1
+  fi
+)
+
+_qps_reap_interrupted_boot_staging() {
+  local qps_identity=$1
+  local qps_kernel_bytes=$2
+  local qps_kernel_sha=$3
+  local qps_initramfs_bytes=$4
+  local qps_initramfs_sha=$5
+  local qps_command_line_bytes=$6
+  local qps_command_line_sha=$7
+  local qps_staging=''
+
+  for qps_staging in \
+    "$QEMU_PERSISTENT_STORAGE_BOOT_ROOT"/."$qps_identity".initializing.??????; do
+    [[ -e $qps_staging || -L $qps_staging ]] || continue
+    if _qps_validate_interrupted_boot_staging \
+      "$qps_staging" "$qps_identity" \
+      "$qps_kernel_bytes" "$qps_kernel_sha" \
+      "$qps_initramfs_bytes" "$qps_initramfs_sha" \
+      "$qps_command_line_bytes" "$qps_command_line_sha"; then
+      if /bin/rm -rf "$qps_staging"; then
+        _qps_fsync "$QEMU_PERSISTENT_STORAGE_BOOT_ROOT" || true
+        _qps_error "removed recognized interrupted boot-kit staging ${qps_staging##*/}"
+      else
+        _qps_error "could not remove recognized interrupted boot-kit staging: $qps_staging"
+      fi
+    else
+      _qps_error "left unrecognized interrupted boot-kit staging untouched: $qps_staging"
+    fi
+  done
+  return 0
+}
+
+_qps_stage_boot_kit_locked() {
+  local qps_identity=$1
+  local qps_kernel=$2
+  local qps_initramfs=$3
+  local qps_command_line=$4
+  local qps_final="$QEMU_PERSISTENT_STORAGE_BOOT_ROOT/$qps_identity"
+  local qps_staging=''
+  local qps_kernel_bytes=''
+  local qps_kernel_sha=''
+  local qps_initramfs_bytes=''
+  local qps_initramfs_sha=''
+  local qps_command_line_bytes=''
+  local qps_command_line_sha=''
+
+  _qps_is_identity "$qps_identity" || return 1
+  _qps_assert_boot_source_file "$qps_kernel" 'source boot-kit kernel' 536870912 || return 1
+  _qps_assert_boot_source_file "$qps_initramfs" 'source boot-kit initramfs' 1073741824 || return 1
+  _qps_validate_kernel_command_line "$qps_command_line" || {
+    _qps_fail 'source boot-kit command line is invalid'
+    return 1
+  }
+  qps_kernel_bytes=$(_qps_size "$qps_kernel")
+  qps_kernel_sha=$(_qps_sha256 "$qps_kernel")
+  qps_initramfs_bytes=$(_qps_size "$qps_initramfs")
+  qps_initramfs_sha=$(_qps_sha256 "$qps_initramfs")
+  qps_command_line_bytes=$(_qps_line_bytes "$qps_command_line")
+  qps_command_line_sha=$(_qps_sha256_line "$qps_command_line")
+  _qps_is_identity "$qps_kernel_sha" && _qps_is_identity "$qps_initramfs_sha" || return 1
+  _qps_is_positive_integer "$qps_command_line_bytes" && \
+    _qps_is_identity "$qps_command_line_sha" || return 1
+  _qps_reap_interrupted_boot_staging \
+    "$qps_identity" "$qps_kernel_bytes" "$qps_kernel_sha" \
+    "$qps_initramfs_bytes" "$qps_initramfs_sha" \
+    "$qps_command_line_bytes" "$qps_command_line_sha" || true
+
+  if [[ -e $qps_final || -L $qps_final ]]; then
+    _qps_validate_boot_kit_directory "$qps_final" "$qps_identity" || return $?
+    [[ $QPS_BOOT_KERNEL_BYTES == "$qps_kernel_bytes" && \
+       $QPS_BOOT_KERNEL_SHA == "$qps_kernel_sha" && \
+       $QPS_BOOT_INITRAMFS_BYTES == "$qps_initramfs_bytes" && \
+       $QPS_BOOT_INITRAMFS_SHA == "$qps_initramfs_sha" && \
+       $QPS_BOOT_COMMAND_LINE_BYTES == "$qps_command_line_bytes" && \
+       $QPS_BOOT_COMMAND_LINE_SHA == "$qps_command_line_sha" ]] || {
+      _qps_fail 'a different boot kit is already paired with this VM generation'
+      return 1
+    }
+    return 0
+  fi
+  qps_staging=$(mktemp -d \
+    "$QEMU_PERSISTENT_STORAGE_BOOT_ROOT/.${qps_identity}.initializing.XXXXXX") || return 1
+  chmod 700 "$qps_staging" || return 1
+  if ! _qps_copy_private_file \
+    "$qps_kernel" "$qps_staging/kernel" 'staged boot-kit kernel' \
+    "$qps_kernel_bytes" "$qps_kernel_sha" || \
+    ! _qps_copy_private_file \
+    "$qps_initramfs" "$qps_staging/initramfs" 'staged boot-kit initramfs' \
+    "$qps_initramfs_bytes" "$qps_initramfs_sha"; then
+    /bin/rm -rf "$qps_staging"
+    return 1
+  fi
+  (umask 077; set -o noclobber; printf '%s\n' "$qps_command_line" \
+    >"$qps_staging/command-line") 2>/dev/null || {
+    /bin/rm -rf "$qps_staging"
+    return 1
+  }
+  [[ $(_qps_size "$qps_staging/command-line") == "$qps_command_line_bytes" && \
+     $(_qps_sha256 "$qps_staging/command-line") == "$qps_command_line_sha" ]] || {
+    /bin/rm -rf "$qps_staging"
+    return 1
+  }
+  if ! _qps_write_boot_metadata \
+    "$qps_staging/metadata.json" "$qps_identity" \
+    "$qps_command_line_bytes" "$qps_command_line_sha" \
+    "$qps_kernel_bytes" "$qps_kernel_sha" \
+    "$qps_initramfs_bytes" "$qps_initramfs_sha" || \
+    ! _qps_validate_boot_kit_directory "$qps_staging" "$qps_identity"; then
+    /bin/rm -rf "$qps_staging"
+    return 1
+  fi
+  _qps_fsync "$qps_staging" || return 1
+  [[ ! -e $qps_final && ! -L $qps_final ]] || return 1
+  /bin/mv "$qps_staging" "$qps_final" || return 1
+  _qps_fsync "$QEMU_PERSISTENT_STORAGE_BOOT_ROOT" || return 1
+  _qps_error "paired VM disk ${qps_identity:0:12} with its boot kit"
+}
+
+_qps_set_selected_boot_kit() {
+  local qps_identity=$1
+  local qps_directory="$QEMU_PERSISTENT_STORAGE_BOOT_ROOT/$qps_identity"
+
+  QEMU_SELECTED_KERNEL=''
+  QEMU_SELECTED_INITRAMFS=''
+  QEMU_SELECTED_KERNEL_COMMAND_LINE=''
+  QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY=0
+  if [[ ! -e $qps_directory && ! -L $qps_directory ]]; then
+    QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY=1
+    return 0
+  fi
+  _qps_validate_boot_kit_directory "$qps_directory" "$qps_identity" || return $?
+  QEMU_SELECTED_KERNEL="$qps_directory/kernel"
+  QEMU_SELECTED_INITRAMFS="$qps_directory/initramfs"
+  QEMU_SELECTED_KERNEL_COMMAND_LINE=$(<"$qps_directory/command-line")
+}
+
+qemu_persistent_storage_stage_selected_boot_kit() {
+  local qps_kernel=${1:-}
+  local qps_initramfs=${2:-}
+  local qps_command_line=${3:-}
+
+  if [[ $QEMU_SELECTED_STORAGE_MODE != persistent || \
+        -z $QEMU_PERSISTENT_STORAGE_IDENTITY ]] || ! _qps_lock_fd_is_open; then
+    _qps_fail 'a locked persistent VM must be selected before pairing its boot kit'
+    return 1
+  fi
+  _qps_stage_boot_kit_locked \
+    "$QEMU_PERSISTENT_STORAGE_IDENTITY" "$qps_kernel" "$qps_initramfs" \
+    "$qps_command_line" || return $?
+  _qps_set_selected_boot_kit "$QEMU_PERSISTENT_STORAGE_IDENTITY"
 }
 
 _qps_expand_disk() {
@@ -905,6 +1356,68 @@ _qps_initialize_persistent_disk() {
   _qps_error "initialized persistent workspace ${qps_identity:0:12}"
 }
 
+_qps_validate_boot_kit_reset_target() {
+  local qps_identity=$1
+  local qps_final="$QEMU_PERSISTENT_STORAGE_BOOT_ROOT/$qps_identity"
+  local qps_final_kind=''
+
+  _qps_is_identity "$qps_identity" || return 1
+  _qps_assert_private_directory \
+    "$QEMU_PERSISTENT_STORAGE_BOOT_ROOT" 'state boot directory' || return 1
+  [[ -e $qps_final || -L $qps_final ]] || return 0
+  case "$qps_final" in
+    "$QEMU_PERSISTENT_STORAGE_BOOT_ROOT/$qps_identity") ;;
+    *)
+      _qps_fail 'refusing to reset a boot-kit path outside its identity scope'
+      return 1
+      ;;
+  esac
+  qps_final_kind=$(_qps_lstat_kind "$qps_final") || return 1
+  [[ $(_qps_owner "$qps_final") == $(id -u) ]] || {
+    _qps_fail 'refusing to reset a boot-kit entry not owned by the current user'
+    return 1
+  }
+  if [[ $qps_final_kind == Directory ]]; then
+    [[ ! -L $qps_final ]] || return 1
+    [[ $(/usr/bin/stat -f '%d' "$qps_final" 2>/dev/null) == \
+       $(/usr/bin/stat -f '%d' "$QEMU_PERSISTENT_STORAGE_BOOT_ROOT" 2>/dev/null) ]] || {
+      _qps_fail 'refusing to recursively reset a boot kit on another filesystem'
+      return 1
+    }
+  fi
+}
+
+_qps_reset_boot_kit() {
+  local qps_identity=$1
+  local qps_final="$QEMU_PERSISTENT_STORAGE_BOOT_ROOT/$qps_identity"
+  local qps_discarded=''
+
+  _qps_validate_boot_kit_reset_target "$qps_identity" || return 1
+  [[ -e $qps_final || -L $qps_final ]] || return 0
+  qps_discarded="$QEMU_PERSISTENT_STORAGE_BOOT_ROOT/.${qps_identity}.discarded.$$.$RANDOM$RANDOM"
+  [[ ! -e $qps_discarded && ! -L $qps_discarded ]] || {
+    _qps_fail 'cannot allocate boot-kit reset transaction name'
+    return 1
+  }
+  /bin/mv "$qps_final" "$qps_discarded" || {
+    _qps_fail 'cannot detach the saved VM boot kit for reset'
+    return 1
+  }
+  _qps_fsync "$QEMU_PERSISTENT_STORAGE_BOOT_ROOT" || return 1
+  if [[ -d $qps_discarded && ! -L $qps_discarded ]]; then
+    # Corrupt contents are deliberately allowed here so Reset remains an escape
+    # hatch, but never cross a nested mount into data outside this boot kit.
+    /bin/rm -rf -x "$qps_discarded"
+  else
+    /bin/rm -f "$qps_discarded"
+  fi || {
+    _qps_fail 'cannot remove the reset VM boot kit'
+    return 1
+  }
+  _qps_fsync "$QEMU_PERSISTENT_STORAGE_BOOT_ROOT" || return 1
+  _qps_error "reset saved boot kit ${qps_identity:0:12}"
+}
+
 _qps_reset_persistent_disk() {
   local qps_storage_key=$1
   local qps_final="$QEMU_PERSISTENT_STORAGE_DISKS_ROOT/$qps_storage_key"
@@ -922,7 +1435,7 @@ _qps_reset_persistent_disk() {
   qps_existing_schema=$QPS_METADATA_SCHEMA
   qps_existing_source_sha=$QPS_METADATA_SOURCE_SHA
   qps_existing_source_bytes=$QPS_METADATA_SOURCE_BYTES
-
+  _qps_validate_boot_kit_reset_target "$qps_existing_identity" || return 1
   qps_discarded="$QEMU_PERSISTENT_STORAGE_DISKS_ROOT/.${qps_storage_key}.discarded.$$.$RANDOM$RANDOM"
   [[ ! -e $qps_discarded && ! -L $qps_discarded ]] || {
     _qps_fail 'cannot allocate reset transaction name'
@@ -937,6 +1450,7 @@ _qps_reset_persistent_disk() {
     "$qps_discarded" "$qps_existing_identity" "$qps_existing_source_sha" \
     "$qps_existing_source_bytes" "$qps_existing_bytes" 0 \
     "$qps_existing_schema" || return 1
+  _qps_reset_boot_kit "$qps_existing_identity" || return $?
   _qps_error "reset persistent workspace ${qps_existing_identity:0:12}"
 }
 
@@ -969,32 +1483,18 @@ _qps_validate_recorded_workspace() {
 _qps_require_compatible_workspace() {
   local qps_directory=$1
   local qps_identity=$2
-  local qps_source_sha=$3
-  local qps_source_bytes=$4
-  local qps_working_bytes=$5
-  local qps_existing_bytes=''
 
   _qps_validate_recorded_workspace "$qps_directory" || return 1
-  qps_existing_bytes=$QPS_RECORDED_EXISTING_BYTES
 
-  if [[ $QPS_METADATA_SCHEMA != "$QEMU_PERSISTENT_STORAGE_SCHEMA" || \
-        $QPS_METADATA_IDENTITY != "$qps_identity" || \
-        $QPS_METADATA_SOURCE_SHA != "$qps_source_sha" || \
-        $QPS_METADATA_SOURCE_BYTES != "$qps_source_bytes" ]]; then
+  if [[ $QPS_METADATA_SCHEMA != "$QEMU_PERSISTENT_STORAGE_SCHEMA" ]]; then
     _qps_incompatible \
-      'the saved VM was created by a different Try Omarchy build; use Reset Omarchy to continue'
+      'the saved VM uses an unsupported storage format; use Reset Omarchy to continue'
     return $?
   fi
-
-  (( qps_existing_bytes <= qps_working_bytes )) || {
-    _qps_fail 'the existing Omarchy disk is larger than this app supports; refusing to shrink it'
-    return 1
-  }
-  if (( qps_existing_bytes < qps_working_bytes )); then
-    _qps_expand_disk "$qps_directory/rootfs.ext4" "$qps_existing_bytes" "$qps_working_bytes" || return 1
-    _qps_fsync "$qps_directory/rootfs.ext4" || return 1
+  if [[ $QPS_METADATA_IDENTITY != "$qps_identity" ]]; then
+    _qps_error \
+      "reusing saved VM ${QPS_METADATA_IDENTITY:0:12}; the bundled factory image applies only to new VMs"
   fi
-
   return 0
 }
 
@@ -1021,7 +1521,10 @@ _qps_reset_remaining_legacy_workspaces() {
       _qps_fail 'a legacy workspace changed before it could be reset'
       return 1
     fi
-
+    if ! _qps_validate_boot_kit_reset_target "$qps_candidate_name"; then
+      _qps_release_legacy_lock
+      return 1
+    fi
     qps_discarded="$QEMU_PERSISTENT_STORAGE_DISKS_ROOT/.current.discarded.legacy.${qps_candidate_name}.$$.$RANDOM$RANDOM"
     [[ ! -e $qps_discarded && ! -L $qps_discarded ]] || {
       _qps_release_legacy_lock
@@ -1033,6 +1536,10 @@ _qps_reset_remaining_legacy_workspaces() {
       ! _qps_remove_recorded_directory "$qps_discarded"; then
       _qps_release_legacy_lock
       _qps_fail "cannot reset legacy workspace $qps_candidate_name"
+      return 1
+    fi
+    if ! _qps_reset_boot_kit "$qps_candidate_name"; then
+      _qps_release_legacy_lock
       return 1
     fi
     _qps_release_legacy_lock
@@ -1063,9 +1570,6 @@ _qps_has_recognized_legacy_workspace() {
 _qps_migrate_legacy_single_workspace() {
   local qps_mode=$1
   local qps_identity=$2
-  local qps_source_sha=$3
-  local qps_source_bytes=$4
-  local qps_working_bytes=$5
   local qps_final="$QEMU_PERSISTENT_STORAGE_DISKS_ROOT/current"
   local qps_candidate=''
   local qps_candidate_mtime=''
@@ -1104,11 +1608,6 @@ _qps_migrate_legacy_single_workspace() {
       continue
     fi
     ((qps_valid_count += 1))
-    if (( QPS_RECORDED_EXISTING_BYTES > qps_working_bytes )); then
-      [[ $qps_candidate_name != "$qps_identity" ]] || qps_exact_invalid=1
-      _qps_error "leaving oversized legacy workspace untouched: $qps_candidate_name"
-      continue
-    fi
     qps_candidate_mtime=$(/usr/bin/stat -f '%m' "$qps_candidate/rootfs.ext4" 2>/dev/null)
     [[ $qps_candidate_mtime =~ ^[0-9]+$ ]] || {
       [[ $qps_candidate_name != "$qps_identity" ]] || qps_exact_invalid=1
@@ -1116,13 +1615,9 @@ _qps_migrate_legacy_single_workspace() {
       continue
     }
     if [[ $qps_mode == persistent ]]; then
-      if [[ $qps_candidate_name == "$qps_identity" && \
-            $QPS_METADATA_SCHEMA == "$QEMU_PERSISTENT_STORAGE_SCHEMA" && \
-            $QPS_METADATA_SOURCE_SHA == "$qps_source_sha" && \
-            $QPS_METADATA_SOURCE_BYTES == "$qps_source_bytes" ]]; then
+      if [[ $QPS_METADATA_SCHEMA == "$QEMU_PERSISTENT_STORAGE_SCHEMA" ]]; then
         qps_selected=$qps_candidate
         qps_selected_mtime=$qps_candidate_mtime
-        qps_selected_is_exact=1
       fi
     elif [[ $qps_candidate_name == "$qps_identity" ]]; then
       qps_selected=$qps_candidate
@@ -1149,7 +1644,7 @@ _qps_migrate_legacy_single_workspace() {
   [[ -n $qps_selected ]] || {
     if [[ $qps_mode == persistent && $qps_valid_count -gt 0 ]]; then
       _qps_incompatible \
-        'the saved VM was created by a different Try Omarchy build; use Reset Omarchy to continue'
+        'the saved VM uses an unsupported storage format; use Reset Omarchy to continue'
       return $?
     fi
     _qps_fail 'legacy Omarchy disks were found, but none are safe to migrate or reset'
@@ -1160,12 +1655,8 @@ _qps_migrate_legacy_single_workspace() {
   _qps_acquire_legacy_lock "$qps_selected_name" || return 1
   if ! _qps_validate_recorded_workspace "$qps_selected" || \
     [[ $QPS_METADATA_IDENTITY != "$qps_selected_name" ]] || \
-    (( QPS_RECORDED_EXISTING_BYTES > qps_working_bytes )) || \
     { [[ $qps_mode == persistent ]] && \
-      { [[ $QPS_METADATA_SCHEMA != "$QEMU_PERSISTENT_STORAGE_SCHEMA" ]] || \
-        [[ $QPS_METADATA_IDENTITY != "$qps_identity" ]] || \
-        [[ $QPS_METADATA_SOURCE_SHA != "$qps_source_sha" ]] || \
-        [[ $QPS_METADATA_SOURCE_BYTES != "$qps_source_bytes" ]]; }; }; then
+      [[ $QPS_METADATA_SCHEMA != "$QEMU_PERSISTENT_STORAGE_SCHEMA" ]]; }; then
     _qps_release_legacy_lock
     _qps_fail 'the selected legacy workspace changed before it could be migrated'
     return 1
@@ -1187,6 +1678,42 @@ _qps_migrate_legacy_single_workspace() {
   fi
 }
 
+_qps_publish_recorded_selection() {
+  local qps_final=$1
+  local qps_current_identity=$2
+  local qps_kernel=${3:-}
+  local qps_initramfs=${4:-}
+  local qps_command_line=${5:-}
+  local qps_source=${6:-}
+
+  _qps_validate_recorded_workspace "$qps_final" || return 1
+  if [[ $QPS_METADATA_SCHEMA != "$QEMU_PERSISTENT_STORAGE_SCHEMA" ]]; then
+    _qps_incompatible \
+      'the saved VM uses an unsupported storage format; use Reset Omarchy to continue'
+    return $?
+  fi
+  if [[ -n $qps_source ]] && \
+    [[ $(_qps_file_identity "$qps_final/rootfs.ext4") == $(_qps_file_identity "$qps_source") ]]; then
+    _qps_fail 'persistent root disk aliases the immutable source disk'
+    return 1
+  fi
+
+  QEMU_SELECTED_DISK="$qps_final/rootfs.ext4"
+  QEMU_SELECTED_STORAGE_MODE=persistent
+  QEMU_PERSISTENT_STORAGE_DIRECTORY=$qps_final
+  QEMU_PERSISTENT_STORAGE_IDENTITY=$QPS_METADATA_IDENTITY
+  QEMU_PERSISTENT_STORAGE_WORKING_BYTES=$QPS_RECORDED_EXISTING_BYTES
+
+  if [[ ! -e $QEMU_PERSISTENT_STORAGE_BOOT_ROOT/$QPS_METADATA_IDENTITY && \
+        ! -L $QEMU_PERSISTENT_STORAGE_BOOT_ROOT/$QPS_METADATA_IDENTITY && \
+        $QPS_METADATA_IDENTITY == "$qps_current_identity" && -n $qps_kernel ]]; then
+    _qps_stage_boot_kit_locked \
+      "$QPS_METADATA_IDENTITY" "$qps_kernel" "$qps_initramfs" \
+      "$qps_command_line" || return $?
+  fi
+  _qps_set_selected_boot_kit "$QPS_METADATA_IDENTITY"
+}
+
 _qps_select_persistent_disk() {
   local qps_mode=$1
   local qps_identity=$2
@@ -1194,6 +1721,9 @@ _qps_select_persistent_disk() {
   local qps_source_sha=$4
   local qps_source_bytes=$5
   local qps_working_bytes=$6
+  local qps_kernel=${7:-}
+  local qps_initramfs=${8:-}
+  local qps_command_line=${9:-}
   local qps_final=''
   local qps_status=0
   local qps_storage_key='current'
@@ -1208,7 +1738,6 @@ _qps_select_persistent_disk() {
       ;;
   esac
   _qps_acquire_lock "$qps_storage_key" || return 1
-  QEMU_PERSISTENT_STORAGE_IDENTITY=$qps_identity
   qps_final="$QEMU_PERSISTENT_STORAGE_DISKS_ROOT/$qps_storage_key"
 
   if [[ $qps_storage_key == current ]]; then
@@ -1225,12 +1754,25 @@ _qps_select_persistent_disk() {
 
   _qps_reap_interrupted_work "$qps_storage_key"
   if [[ $qps_mode == reset ]]; then
+    # Validate an orphan current-identity boot entry before deleting any disk,
+    # then re-check it immediately before removal below.
+    if ! _qps_validate_boot_kit_reset_target "$qps_identity"; then
+      qemu_persistent_storage_release_lock
+      return 1
+    fi
     if ! _qps_reset_persistent_disk "$qps_storage_key"; then
       qemu_persistent_storage_release_lock
       return 1
     fi
     if [[ $qps_storage_key == current ]] && \
       ! _qps_reset_remaining_legacy_workspaces; then
+      qemu_persistent_storage_release_lock
+      return 1
+    fi
+    # A prior interrupted reset can leave the current app identity's boot kit
+    # after its disk has already gone. Reset is explicitly destructive, so
+    # discard that exact app-owned entry before creating the fresh VM too.
+    if ! _qps_reset_boot_kit "$qps_identity"; then
       qemu_persistent_storage_release_lock
       return 1
     fi
@@ -1260,21 +1802,15 @@ _qps_select_persistent_disk() {
       return 1
     fi
   fi
-  if ! _qps_validate_store_directory \
-    "$qps_final" "$qps_identity" "$qps_source_sha" "$qps_source_bytes" \
-    "$qps_working_bytes"; then
+  if _qps_publish_recorded_selection \
+    "$qps_final" "$qps_identity" "$qps_kernel" "$qps_initramfs" \
+    "$qps_command_line" "$qps_source"; then
+    return 0
+  else
+    qps_status=$?
     qemu_persistent_storage_release_lock
-    return 1
+    return "$qps_status"
   fi
-  [[ $(_qps_file_identity "$qps_final/rootfs.ext4") != $(_qps_file_identity "$qps_source") ]] || {
-    qemu_persistent_storage_release_lock
-    _qps_fail 'persistent root disk aliases the immutable source disk'
-    return 1
-  }
-
-  QEMU_SELECTED_DISK="$qps_final/rootfs.ext4"
-  QEMU_SELECTED_STORAGE_MODE=persistent
-  QEMU_PERSISTENT_STORAGE_DIRECTORY=$qps_final
 }
 
 _qps_select_ephemeral_disk() {
@@ -1308,6 +1844,84 @@ _qps_select_ephemeral_disk() {
   QEMU_SELECTED_STORAGE_MODE=ephemeral
   QEMU_PERSISTENT_STORAGE_DIRECTORY=''
   QEMU_PERSISTENT_STORAGE_IDENTITY=''
+  QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY=0
+}
+
+# Select an already-existing persistent VM without touching the bundled factory
+# image. Returns QEMU_PERSISTENT_STORAGE_MISSING_STATUS when no VM exists, so
+# the launcher can materialize the factory only for a genuinely new machine.
+qemu_persistent_storage_select_existing() {
+  local qps_identity=${1:-}
+  local qps_kernel=${2:-}
+  local qps_initramfs=${3:-}
+  local qps_command_line=${4:-}
+  local qps_storage_key=current
+  local qps_final=''
+  local qps_status=0
+
+  QEMU_SELECTED_DISK=''
+  QEMU_SELECTED_STORAGE_MODE=''
+  QEMU_PERSISTENT_STORAGE_DIRECTORY=''
+  QEMU_PERSISTENT_STORAGE_IDENTITY=''
+  QEMU_PERSISTENT_STORAGE_LOCK_PATH=''
+  QEMU_PERSISTENT_STORAGE_WORKING_BYTES=''
+  QEMU_SELECTED_KERNEL=''
+  QEMU_SELECTED_INITRAMFS=''
+  QEMU_SELECTED_KERNEL_COMMAND_LINE=''
+  QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY=0
+
+  _qps_is_identity "$qps_identity" || {
+    _qps_fail 'bundle identity must be exactly 64 lowercase hexadecimal characters'
+    return 1
+  }
+  if [[ -n $qps_kernel || -n $qps_initramfs || -n $qps_command_line ]]; then
+    [[ -n $qps_kernel && -n $qps_initramfs && -n $qps_command_line ]] || return 1
+    _qps_assert_boot_source_file "$qps_kernel" 'bundled kernel' 536870912 || return 1
+    _qps_assert_boot_source_file "$qps_initramfs" 'bundled initramfs' 1073741824 || return 1
+    _qps_validate_kernel_command_line "$qps_command_line" || return 1
+  fi
+
+  _qps_prepare_state_root || return 1
+  case "${OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK:-0}" in
+    0) ;;
+    1) qps_storage_key=$qps_identity ;;
+    *)
+      _qps_fail 'OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK must be 0 or 1'
+      return 1
+      ;;
+  esac
+  _qps_acquire_lock "$qps_storage_key" || return 1
+  qps_final="$QEMU_PERSISTENT_STORAGE_DISKS_ROOT/$qps_storage_key"
+  if [[ $qps_storage_key == current ]]; then
+    if _qps_migrate_legacy_single_workspace persistent "$qps_identity"; then
+      :
+    else
+      qps_status=$?
+      qemu_persistent_storage_release_lock
+      return "$qps_status"
+    fi
+  fi
+  _qps_reap_interrupted_work "$qps_storage_key"
+  if [[ ! -e $qps_final && ! -L $qps_final ]]; then
+    qemu_persistent_storage_release_lock
+    return "$QEMU_PERSISTENT_STORAGE_MISSING_STATUS"
+  fi
+  if _qps_require_compatible_workspace "$qps_final" "$qps_identity"; then
+    :
+  else
+    qps_status=$?
+    qemu_persistent_storage_release_lock
+    return "$qps_status"
+  fi
+  if _qps_publish_recorded_selection \
+    "$qps_final" "$qps_identity" "$qps_kernel" "$qps_initramfs" \
+    "$qps_command_line"; then
+    return 0
+  else
+    qps_status=$?
+    qemu_persistent_storage_release_lock
+    return "$qps_status"
+  fi
 }
 
 # Select and prepare a QEMU root disk.
@@ -1320,6 +1934,9 @@ _qps_select_ephemeral_disk() {
 #   5. source-rootfs byte count from the manifest
 #   6. private run directory (required only for ephemeral mode)
 #   7. working rootfs byte count (optional; defaults to source size)
+#   8. validated bundled kernel (optional only for storage-library tests)
+#   9. validated bundled initramfs (required with argument 8)
+#  10. validated base kernel command line (required with argument 8)
 #
 # On success, QEMU_SELECTED_DISK and QEMU_SELECTED_STORAGE_MODE are populated.
 # Persistent/reset mode also holds FD 9 until the caller exits or explicitly
@@ -1332,6 +1949,9 @@ qemu_persistent_storage_select() {
   local qps_source_bytes=${5:-}
   local qps_work_directory=${6:-}
   local qps_working_bytes=${7:-$qps_source_bytes}
+  local qps_kernel=${8:-}
+  local qps_initramfs=${9:-}
+  local qps_command_line=${10:-}
 
   QEMU_SELECTED_DISK=''
   QEMU_SELECTED_STORAGE_MODE=''
@@ -1339,6 +1959,10 @@ qemu_persistent_storage_select() {
   QEMU_PERSISTENT_STORAGE_IDENTITY=''
   QEMU_PERSISTENT_STORAGE_LOCK_PATH=''
   QEMU_PERSISTENT_STORAGE_WORKING_BYTES=''
+  QEMU_SELECTED_KERNEL=''
+  QEMU_SELECTED_INITRAMFS=''
+  QEMU_SELECTED_KERNEL_COMMAND_LINE=''
+  QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY=0
 
   case "$qps_mode" in
     persistent|reset|ephemeral) ;;
@@ -1368,14 +1992,33 @@ qemu_persistent_storage_select() {
     return 1
   }
   _qps_assert_source_disk "$qps_source" "$qps_source_bytes" || return 1
+  if [[ -n $qps_kernel || -n $qps_initramfs || -n $qps_command_line ]]; then
+    [[ -n $qps_kernel && -n $qps_initramfs && -n $qps_command_line ]] || {
+      _qps_fail 'kernel, initramfs, and command line must be supplied together'
+      return 1
+    }
+    _qps_assert_boot_source_file "$qps_kernel" 'bundled kernel' 536870912 || return 1
+    _qps_assert_boot_source_file "$qps_initramfs" 'bundled initramfs' 1073741824 || return 1
+    _qps_validate_kernel_command_line "$qps_command_line" || {
+      _qps_fail 'bundled kernel command line is invalid'
+      return 1
+    }
+  fi
   QEMU_PERSISTENT_STORAGE_WORKING_BYTES=$qps_working_bytes
 
   if [[ $qps_mode == ephemeral ]]; then
-    _qps_select_ephemeral_disk \
-      "$qps_source" "$qps_source_bytes" "$qps_work_directory" "$qps_working_bytes"
+    if _qps_select_ephemeral_disk \
+      "$qps_source" "$qps_source_bytes" "$qps_work_directory" "$qps_working_bytes"; then
+      QEMU_SELECTED_KERNEL=$qps_kernel
+      QEMU_SELECTED_INITRAMFS=$qps_initramfs
+      QEMU_SELECTED_KERNEL_COMMAND_LINE=$qps_command_line
+    else
+      return $?
+    fi
   else
     _qps_select_persistent_disk \
       "$qps_mode" "$qps_identity" "$qps_source" "$qps_source_sha" \
-      "$qps_source_bytes" "$qps_working_bytes"
+      "$qps_source_bytes" "$qps_working_bytes" \
+      "$qps_kernel" "$qps_initramfs" "$qps_command_line"
   fi
 }

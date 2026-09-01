@@ -291,9 +291,23 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Reset Omarchy to continue"
-        alert.informativeText = "This VM was created by a different Try Omarchy build. Reset Omarchy to use this version. Resetting permanently erases everything in the VM."
+        alert.informativeText = StartMenuPresentation.incompatibleWorkspaceDetail
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window)
+    }
+
+    /// Requests one-shot consent for legacy boot-file pairing. This remains a
+    /// synchronous application-modal decision so the launcher cannot start in
+    /// the gap between presenting the explanation and receiving the answer.
+    func confirmBootRecovery() -> Bool {
+        guard launchInProgress else { return false }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = StartMenuPresentation.bootRecoveryConfirmationTitle
+        alert.informativeText = StartMenuPresentation.bootRecoveryConfirmationDetail
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Continue")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     func launchDidFail(errorMessage: String) {

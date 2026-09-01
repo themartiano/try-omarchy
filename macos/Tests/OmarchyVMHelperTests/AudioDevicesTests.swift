@@ -255,6 +255,8 @@ struct VMRunLifecycleTests {
         )
         #expect(decision.showsStartupFailure)
         #expect(!decision.requiresWorkspaceReset)
+        #expect(!decision.requiresBootRecoveryConsent)
+        #expect(!decision.reportsBootRecoveryFailure)
     }
 
     @Test("an incompatible saved VM stays on the start menu for reset")
@@ -266,5 +268,53 @@ struct VMRunLifecycleTests {
         )
         #expect(!decision.showsStartupFailure)
         #expect(decision.requiresWorkspaceReset)
+        #expect(!decision.requiresBootRecoveryConsent)
+        #expect(!decision.reportsBootRecoveryFailure)
+    }
+
+    @Test("boot recovery consent is requested only before the VM starts")
+    func bootRecoveryConsentIsAStartupDecision() {
+        let required = VMExitPresentationDecision.make(
+            status: VMExitPresentationDecision.bootRecoveryConsentRequiredStatus,
+            reachedVirtualMachineStart: false,
+            wasStopping: false
+        )
+        #expect(!required.showsStartupFailure)
+        #expect(!required.requiresWorkspaceReset)
+        #expect(required.requiresBootRecoveryConsent)
+
+        let afterStart = VMExitPresentationDecision.make(
+            status: VMExitPresentationDecision.bootRecoveryConsentRequiredStatus,
+            reachedVirtualMachineStart: true,
+            wasStopping: false
+        )
+        #expect(!afterStart.requiresBootRecoveryConsent)
+
+        let whileStopping = VMExitPresentationDecision.make(
+            status: VMExitPresentationDecision.bootRecoveryConsentRequiredStatus,
+            reachedVirtualMachineStart: false,
+            wasStopping: true
+        )
+        #expect(!whileStopping.requiresBootRecoveryConsent)
+    }
+
+    @Test("a failed boot recovery stays on the start menu with a specific error")
+    func bootRecoveryFailureIsSpecific() {
+        let failed = VMExitPresentationDecision.make(
+            status: VMExitPresentationDecision.bootRecoveryFailedStatus,
+            reachedVirtualMachineStart: false,
+            wasStopping: false
+        )
+        #expect(!failed.showsStartupFailure)
+        #expect(!failed.requiresWorkspaceReset)
+        #expect(!failed.requiresBootRecoveryConsent)
+        #expect(failed.reportsBootRecoveryFailure)
+
+        let whileStopping = VMExitPresentationDecision.make(
+            status: VMExitPresentationDecision.bootRecoveryFailedStatus,
+            reachedVirtualMachineStart: false,
+            wasStopping: true
+        )
+        #expect(!whileStopping.reportsBootRecoveryFailure)
     }
 }
