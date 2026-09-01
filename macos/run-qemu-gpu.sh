@@ -347,6 +347,7 @@ runtime = exact_keys(
     spec.get("runtime"),
     {
         "audio",
+        "camera",
         "clipboard",
         "compressedDisk",
         "devices",
@@ -408,12 +409,38 @@ network = {
     "device": "virtio-net-pci",
     "backend": "slirp",
     "mode": "user",
+    "sshAccess": {
+        "activation": {
+            "guestPort": 22,
+            "kernelToken": "tryomarchy.ssh_access=1",
+            "protocol": "tcp",
+            "scope": "boot",
+            "service": "sshd.service",
+        },
+        "preset": {
+            "guestPort": 22,
+            "hostAddress": "127.0.0.1",
+            "hostPort": 2222,
+            "protocol": "tcp",
+        },
+    },
 }
 audio = {
     "controller": "intel-hda",
     "codec": "hda-micro",
     "backend": "sdl",
     "duplex": True,
+}
+camera = {
+    "activation": "on-demand",
+    "device": "virtserialport",
+    "framesPerSecond": 30,
+    "guestDevice": "/dev/video42",
+    "height": 720,
+    "pixelFormat": "NV12",
+    "port": "dev.tryomarchy.camera",
+    "protocolVersion": 1,
+    "width": 1280,
 }
 storage = {
     "device": "virtio-blk-pci",
@@ -435,6 +462,7 @@ if (
     or runtime.get("graphics") != graphics
     or runtime.get("network") != network
     or runtime.get("audio") != audio
+    or runtime.get("camera") != camera
     or runtime.get("storage") != storage
     or runtime.get("clipboard") != clipboard
     or runtime.get("sharedFolder") != shared_folder
@@ -627,6 +655,8 @@ if any(argument.startswith("omarchy.qemu_virgl=") for argument in arguments):
     fail("kernel command line already contains a QEMU VirGL role")
 if any(argument.startswith("omarchy.shared_folder_name=") for argument in arguments):
     fail("kernel command line already contains a shared folder name")
+if any(argument.startswith("tryomarchy.ssh_access=") for argument in arguments):
+    fail("kernel command line contains a launcher-owned SSH activation argument")
 
 records = manifest.get("artifacts")
 if not isinstance(records, list) or len(records) != len(expected_artifacts):
@@ -729,6 +759,11 @@ IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes compressed_d
 [[ $expanded_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated working-disk size is invalid"
 (( expanded_disk_bytes >= source_disk_bytes )) || fail "working disk cannot be smaller than its source"
 [[ -n $kernel_command_line ]] || fail "validated kernel command line is empty"
+case " $kernel_command_line " in
+  *' tryomarchy.ssh_access='*)
+    fail "validated kernel command line contains a launcher-owned SSH activation argument"
+    ;;
+esac
 if [[ ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} == 1 ]]; then
   printf '%s\n' "$bundle_validation"
   exit 0
@@ -754,6 +789,10 @@ if ! qemu_port_forwarding_configure "${OMARCHY_QEMU_GPU_PORT_FORWARDS:-}"; then
 fi
 qemu_netdev=$QEMU_PORT_FORWARDING_NETDEV
 port_forwarding_summary=$QEMU_PORT_FORWARDING_SUMMARY
+ssh_kernel_argument=''
+if ((QEMU_PORT_FORWARDING_ENABLES_SSH)); then
+  ssh_kernel_argument=' tryomarchy.ssh_access=1'
+fi
 
 host_cpu_count=$(
   sysctl -n hw.logicalcpu 2>/dev/null ||
@@ -827,6 +866,7 @@ owner_marker=""
 owner_token=""
 qemu_pid=""
 audio_bridge_pid=""
+camera_bridge_pid=""
 clipboard_bridge_pid=""
 
 terminate_child() {
@@ -857,6 +897,9 @@ cleanup() {
   fi
   if [[ $audio_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$audio_bridge_pid" 20
+  fi
+  if [[ $camera_bridge_pid =~ ^[0-9]+$ ]]; then
+    terminate_child "$camera_bridge_pid" 20
   fi
   if [[ $clipboard_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$clipboard_bridge_pid" 20
@@ -951,6 +994,7 @@ chmod 600 "$owner_marker"
 # for cleanup, but expose the runtime sockets through that standardized alias.
 qmp_socket="/tmp/${work_dir##*/}/qmp.sock"
 audio_bridge_socket="/tmp/${work_dir##*/}/audio.sock"
+camera_bridge_socket="/tmp/${work_dir##*/}/camera.sock"
 clipboard_bridge_socket="/tmp/${work_dir##*/}/clipboard.sock"
 audio_route_dir="/tmp/${work_dir##*/}/audio-routes"
 mkdir -m 700 "$work_dir/audio-routes"
@@ -1019,7 +1063,7 @@ qemu_args=(
   -qmp "unix:$qmp_socket,server=on,wait=off"
   -kernel "$guest_dir/vmlinuz-linux"
   -initrd "$guest_dir/initramfs-linux.img"
-  -append "$kernel_command_line omarchy.qemu_virgl=1$shared_folder_kernel_argument"
+  -append "$kernel_command_line omarchy.qemu_virgl=1$shared_folder_kernel_argument$ssh_kernel_argument"
   -drive "if=none,id=omarchy-root,file=$working_disk,format=raw,media=disk,cache=writeback"
   -device 'virtio-blk-pci,drive=omarchy-root,serial=omarchy-root'
   -device "$gpu_device"
@@ -1041,6 +1085,8 @@ qemu_args=(
   -device 'virtserialport,bus=omarchy-serial.0,nr=1,chardev=omarchy-audio-bridge,name=dev.tryomarchy.audio'
   -chardev "socket,id=omarchy-clipboard-bridge,path=$clipboard_bridge_socket,server=on,wait=off"
   -device 'virtserialport,bus=omarchy-serial.0,nr=2,chardev=omarchy-clipboard-bridge,name=dev.tryomarchy.clipboard'
+  -chardev "socket,id=omarchy-camera-bridge,path=$camera_bridge_socket,server=on,wait=off"
+  -device 'virtserialport,bus=omarchy-serial.0,nr=4,chardev=omarchy-camera-bridge,name=dev.tryomarchy.camera'
 )
 
 if [[ -n $shared_folder ]]; then
@@ -1073,6 +1119,8 @@ if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
     "$native_bridge" "$audio_bridge_socket" "$audio_route_dir" >&2
   printf '\n[qemu-gpu] clipboard bridge command: %q --bridge-native-clipboard QEMU_PID %q' \
     "$native_bridge" "$clipboard_bridge_socket" >&2
+  printf '\n[qemu-gpu] camera bridge command: %q --bridge-native-camera QEMU_PID %q' \
+    "$native_bridge" "$camera_bridge_socket" >&2
   if [[ -n $shared_folder ]]; then
     printf '\n[qemu-gpu] shared folder: %q' "$shared_folder" >&2
   else
@@ -1102,12 +1150,15 @@ printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid"
 chmod 600 "$work_dir/.qemu.pid"
 
 for ((attempt = 0; attempt < 100; attempt++)); do
-  [[ -S $qmp_socket && -S $audio_bridge_socket && -S $clipboard_bridge_socket ]] && break
+  if [[ -S $qmp_socket && -S $audio_bridge_socket && -S $camera_bridge_socket && -S $clipboard_bridge_socket ]]; then
+    break
+  fi
   kill -0 "$qemu_pid" 2>/dev/null || fail "QEMU exited before creating its private QMP socket"
   sleep 0.05
 done
 [[ -S $qmp_socket ]] || fail "QEMU did not create its private QMP socket"
 [[ -S $audio_bridge_socket ]] || fail "QEMU did not create its private audio bridge socket"
+[[ -S $camera_bridge_socket ]] || fail "QEMU did not create its private camera bridge socket"
 [[ -S $clipboard_bridge_socket ]] || fail "QEMU did not create its private clipboard bridge socket"
 echo "[qemu-gpu] Ready." >&2
 
@@ -1124,6 +1175,14 @@ start_clipboard_bridge() {
 }
 start_clipboard_bridge
 clipboard_bridge_restarts=0
+
+start_camera_bridge() {
+  "$native_bridge" --bridge-native-camera \
+    "$qemu_pid" "$camera_bridge_socket" 9>&- &
+  camera_bridge_pid=$!
+}
+start_camera_bridge
+camera_bridge_restarts=0
 
 # Bash 3.2 has no `wait -n`. The native-audio bridge is required for the guest
 # transport, so watch it alongside QEMU and fail if it exits unexpectedly.
@@ -1163,6 +1222,27 @@ while true; do
       fi
     fi
   fi
+  # Camera sharing is optional. A failed capture backend must not stop the VM;
+  # reconnect it so a transient device change can recover in this session.
+  if [[ $camera_bridge_pid =~ ^[0-9]+$ ]]; then
+    camera_bridge_state=$(ps -p "$camera_bridge_pid" -o state= 2>/dev/null || true)
+    if [[ -z $camera_bridge_state || $camera_bridge_state == *Z* ]]; then
+      if wait "$camera_bridge_pid"; then
+        camera_bridge_status=0
+      else
+        camera_bridge_status=$?
+      fi
+      camera_bridge_pid=""
+      if (( camera_bridge_restarts < 5 )); then
+        camera_bridge_restarts=$((camera_bridge_restarts + 1))
+        echo "[qemu-gpu] camera bridge exited (status $camera_bridge_status); restarting ($camera_bridge_restarts/5)" >&2
+        sleep 1
+        start_camera_bridge
+      else
+        echo "[qemu-gpu] camera sharing is unavailable for the rest of this session" >&2
+      fi
+    fi
+  fi
   sleep 0.1
 done
 
@@ -1189,4 +1269,8 @@ if [[ $clipboard_bridge_pid =~ ^[0-9]+$ ]]; then
   terminate_child "$clipboard_bridge_pid" 20
 fi
 clipboard_bridge_pid=""
+if [[ $camera_bridge_pid =~ ^[0-9]+$ ]]; then
+  terminate_child "$camera_bridge_pid" 20
+fi
+camera_bridge_pid=""
 exit "$qemu_status"

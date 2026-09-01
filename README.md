@@ -13,6 +13,7 @@ Try Omarchy is not official or affiliated with Omarchy.
 - Hardware-accelerated ARM64 virtualization and VirGL graphics
 - Resizable native window with automatic guest resolution and HiDPI scale updates
 - Mac audio input/output selection inside Omarchy, with live routing and system-default fallback
+- FaceTime HD and other Mac cameras exposed to Omarchy as an on-demand 720p webcam
 - Two-way clipboard sharing for text and PNG images between macOS and Omarchy
 - One optional shared Mac folder, available inside Omarchy under the same name (`~/Work` stays `~/Work`)
 - Loopback-only TCP and UDP port forwarding from the Mac into Omarchy
@@ -129,10 +130,33 @@ port. The `dtc` mirror should be reverted once kernel.org returns.
 2. Open the DMG and drag **Try Omarchy** to **Applications**.
 3. Launch **Try Omarchy** from Applications.
 
-Every launch begins at the start menu. **Immersive** is on by default and its caption explains how to leave Full Screen. Turn it off to keep Omarchy full screen while letting the Mac menu bar and Dock appear at the screen edges. Accessibility enables Mac Command-to-guest-Super shortcuts; microphone access is optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
+Every launch begins at the start menu. **Immersive** is on by default and its caption explains how to leave Full Screen. Turn it off to keep Omarchy full screen while letting the Mac menu bar and Dock appear at the screen edges. Accessibility enables Mac Command-to-guest-Super shortcuts; microphone and camera access are optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
 
 Restarting from inside Omarchy reboots the guest in the same Try Omarchy app.
 Shutting down Omarchy closes the app and leaves it closed.
+
+## 1Password
+
+Install 1Password from the Omarchy menu. On ARM64 guests, Try Omarchy downloads
+the current official 1Password application, verifies its signature against the
+pinned 1Password signing key, and installs the ARM64 CLI package. Its launcher
+uses software rendering to avoid the virtual GPU incompatibility affecting the
+Electron interface.
+
+After signing in, use these global shortcuts:
+
+- `Ctrl + Shift + Space` — open 1Password Quick Access
+- `Super + Shift + /` — open the full 1Password app
+
+## Camera sharing
+
+Choose **Allow…** next to **Camera access** on the start menu to make the Mac's
+FaceTime HD camera available in Omarchy as **Mac Camera**. The bridge publishes a
+standard Linux V4L2 camera at `/dev/video42`, so browser calls and Linux camera
+apps can use it without special configuration. Capture is on demand: the Mac
+camera and its indicator turn on only while an Omarchy app is actively using
+the virtual camera. Denying camera permission does not prevent Omarchy from
+launching.
 
 ## Clipboard sharing
 
@@ -166,6 +190,53 @@ not only on the guest's own localhost.
 
 The reverse direction does not need a mapping. From Omarchy, connect to
 `10.0.2.2:<Mac port>` to reach a service running on the Mac.
+
+### SSH access
+
+After completing Omarchy's first-boot account setup, open **Port forwarding**,
+choose **Add SSH**, and save the prefilled TCP mapping from Mac port `2222` to
+Omarchy port `22`. Try Omarchy then requests `sshd` for boots that contain a TCP
+mapping to guest port 22. It does not change guest accounts, `sshd_config`,
+password policy, or authorized keys.
+
+Connect with the username and password created inside Omarchy (the Mac username
+is not assumed):
+
+```sh
+ssh -p 2222 <guest-user>@127.0.0.1
+```
+
+Once the initial password login works, install a key if desired:
+
+```sh
+ssh-copy-id -p 2222 <guest-user>@127.0.0.1
+```
+
+For a shorter command, add this to `~/.ssh/config` on the Mac:
+
+```sshconfig
+Host omarchy
+  HostName 127.0.0.1
+  Port 2222
+  User <guest-user>
+```
+
+You can then use `ssh omarchy`, and the same alias works with `scp`, `rsync`,
+Git, and VS Code Remote SSH. If you edit the preset's Mac port, substitute that
+port in every command.
+
+Factory Reset creates a new guest host key, and every ephemeral VM has its own
+disposable host key. If OpenSSH reports that the key for the reused endpoint
+changed, remove only that endpoint's old entry and reconnect to verify the new
+fingerprint:
+
+```sh
+ssh-keygen -R '[127.0.0.1]:2222'
+```
+
+Loopback binding prevents devices on Wi-Fi, Ethernet, or the wider LAN from
+connecting. It does not isolate the listener from other users or processes on
+the same Mac; guest SSH authentication is still required.
 
 ## Requirements
 

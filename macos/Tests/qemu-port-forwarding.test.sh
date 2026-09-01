@@ -35,6 +35,7 @@ assert_rejected() {
   assert_eq "$QEMU_PORT_FORWARDING_CANONICAL" ''
   assert_eq "$QEMU_PORT_FORWARDING_SUMMARY" disabled
   assert_eq "$QEMU_PORT_FORWARDING_RULE_COUNT" 0
+  assert_eq "$QEMU_PORT_FORWARDING_ENABLES_SSH" 0
 }
 
 qemu_port_forwarding_configure ''
@@ -42,6 +43,7 @@ assert_eq "$QEMU_PORT_FORWARDING_NETDEV" 'user,id=omarchy-net'
 assert_eq "$QEMU_PORT_FORWARDING_CANONICAL" ''
 assert_eq "$QEMU_PORT_FORWARDING_SUMMARY" disabled
 assert_eq "$QEMU_PORT_FORWARDING_RULE_COUNT" 0
+assert_eq "$QEMU_PORT_FORWARDING_ENABLES_SSH" 0
 assert_eq "$QEMU_PORT_FORWARDING_ERROR" ''
 
 qemu_port_forwarding_configure 'tcp:8080:3000'
@@ -53,6 +55,7 @@ assert_eq \
   "$QEMU_PORT_FORWARDING_SUMMARY" \
   'tcp 127.0.0.1:8080 -> guest:3000'
 assert_eq "$QEMU_PORT_FORWARDING_RULE_COUNT" 1
+assert_eq "$QEMU_PORT_FORWARDING_ENABLES_SSH" 0
 
 qemu_port_forwarding_configure 'udp:5353:5353;tcp:2222:22;udp:2222:22'
 assert_eq \
@@ -62,6 +65,13 @@ assert_eq \
   "$QEMU_PORT_FORWARDING_CANONICAL" \
   'udp:5353:5353;tcp:2222:22;udp:2222:22'
 assert_eq "$QEMU_PORT_FORWARDING_RULE_COUNT" 3
+assert_eq "$QEMU_PORT_FORWARDING_ENABLES_SSH" 1
+
+qemu_port_forwarding_configure 'udp:2222:22'
+assert_eq "$QEMU_PORT_FORWARDING_ENABLES_SSH" 0
+
+qemu_port_forwarding_configure 'tcp:22022:22'
+assert_eq "$QEMU_PORT_FORWARDING_ENABLES_SSH" 1
 
 qemu_port_forwarding_configure 'tcp:1:65535;udp:65535:1'
 assert_eq "$QEMU_PORT_FORWARDING_CANONICAL" 'tcp:1:65535;udp:65535:1'
@@ -93,6 +103,9 @@ assert_rejected 'tcp:80:80;' 'rule 2 is empty'
 assert_rejected 'tcp:80:80;;udp:53:53' 'rule 2 is empty'
 assert_rejected 'tcp:80:80;tcp:80:81' 'duplicates tcp host port 80'
 
+# A rejected call must not expose SSH intent from an earlier successful call.
+assert_eq "$QEMU_PORT_FORWARDING_ENABLES_SSH" 0
+
 rules=''
 for ((port = 1; port <= QEMU_PORT_FORWARDING_MAX_RULES; port++)); do
   [[ -z $rules ]] || rules="$rules;"
@@ -117,5 +130,14 @@ assert_eq \
   "$QEMU_PORT_FORWARDING_NETDEV" \
   'user,id=omarchy-net,hostfwd=udp:127.0.0.1:53-:53'
 assert_eq "$QEMU_PORT_FORWARDING_ERROR" ''
+assert_eq "$QEMU_PORT_FORWARDING_ENABLES_SSH" 0
+
+# SSH intent is all-or-nothing and cannot leak across repeated library calls.
+qemu_port_forwarding_configure 'tcp:2222:22'
+assert_eq "$QEMU_PORT_FORWARDING_ENABLES_SSH" 1
+assert_rejected 'tcp:2222:22;invalid' 'rule 2'
+assert_eq "$QEMU_PORT_FORWARDING_ENABLES_SSH" 0
+qemu_port_forwarding_configure 'tcp:8080:80'
+assert_eq "$QEMU_PORT_FORWARDING_ENABLES_SSH" 0
 
 printf 'qemu-port-forwarding.test: PASS\n'

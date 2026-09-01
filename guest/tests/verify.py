@@ -59,6 +59,25 @@ def main() -> None:
     )
     check(spec["runtime"]["virtualMachineMonitor"] == "qemu-system-aarch64", "runtime uses native ARM QEMU")
     check(spec["runtime"]["hypervisor"] == "hvf", "runtime uses Apple Hypervisor.framework")
+    check(
+        spec["runtime"]["network"].get("sshAccess")
+        == {
+            "activation": {
+                "guestPort": 22,
+                "kernelToken": "tryomarchy.ssh_access=1",
+                "protocol": "tcp",
+                "scope": "boot",
+                "service": "sshd.service",
+            },
+            "preset": {
+                "guestPort": 22,
+                "hostAddress": "127.0.0.1",
+                "hostPort": 2222,
+                "protocol": "tcp",
+            },
+        },
+        "SSH preset and boot activation are an exact loopback-only runtime contract",
+    )
     check(spec["runtime"]["storage"]["expandedSizeMiB"] == 24576, "working disk expands to 24 GiB")
     check(set(spec["inputs"]) == {"packages", "packageLock", "pacmanConfig"}, "spec has a minimal input set")
     for path in spec["inputs"].values():
@@ -68,16 +87,20 @@ def main() -> None:
     verbatim_trees = authenticity["verbatimRuntimeTrees"]
     backported_trees = authenticity["backportedRuntimeTrees"]
     check(
-        "shell" not in verbatim_trees
-        and backported_trees == ["shell"]
+        not {"bin", "shell"} & set(verbatim_trees)
+        and backported_trees == ["bin", "shell"]
         and not set(verbatim_trees) & set(backported_trees),
-        "patched shell tree is separated from verbatim upstream runtime trees",
+        "patched bin and shell trees are separated from verbatim upstream runtime trees",
     )
     backports = authenticity["backports"]
     check(
         [backport.get("id") for backport in backports]
-        == ["notification-hover-close", "notification-screen-privacy"],
-        "notification backports are explicitly ordered and identified",
+        == [
+            "1password-arm64-installer",
+            "notification-hover-close",
+            "notification-screen-privacy",
+        ],
+        "Omarchy backports are explicitly ordered and identified",
     )
     for backport in backports:
         patch_path = GUEST / backport["patch"]
@@ -96,6 +119,25 @@ def main() -> None:
                 and re.fullmatch(r"[0-9a-f]{64}", target.get("afterSha256", "")) is not None,
                 f"backport target digests are pinned: {backport['id']} {target['path']}",
             )
+
+    post_build_installers = authenticity["postBuildUserInstallers"]
+    check(
+        post_build_installers
+        == [
+            {
+                "id": "1password-arm64",
+                "userInitiated": True,
+                "delivery": "mutable-vendor-release",
+                "applicationUrl": "https://downloads.1password.com/linux/tar/stable/aarch64/1password-latest.tar.gz",
+                "signingKeyUrl": "https://downloads.1password.com/linux/keys/1password.asc",
+                "signingFingerprint": "3FEF9748469ADBE15DA7CA80AC2D62742012EA22",
+                "cliSource": "https://aur.archlinux.org/packages/1password-cli",
+                "runtimePackages": ["which"],
+                "factoryProvenance": "excluded",
+            }
+        ],
+        "mutable post-build 1Password installation is an explicit trust boundary",
+    )
 
     pacman_conf = read(GUEST / spec["inputs"]["pacmanConfig"])
     check(
@@ -141,6 +183,10 @@ def main() -> None:
         for line in package_text.decode().splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     }
+    check(
+        "openssh" in requested_packages and "openssh" in packages,
+        "SSH access explicitly requests and locks OpenSSH",
+    )
     check(
         "fakeroot" in requested_packages and "fakeroot" in packages,
         "factory transaction includes fakeroot for AUR package builds",
@@ -274,6 +320,10 @@ def main() -> None:
         and "-    rounding -= 1; // to fix a border issue" in hyprland_patch_text,
         "Hyprland backport handles Omarchy opacity and branchless rounded-border coverage",
     )
+    check(
+        "linux-aarch64-headers" in packages and "v4l2loopback-dkms" in packages,
+        "camera kernel module and matching ARM64 headers are locked",
+    )
 
     container = read(GUEST / "build-container.sh")
     check("linux/arm64" in container and '"$guest_dir/Containerfile"' in container, "container builder targets ARM64")
@@ -311,12 +361,42 @@ def main() -> None:
     )
     check("omarchy-native-audio-bridge" in configure, "guest installs native host-audio integration")
     check(
+        "default.target.wants/omarchy-native-camera-bridge.service" in configure,
+        "guest starts the native camera integration for every provisioned user",
+    )
+    check(
         "graphical-session.target.wants/omarchy-native-clipboard-bridge.service" in configure,
         "guest starts clipboard sharing with the graphical session",
     )
     check(
         spec["runtime"]["clipboard"]["port"] == "dev.tryomarchy.clipboard",
         "clipboard contract names the virtio port",
+    )
+    camera = spec["runtime"]["camera"]
+    check(
+        camera
+        == {
+            "activation": "on-demand",
+            "device": "virtserialport",
+            "framesPerSecond": 30,
+            "guestDevice": "/dev/video42",
+            "height": 720,
+            "pixelFormat": "NV12",
+            "port": "dev.tryomarchy.camera",
+            "protocolVersion": 1,
+            "width": 1280,
+        },
+        "camera contract exposes an on-demand 720p NV12 stream over virtio",
+    )
+    camera_launcher = read(REPO / "macos/run-qemu-gpu.sh")
+    camera_entitlements = read(REPO / "macos/omarchy-vm-helper.entitlements")
+    check(
+        "virtserialport,bus=omarchy-serial.0,nr=4" in camera_launcher
+        and "name=dev.tryomarchy.camera" in camera_launcher
+        and "--bridge-native-camera" in camera_launcher
+        and "camera_bridge_restarts < 5" in camera_launcher
+        and "com.apple.security.device.camera" in camera_entitlements,
+        "Mac launcher carries the camera entitlement and supervised virtio bridge",
     )
     check(
         '"$root/usr/local/bin/omarchy-native-mac-share"' in configure
@@ -497,6 +577,21 @@ def main() -> None:
         "**Glaze**" in third_party_notices and "MIT" in third_party_notices,
         "third-party notices cover the Hyprland build's bundled Glaze headers",
     )
+    check(
+        "**1Password**" in third_party_notices
+        and "not redistributed" in third_party_notices
+        and "mutable post-build inputs" in third_party_notices
+        and "excluded from factory provenance" in third_party_notices,
+        "third-party notices distinguish mutable 1Password installation from redistribution",
+    )
+    architecture = read(REPO / "docs/architecture.md")
+    check(
+        "Optional, user-initiated installers" in architecture
+        and "separate trust boundary" in architecture
+        and "not redistributed in the app" in architecture
+        and post_build_installers[0]["factoryProvenance"] == "excluded",
+        "architecture documents mutable post-build user installation boundaries",
+    )
 
     finalizer = read(GUEST / "scripts/finalize-rootfs.sh")
     check("factory" in finalizer and "aarch64" in finalizer, "finalizer enforces the native factory contract")
@@ -516,6 +611,22 @@ def main() -> None:
         "finalizer requires the exact rounded-border Hyprland package",
     )
 
+    ssh_generator_path = (
+        GUEST
+        / "native-overlay/usr/lib/systemd/system-generators/try-omarchy-ssh-access"
+    )
+    ssh_generator = read(ssh_generator_path)
+    check(
+        ssh_generator_path.is_file()
+        and ssh_generator_path.stat().st_mode & stat.S_IXUSR != 0
+        and "tryomarchy.ssh_access=1" in ssh_generator
+        and "/proc/cmdline" in ssh_generator
+        and "multi-user.target.wants" in ssh_generator
+        and '"$wants/sshd.service"' in ssh_generator
+        and "/etc" not in ssh_generator,
+        "SSH generator requests only the boot-scoped vendor sshd unit",
+    )
+
     manifest_writer = read(GUEST / "scripts/write-guest-manifest.py")
     check('"kind": "try-omarchy-guest-artifacts"' in manifest_writer, "new artifacts use the native manifest identity")
 
@@ -524,6 +635,23 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         py_compile.compile(str(audio_bridge), cfile=str(Path(temporary) / "audio.pyc"), doraise=True)
     check(True, "native audio bridge compiles")
+
+    camera_bridge = GUEST / "native-overlay/usr/local/bin/omarchy-native-camera-bridge"
+    check(camera_bridge.stat().st_mode & stat.S_IXUSR != 0, "native camera bridge is executable")
+    with tempfile.TemporaryDirectory() as temporary:
+        py_compile.compile(str(camera_bridge), cfile=str(Path(temporary) / "camera.pyc"), doraise=True)
+    check(True, "native camera bridge compiles")
+    camera_unit = read(GUEST / "native-overlay/usr/lib/systemd/user/omarchy-native-camera-bridge.service")
+    camera_rule = read(GUEST / "native-overlay/etc/udev/rules.d/94-omarchy-native-camera.rules")
+    camera_module = read(GUEST / "native-overlay/etc/modprobe.d/90-try-omarchy-camera.conf")
+    check(
+        "omarchy-native-camera-bridge" in camera_unit
+        and "Restart=always" in camera_unit
+        and 'ATTR{name}=="dev.tryomarchy.camera"' in camera_rule
+        and 'KERNEL=="video42"' in camera_rule
+        and "exclusive_caps=1" in camera_module,
+        "camera service reconnects its virtio port to an exclusive-capability V4L2 device",
+    )
 
     clipboard_bridge = GUEST / "native-overlay/usr/local/bin/omarchy-native-clipboard-bridge"
     check(clipboard_bridge.stat().st_mode & stat.S_IXUSR != 0, "native clipboard bridge is executable")
@@ -892,6 +1020,65 @@ HOTPLUG=1
                         == target["afterSha256"],
                         f"backport produces reviewed postimage: {backport['id']} {target['path']}",
                     )
+
+            onepassword_installer_path = (
+                staged_omarchy / "bin/omarchy-install-service-1password"
+            )
+            subprocess.run(["bash", "-n", str(onepassword_installer_path)], check=True)
+            onepassword_installer = read(onepassword_installer_path)
+            onepassword_boundary = post_build_installers[0]
+            check(
+                "[[ $(uname -m) == aarch64 ]]" in onepassword_installer
+                and onepassword_boundary["applicationUrl"] in onepassword_installer
+                and onepassword_boundary["signingKeyUrl"] in onepassword_installer
+                and onepassword_boundary["signingFingerprint"] in onepassword_installer
+                and "curl --fail --location --proto '=https' --tlsv1.2" in onepassword_installer
+                and 'GNUPGHOME="$gpg_home" yay -S --noconfirm --needed \\\n'
+                "    --answerclean None --answerdiff None 1password-cli"
+                in onepassword_installer
+                and "omarchy-pkg-add which" in onepassword_installer
+                and "omarchy-pkg-add 1password 1password-cli" in onepassword_installer,
+                "1Password uses its declared mutable ARM64 boundary and preserves the package path",
+            )
+            check(
+                "install -dm700 \"$gpg_home\"" in onepassword_installer
+                and "gpg --homedir \"$gpg_home\"" in onepassword_installer
+                and "gpg --batch" not in onepassword_installer
+                and "--status-fd 1 --verify" in onepassword_installer
+                and '$2 == "VALIDSIG" { print $3 }' in onepassword_installer
+                and '[[ $valid_signer != "$ONEPASSWORD_SIGNING_FINGERPRINT" ]]'
+                in onepassword_installer,
+                "1Password signature verification is isolated and bound to the expected signer",
+            )
+            check(
+                'sudo chown -R root:root /opt/1Password' in onepassword_installer
+                and onepassword_installer.index("sudo chown -R root:root /opt/1Password")
+                < onepassword_installer.index("sudo /opt/1Password/after-install.sh"),
+                "1Password is root-owned before its vendor post-install script runs",
+            )
+            check(
+                "sudo tee /usr/local/bin/1password" in onepassword_installer
+                and "export LIBGL_ALWAYS_SOFTWARE=1" in onepassword_installer
+                and 'exec /opt/1Password/1password --disable-gpu "$@"'
+                in onepassword_installer
+                and "Exec=/usr/local/bin/1password %U" in onepassword_installer
+                and 'echo "Quick Access: Ctrl + Shift + Space"'
+                in onepassword_installer
+                and 'echo "Full 1Password app: Super + Shift + /"'
+                in onepassword_installer
+                and onepassword_installer.index("sudo /opt/1Password/after-install.sh")
+                < onepassword_installer.index("sudo tee /usr/local/bin/1password"),
+                "1Password launchers use software rendering after vendor setup",
+            )
+            applications_bindings = read(
+                staged_omarchy / "default/hypr/bindings/applications.lua"
+            )
+            check(
+                'o.bind("CTRL + SHIFT + SPACE", "1Password Quick Access", '
+                '{ launch = "1password --quick-access" })'
+                in applications_bindings,
+                "1Password Quick Access has a Wayland compositor shortcut",
+            )
 
             notification_card = read(
                 staged_omarchy / "shell/plugins/notifications/components/NotificationCard.qml"

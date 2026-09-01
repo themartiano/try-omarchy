@@ -50,8 +50,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let content = NSView()
     private let accessibilityStatus: () -> Bool
     private let microphoneStatus: () -> MicrophoneAuthorizationState
+    private let cameraStatus: () -> CameraAuthorizationState
     private let requestAccessibility: () -> Void
     private let requestMicrophone: (@escaping (Bool) -> Void) -> Void
+    private let requestCamera: (@escaping (Bool) -> Void) -> Void
     private let storageSpaceEstimate: () -> String?
     private let resetStorage: () -> Void
     private let sharedFolderStatus: () -> SharedFolderMenuState
@@ -71,6 +73,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let useDefaultStorageLocation: () -> Void
 
     private var microphoneRequestInFlight = false
+    private var cameraRequestInFlight = false
     private var resetInProgress = false
     private var launchInProgress = false
     private var pendingResetSpaceEstimate: String?
@@ -81,8 +84,12 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     init(
         accessibilityStatus: @escaping () -> Bool,
         microphoneStatus: @escaping () -> MicrophoneAuthorizationState,
+        cameraStatus: @escaping () -> CameraAuthorizationState = { .authorized },
         requestAccessibility: @escaping () -> Void,
         requestMicrophone: @escaping (@escaping (Bool) -> Void) -> Void,
+        requestCamera: @escaping (@escaping (Bool) -> Void) -> Void = { completion in
+            completion(true)
+        },
         canResetStorage: Bool,
         storageLocation: @escaping () -> String?,
         storageLocationURL: @escaping () -> URL?,
@@ -103,8 +110,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     ) {
         self.accessibilityStatus = accessibilityStatus
         self.microphoneStatus = microphoneStatus
+        self.cameraStatus = cameraStatus
         self.requestAccessibility = requestAccessibility
         self.requestMicrophone = requestMicrophone
+        self.requestCamera = requestCamera
         self.canResetStorage = canResetStorage
         self.storageLocation = storageLocation
         self.storageLocationURL = storageLocationURL
@@ -276,104 +285,69 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             action: #selector(beginAccessibilityRequest)
         )
 
-        let microphoneState = microphoneStatus()
-        let microphoneGranted = microphoneState == .authorized
-        let microphoneDetail: String
-        let microphoneActionTitle: String?
-        switch microphoneState {
-        case .authorized:
-            microphoneDetail = "Apps in Omarchy can record from your Mac microphone."
-            microphoneActionTitle = nil
-        case .notDetermined:
-            microphoneDetail = "Optional. Speaker playback works without microphone access."
-            microphoneActionTitle = microphoneRequestInFlight ? "Waiting…" : "Allow…"
-        case .denied:
-            microphoneDetail = "Recording is off. Speaker playback will still work."
-            microphoneActionTitle = "Open Settings"
-        case .restricted:
-            microphoneDetail = "Recording is unavailable because of this Mac’s policy."
-            microphoneActionTitle = nil
-        }
+        let microphonePresentation = StartMenuPresentation.microphone(
+            state: microphoneStatus(),
+            requestInFlight: microphoneRequestInFlight
+        )
         let microphoneRow = permissionRow(
             symbolName: "mic",
             title: "Microphone access",
-            detail: microphoneDetail,
-            granted: microphoneGranted,
-            actionTitle: microphoneActionTitle,
-            action: microphoneState == .denied
+            detail: microphonePresentation.detail,
+            granted: microphonePresentation.isGranted,
+            actionTitle: microphonePresentation.actionTitle,
+            action: microphonePresentation.action == .openSettings
                 ? #selector(openMicrophoneSettings)
                 : #selector(beginMicrophoneRequest)
         )
 
+        let cameraPresentation = StartMenuPresentation.camera(
+            state: cameraStatus(),
+            requestInFlight: cameraRequestInFlight
+        )
+        let cameraRow = permissionRow(
+            symbolName: "camera",
+            title: "Camera access",
+            detail: cameraPresentation.detail,
+            granted: cameraPresentation.isGranted,
+            actionTitle: cameraPresentation.actionTitle,
+            action: cameraPresentation.action == .openSettings
+                ? #selector(openCameraSettings)
+                : #selector(beginCameraRequest)
+        )
+
         let sharedFolder = sharedFolderStatus()
-        let sharedFolderDetail: String
-        let sharedFolderDetailLines: [String]?
+        let sharedFolderPresentation = StartMenuPresentation.sharedFolder(state: sharedFolder)
         var sharedFolderActions: [(String, Selector)] = [("Choose…", #selector(beginSharedFolderSelection))]
-        if let problem = sharedFolder.problem {
-            sharedFolderDetail = problem
-            sharedFolderDetailLines = nil
-        } else if let displayPath = sharedFolder.displayPath, sharedFolder.isEnabled {
-            let guestPath = "~/\(SharedFolderPolicy.guestLinkName(sharedFolder.path ?? displayPath))"
-            sharedFolderDetail = "Mac folder: \(displayPath). In Omarchy: \(guestPath)."
-            sharedFolderDetailLines = [
-                "Mac folder: \(displayPath)",
-                "In Omarchy: \(guestPath)",
-            ]
-        } else if let displayPath = sharedFolder.displayPath {
-            sharedFolderDetail = "Mac folder: \(displayPath). In Omarchy: Off."
-            sharedFolderDetailLines = [
-                "Mac folder: \(displayPath)",
-                "In Omarchy: Off",
-            ]
-        } else {
-            sharedFolderDetail = "Optional. Pick a Mac folder to use inside Omarchy under the same name."
-            sharedFolderDetailLines = nil
-        }
-        if sharedFolder.path != nil {
+        if let toggleTitle = sharedFolderPresentation.toggleActionTitle {
             sharedFolderActions.append(
                 sharedFolder.isEnabled
-                    ? ("Turn Off", #selector(disableSharedFolder))
-                    : ("Turn On", #selector(enableSharedFolder))
+                    ? (toggleTitle, #selector(disableSharedFolder))
+                    : (toggleTitle, #selector(enableSharedFolder))
             )
         }
         let sharedFolderRow = permissionRow(
             symbolName: "folder",
             title: "Shared folder",
-            detail: sharedFolderDetail,
-            compactDetailLines: sharedFolderDetailLines,
-            granted: sharedFolder.isEnabled && sharedFolder.problem == nil,
+            detail: sharedFolderPresentation.detail,
+            compactDetailLines: sharedFolderPresentation.compactDetailLines,
+            granted: sharedFolderPresentation.isGranted,
             statusLabels: ("●  On", "○  Off"),
             actions: sharedFolderActions,
             minimumHeight: 100
         )
 
         let portMappings = portForwardingStatus()
-        let portForwardingDetail: String
-        let portForwardingDetailLines: [String]?
-        if portMappings.isEmpty {
-            portForwardingDetail = "Optional. Reach services running in Omarchy at localhost on this Mac."
-            portForwardingDetailLines = nil
-        } else if portMappings.count == 1, let mapping = portMappings.first {
-            portForwardingDetail = "localhost:\(mapping.hostPort) → Omarchy:\(mapping.guestPort) · \(mapping.protocol.displayName)"
-            portForwardingDetailLines = [
-                "Mac: localhost:\(mapping.hostPort)",
-                "Omarchy: port \(mapping.guestPort) · \(mapping.protocol.displayName)",
-            ]
-        } else {
-            portForwardingDetail = "\(portMappings.count) localhost mappings. Available only on this Mac."
-            portForwardingDetailLines = [
-                "\(portMappings.count) localhost mappings",
-                "Available only on this Mac",
-            ]
-        }
+        let portForwardingPresentation = StartMenuPresentation.portForwarding(
+            mappings: portMappings
+        )
         let portForwardingRow = permissionRow(
             symbolName: "network",
             title: "Port forwarding",
-            detail: portForwardingDetail,
-            compactDetailLines: portForwardingDetailLines,
-            granted: !portMappings.isEmpty,
+            detail: portForwardingPresentation.detail,
+            compactDetailLines: portForwardingPresentation.compactDetailLines,
+            granted: portForwardingPresentation.isGranted,
             statusLabels: (
-                "●  \(portMappings.count) \(portMappings.count == 1 ? "Port" : "Ports")",
+                portForwardingPresentation.grantedStatusLabel,
                 "○  Off"
             ),
             actions: [("Configure…", #selector(beginPortForwardingConfiguration))],
@@ -432,7 +406,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             )
         }
 
-        var permissionRowViews = [accessibilityRow, microphoneRow, sharedFolderRow]
+        var permissionRowViews = [accessibilityRow, microphoneRow, cameraRow, sharedFolderRow]
         if let storageRow {
             permissionRowViews.append(storageRow)
         }
@@ -476,7 +450,11 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         reset.bezelStyle = .rounded
         reset.controlSize = .small
         reset.contentTintColor = .systemRed
-        reset.isEnabled = canResetStorage && !launchInProgress && !resetInProgress
+        reset.isEnabled = canResetStorage
+            && !launchInProgress
+            && !resetInProgress
+            && !microphoneRequestInFlight
+            && !cameraRequestInFlight
         reset.toolTip = canResetStorage
             ? "Erase this VM and return it to factory settings"
             : "Reset is unavailable for a disposable VM"
@@ -498,7 +476,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         launchButton.bezelStyle = .rounded
         launchButton.controlSize = .large
         launchButton.font = launchButtonFont
-        launchButton.isEnabled = !launchInProgress && !resetInProgress && !microphoneRequestInFlight
+        launchButton.isEnabled = !launchInProgress
+            && !resetInProgress
+            && !microphoneRequestInFlight
+            && !cameraRequestInFlight
         launchButton.title = ""
         launchButton.identifier = NSUserInterfaceItemIdentifier("launch-button")
         let launchButtonLabel = MouseIgnoringTextField(labelWithString: launchButtonTitle)
@@ -747,7 +728,11 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             let (actionTitle, action) = actionDescription
             let button = PermissionActionButton(title: actionTitle, target: self, action: action)
             button.controlSize = .regular
-            button.isEnabled = actionsEnabled && !microphoneRequestInFlight && !launchInProgress && !resetInProgress
+            button.isEnabled = actionsEnabled
+                && !microphoneRequestInFlight
+                && !cameraRequestInFlight
+                && !launchInProgress
+                && !resetInProgress
             let identifier = actions.count == 1
                 ? "permission-action-\(symbolName)"
                 : "permission-action-\(symbolName)-\(index)"
@@ -857,7 +842,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         title.font = .systemFont(ofSize: 14, weight: .semibold)
         title.identifier = NSUserInterfaceItemIdentifier("immersive-title")
 
-        let detailText = Self.immersiveDetailText(isEnabled: isEnabled)
+        let detailText = StartMenuPresentation.immersiveDetail(isEnabled: isEnabled)
         let detail = NSTextField(wrappingLabelWithString: detailText)
         detail.font = .systemFont(ofSize: 12)
         detail.textColor = .secondaryLabelColor
@@ -925,6 +910,27 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     @objc private func openMicrophoneSettings() {
         guard let url = URL(
             string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        ) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func beginCameraRequest() {
+        guard cameraStatus() == .notDetermined, !cameraRequestInFlight else { return }
+        cameraRequestInFlight = true
+        render()
+        requestCamera { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.cameraRequestInFlight = false
+                self.render()
+                self.window.makeKeyAndOrderFront(nil)
+            }
+        }
+    }
+
+    @objc private func openCameraSettings() {
+        guard let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
         ) else { return }
         NSWorkspace.shared.open(url)
     }
@@ -1039,7 +1045,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func beginSharedFolderSelection() {
-        guard !launchInProgress, !resetInProgress else { return }
+        guard !launchInProgress,
+              !resetInProgress,
+              !microphoneRequestInFlight,
+              !cameraRequestInFlight else { return }
         let panel = NSOpenPanel()
         panel.title = "Choose a folder to share with Omarchy"
         panel.message = "Omarchy will be able to read and change everything inside this folder, linked as ~/<folder name>."
@@ -1100,7 +1109,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         guard !launchInProgress, !resetInProgress else { return }
         let isEnabled = sender.state == .on
         setImmersiveMode(isEnabled)
-        let detailText = Self.immersiveDetailText(isEnabled: isEnabled)
+        let detailText = StartMenuPresentation.immersiveDetail(isEnabled: isEnabled)
         immersiveCaption?.stringValue = detailText
         sender.setAccessibilityHelp(detailText)
         NSAccessibility.post(
@@ -1113,14 +1122,12 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         )
     }
 
-    private static func immersiveDetailText(isEnabled: Bool) -> String {
-        isEnabled
-            ? "Mac controls stay hidden. First press Control-Option-G, then Command-F to leave Full Screen."
-            : "Move the pointer to the top of the screen, then choose View › Exit Full Screen or press Command-F."
-    }
-
     private func confirmReset() {
-        guard canResetStorage, !launchInProgress, !resetInProgress else { return }
+        guard canResetStorage,
+              !launchInProgress,
+              !resetInProgress,
+              !microphoneRequestInFlight,
+              !cameraRequestInFlight else { return }
         let estimate = storageSpaceEstimate()
         let alert = NSAlert()
         alert.alertStyle = .critical
@@ -1159,7 +1166,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func launchOmarchy() {
-        guard !launchInProgress, !resetInProgress else { return }
+        guard !launchInProgress,
+              !resetInProgress,
+              !microphoneRequestInFlight,
+              !cameraRequestInFlight else { return }
         launchInProgress = true
         render()
         launch()

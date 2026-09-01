@@ -4,7 +4,7 @@ This directory contains the Apple Silicon application layer:
 
 - a Swift/AppKit lifecycle and permission helper;
 - a pinned, patched QEMU ARM64 runtime using HVF and Cocoa/VirGL;
-- persistent-disk, input, audio-device, clipboard, shared-folder, signing, and DMG tooling.
+- persistent-disk, input, audio-device, camera, clipboard, shared-folder, signing, and DMG tooling.
 
 Use the root Makefile for normal development:
 
@@ -66,6 +66,13 @@ to the launcher as `OMARCHY_QEMU_GPU_STATE_ROOT`. An inherited value of that
 variable still wins, so the development and test override keeps working
 unchanged. Reset composes its environment exactly as a launch does, so it
 always erases the workspace the user is actually running.
+
+Port forwarding is one versioned generic mapping list. The editor's **Add SSH**
+action only inserts the ordinary TCP `2222 → 22` preset; users may edit it like
+any other mapping. The signed shell parser remains the sole QEMU `hostfwd`
+builder and derives boot-scoped sshd intent only from a fully valid TCP mapping
+to guest port 22. No SSH-specific preference, port probe, status code, or
+parallel forwarding path exists.
 
 Ad-hoc signing identifies one exact build, so macOS intentionally invalidates
 its privacy grants when that build is replaced. The app's **Open Settings**

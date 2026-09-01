@@ -4,6 +4,17 @@ import Testing
 
 @Suite("Port forwarding policy")
 struct PortForwardPolicyTests {
+    @Test("SSH preset is an ordinary canonical TCP mapping")
+    func sshPreset() throws {
+        #expect(PortForwardPreset.ssh == PortForwardMapping(
+            hostPort: 2222,
+            guestPort: 22,
+            protocol: .tcp
+        ))
+        #expect(try PortForwardPolicy.encodedEnvironmentValue(for: [PortForwardPreset.ssh])
+            == "tcp:2222:22")
+    }
+
     @Test("accepts both inclusive port boundaries")
     func acceptsPortBoundaries() throws {
         let mappings = [

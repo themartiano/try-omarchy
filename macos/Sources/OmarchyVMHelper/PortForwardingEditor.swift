@@ -7,44 +7,20 @@ import Foundation
 final class PortForwardingEditor: NSObject, NSWindowDelegate, NSTextFieldDelegate {
     typealias SaveHandler = ([PortForwardMapping]) -> String?
 
-    private struct Draft {
-        var hostPort: String
-        var guestPort: String
-        var `protocol`: PortForwardProtocol
-
-        init(mapping: PortForwardMapping) {
-            hostPort = String(mapping.hostPort)
-            guestPort = String(mapping.guestPort)
-            `protocol` = mapping.protocol
-        }
-
-        init() {
-            hostPort = ""
-            guestPort = ""
-            `protocol` = .tcp
-        }
-    }
-
     private enum FieldKind: Int {
         case host = 0
         case guest = 1
     }
 
-    private struct Validation {
-        let mappings: [PortForwardMapping]?
-        let message: String
-        let isError: Bool
-    }
-
-    private let initialMappings: [PortForwardMapping]
     private let saveHandler: SaveHandler
     private let closeHandler: () -> Void
-    private var drafts: [Draft]
+    private var model: PortForwardingEditorModel
 
     private(set) var window: NSWindow!
     private let rowsStack = NSStackView()
     private let scrollView = NSScrollView()
     private let addButton = NSButton()
+    private let addSSHButton = NSButton()
     private let saveButton = NSButton()
     private let validationLabel = NSTextField(wrappingLabelWithString: "")
     private var announcedValidationError: String?
@@ -54,10 +30,9 @@ final class PortForwardingEditor: NSObject, NSWindowDelegate, NSTextFieldDelegat
         save: @escaping SaveHandler,
         didClose: @escaping () -> Void = {}
     ) {
-        initialMappings = mappings
         saveHandler = save
         closeHandler = didClose
-        drafts = mappings.map(Draft.init(mapping:))
+        model = PortForwardingEditorModel(mappings: mappings)
         super.init()
         buildWindow()
         rebuildRows()
@@ -148,12 +123,27 @@ final class PortForwardingEditor: NSObject, NSWindowDelegate, NSTextFieldDelegat
         addButton.identifier = NSUserInterfaceItemIdentifier("port-forward-add")
         addButton.setAccessibilityHelp("Adds another localhost-to-Omarchy port mapping")
 
+        addSSHButton.title = "Add SSH"
+        addSSHButton.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
+        addSSHButton.imagePosition = .imageLeading
+        addSSHButton.bezelStyle = .rounded
+        addSSHButton.controlSize = .regular
+        addSSHButton.target = self
+        addSSHButton.action = #selector(addSSH)
+        addSSHButton.identifier = NSUserInterfaceItemIdentifier("port-forward-add-ssh")
+        addSSHButton.setAccessibilityHelp("Adds localhost:2222 to Omarchy:22 over TCP")
+
         validationLabel.font = .systemFont(ofSize: 11.5)
         validationLabel.maximumNumberOfLines = 2
         validationLabel.identifier = NSUserInterfaceItemIdentifier("port-forward-validation")
         validationLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let listFooter = NSStackView(views: [addButton, validationLabel])
+        let addActions = NSStackView(views: [addButton, addSSHButton])
+        addActions.orientation = .horizontal
+        addActions.alignment = .centerY
+        addActions.spacing = 8
+
+        let listFooter = NSStackView(views: [addActions, validationLabel])
         listFooter.orientation = .vertical
         listFooter.alignment = .leading
         listFooter.spacing = 6
@@ -210,11 +200,11 @@ final class PortForwardingEditor: NSObject, NSWindowDelegate, NSTextFieldDelegat
             view.removeFromSuperview()
         }
 
-        if drafts.isEmpty {
+        if model.drafts.isEmpty {
             addFullWidthArrangedSubview(emptyState())
         } else {
-            for index in drafts.indices {
-                if index > drafts.startIndex {
+            for index in model.drafts.indices {
+                if index > model.drafts.startIndex {
                     addFullWidthArrangedSubview(separator())
                 }
                 addFullWidthArrangedSubview(mappingRow(at: index))
@@ -279,7 +269,7 @@ final class PortForwardingEditor: NSObject, NSWindowDelegate, NSTextFieldDelegat
     }
 
     private func mappingRow(at index: Int) -> NSView {
-        let draft = drafts[index]
+        let draft = model.drafts[index]
         let localhost = secondaryLabel("localhost:")
         let hostField = portField(value: draft.hostPort, index: index, kind: .host)
         let arrow = secondaryLabel("→")
@@ -373,43 +363,52 @@ final class PortForwardingEditor: NSObject, NSWindowDelegate, NSTextFieldDelegat
     func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSTextField else { return }
         let index = field.tag / 2
-        guard drafts.indices.contains(index), let kind = FieldKind(rawValue: field.tag % 2) else {
+        guard model.drafts.indices.contains(index), let kind = FieldKind(rawValue: field.tag % 2) else {
             return
         }
         switch kind {
         case .host:
-            drafts[index].hostPort = field.stringValue
+            model.updateHostPort(field.stringValue, at: index)
         case .guest:
-            drafts[index].guestPort = field.stringValue
+            model.updateGuestPort(field.stringValue, at: index)
         }
         updateValidation()
     }
 
     @objc private func protocolChanged(_ sender: NSPopUpButton) {
-        guard drafts.indices.contains(sender.tag),
+        guard model.drafts.indices.contains(sender.tag),
               let rawValue = sender.titleOfSelectedItem?.lowercased(),
               let protocolValue = PortForwardProtocol(rawValue: rawValue) else { return }
-        drafts[sender.tag].protocol = protocolValue
+        model.updateProtocol(protocolValue, at: sender.tag)
         updateValidation()
     }
 
     @objc private func addPort() {
-        guard drafts.count < PortForwardPolicy.maximumMappings else { return }
-        drafts.append(Draft())
+        guard let index = model.addEmptyMapping() else { return }
         rebuildRows(
-            focusRow: drafts.index(before: drafts.endIndex),
+            focusRow: index,
+            scrollToBottom: true
+        )
+    }
+
+    @objc private func addSSH() {
+        guard let index = model.addSSHPreset() else { return }
+        rebuildRows(
+            focusRow: index,
             scrollToBottom: true
         )
     }
 
     @objc private func removePort(_ sender: NSButton) {
-        guard drafts.indices.contains(sender.tag) else { return }
+        guard model.drafts.indices.contains(sender.tag) else { return }
         let removedIndex = sender.tag
-        drafts.remove(at: removedIndex)
-        if drafts.isEmpty {
+        model.removeMapping(at: removedIndex)
+        if model.drafts.isEmpty {
             rebuildRows(focusAddButton: true)
         } else {
-            rebuildRows(focusRow: min(removedIndex, drafts.index(before: drafts.endIndex)))
+            rebuildRows(
+                focusRow: min(removedIndex, model.drafts.index(before: model.drafts.endIndex))
+            )
         }
     }
 
@@ -450,73 +449,19 @@ final class PortForwardingEditor: NSObject, NSWindowDelegate, NSTextFieldDelegat
         } else if !validation.isError {
             announcedValidationError = nil
         }
-        let hasChanges = validation.mappings.map { $0 != initialMappings } ?? false
-        saveButton.isEnabled = validation.mappings != nil && hasChanges
-        addButton.isEnabled = drafts.count < PortForwardPolicy.maximumMappings
-        addButton.toolTip = addButton.isEnabled
-            ? "Add a port mapping"
+        saveButton.isEnabled = validation.canSave
+        let canAddMapping = model.canAddMapping
+        addButton.isEnabled = canAddMapping
+        addSSHButton.isEnabled = canAddMapping
+        let addLimitToolTip = canAddMapping
+            ? nil
             : "Up to \(PortForwardPolicy.maximumMappings) mappings are supported"
+        addButton.toolTip = addLimitToolTip ?? "Add a port mapping"
+        addSSHButton.toolTip = addLimitToolTip ?? "Add an SSH port mapping"
     }
 
-    private func validation() -> Validation {
-        guard !drafts.isEmpty else {
-            return Validation(mappings: [], message: "", isError: false)
-        }
-
-        var mappings: [PortForwardMapping] = []
-        for (offset, draft) in drafts.enumerated() {
-            let row = offset + 1
-            let host = draft.hostPort.trimmingCharacters(in: .whitespacesAndNewlines)
-            let guest = draft.guestPort.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !host.isEmpty, !guest.isEmpty else {
-                return Validation(
-                    mappings: nil,
-                    message: "",
-                    isError: false
-                )
-            }
-            guard host.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
-                  let hostPort = Int(host),
-                  PortForwardPolicy.validPortRange.contains(hostPort) else {
-                return Validation(
-                    mappings: nil,
-                    message: "Mac port in mapping \(row) must be a number from 1 to 65535.",
-                    isError: true
-                )
-            }
-            guard guest.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
-                  let guestPort = Int(guest),
-                  PortForwardPolicy.validPortRange.contains(guestPort) else {
-                return Validation(
-                    mappings: nil,
-                    message: "Omarchy port in mapping \(row) must be a number from 1 to 65535.",
-                    isError: true
-                )
-            }
-            mappings.append(
-                PortForwardMapping(
-                    hostPort: hostPort,
-                    guestPort: guestPort,
-                    protocol: draft.protocol
-                )
-            )
-        }
-
-        do {
-            try PortForwardPolicy.validate(mappings)
-        } catch {
-            return Validation(
-                mappings: nil,
-                message: error.localizedDescription,
-                isError: true
-            )
-        }
-
-        return Validation(
-            mappings: mappings,
-            message: "",
-            isError: false
-        )
+    private func validation() -> PortForwardingEditorValidation {
+        model.validation
     }
 
     private func closeWindow() {

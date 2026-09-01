@@ -18,6 +18,12 @@ struct PortForwardMapping: Codable, Equatable, Hashable, Sendable {
     let `protocol`: PortForwardProtocol
 }
 
+/// Convenience mappings offered by the editor. Presets are inserted as
+/// ordinary mappings and do not add any persisted service-specific state.
+enum PortForwardPreset {
+    static let ssh = PortForwardMapping(hostPort: 2222, guestPort: 22, protocol: .tcp)
+}
+
 enum PortForwardPolicyError: LocalizedError, Equatable {
     case invalidHostPort(Int)
     case invalidGuestPort(Int)
@@ -184,13 +190,20 @@ enum PortForwardStartupFailure {
 /// the authoritative bind moments later; this preflight exists for better UX.
 enum PortForwardAvailability {
     static func validate(_ mappings: [PortForwardMapping]) throws {
+        try validate(mappings, canBind: systemCanBind)
+    }
+
+    static func validate(
+        _ mappings: [PortForwardMapping],
+        canBind: (PortForwardMapping) -> Bool
+    ) throws {
         try PortForwardPolicy.validate(mappings)
         for mapping in mappings where !canBind(mapping) {
             throw PortForwardAvailabilityError.unavailable(mapping.protocol, mapping.hostPort)
         }
     }
 
-    private static func canBind(_ mapping: PortForwardMapping) -> Bool {
+    private static func systemCanBind(_ mapping: PortForwardMapping) -> Bool {
         let socketType: Int32
         switch mapping.protocol {
         case .tcp:

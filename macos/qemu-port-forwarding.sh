@@ -14,6 +14,7 @@ QEMU_PORT_FORWARDING_NETDEV='user,id=omarchy-net'
 QEMU_PORT_FORWARDING_CANONICAL=''
 QEMU_PORT_FORWARDING_SUMMARY='disabled'
 QEMU_PORT_FORWARDING_RULE_COUNT=0
+QEMU_PORT_FORWARDING_ENABLES_SSH=0
 QEMU_PORT_FORWARDING_ERROR=''
 
 _qpf_fail() {
@@ -38,11 +39,13 @@ qemu_port_forwarding_configure() {
   local qpf_netdev='user,id=omarchy-net'
   local qpf_canonical=''
   local qpf_summary=''
+  local qpf_enables_ssh=0
 
   QEMU_PORT_FORWARDING_NETDEV='user,id=omarchy-net'
   QEMU_PORT_FORWARDING_CANONICAL=''
   QEMU_PORT_FORWARDING_SUMMARY='disabled'
   QEMU_PORT_FORWARDING_RULE_COUNT=0
+  QEMU_PORT_FORWARDING_ENABLES_SSH=0
   QEMU_PORT_FORWARDING_ERROR=''
 
   if ((${#qpf_input} > QEMU_PORT_FORWARDING_MAX_INPUT_BYTES)); then
@@ -118,6 +121,10 @@ qemu_port_forwarding_configure() {
     esac
     qpf_seen="${qpf_seen}${qpf_key}|"
 
+    if [[ $qpf_protocol == tcp && $qpf_guest_port == 22 ]]; then
+      qpf_enables_ssh=1
+    fi
+
     qpf_netdev="$qpf_netdev,hostfwd=$qpf_protocol:127.0.0.1:$qpf_host_port-:$qpf_guest_port"
     if [[ -n $qpf_canonical ]]; then
       qpf_canonical="$qpf_canonical;"
@@ -133,4 +140,5 @@ qemu_port_forwarding_configure() {
   QEMU_PORT_FORWARDING_CANONICAL=$qpf_canonical
   QEMU_PORT_FORWARDING_SUMMARY=$qpf_summary
   QEMU_PORT_FORWARDING_RULE_COUNT=$qpf_rule_count
+  QEMU_PORT_FORWARDING_ENABLES_SSH=$qpf_enables_ssh
 }

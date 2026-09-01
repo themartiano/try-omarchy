@@ -46,3 +46,15 @@ The output includes the kernel, initramfs, raw and compressed ext4 image,
 provenance, package inventory, licenses, manifest, and SHA-256 sums. Generated
 output belongs under the repository's ignored `dist/` directory and must not be
 committed.
+
+OpenSSH is an explicit factory package. A systemd generator requests the vendor
+`sshd.service` only for a boot carrying the exact
+`tryomarchy.ssh_access=1` kernel token, which the Mac launcher derives from a
+validated generic TCP mapping to guest port 22. The generator writes only to
+systemd's runtime generator directory; it does not enable sshd persistently or
+change authentication policy under `/etc`.
+
+The vendor service generates missing host keys on the writable guest disk. A
+compatible persistent VM therefore keeps its identity across restarts, while a
+Factory Reset or a fresh ephemeral VM gets a new identity. The factory image
+must never contain shared SSH host private keys.
