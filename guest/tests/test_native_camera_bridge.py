@@ -66,10 +66,29 @@ class NativeCameraBridgeTests(unittest.TestCase):
         self.assertEqual(ctypes.sizeof(bridge.V4L2Format), 208)
         self.assertEqual(ctypes.sizeof(bridge.V4L2EventSubscription), 32)
         self.assertEqual(ctypes.sizeof(bridge.V4L2Event), 136)
+        self.assertEqual(bridge.V4L2Event.data.offset, 8)
+        self.assertEqual(bridge.V4L2Event.pending.offset, 72)
+        self.assertEqual(bridge.V4L2Event.sequence.offset, 76)
+        self.assertEqual(bridge.V4L2Event.timestamp.offset, 80)
         self.assertEqual(bridge.VIDIOC_S_FMT, 0xC0D05605)
         self.assertEqual(bridge.VIDIOC_DQEVENT, 0x80885659)
         self.assertEqual(bridge.VIDIOC_SUBSCRIBE_EVENT, 0x4020565A)
         self.assertEqual(bridge.V4L2_EVENT_SUB_FL_SEND_INITIAL, 0x0001)
+
+    def test_dequeue_client_count_reads_aligned_event_union(self) -> None:
+        def fill_event(_descriptor, request, event, mutate) -> None:
+            self.assertEqual(request, bridge.VIDIOC_DQEVENT)
+            self.assertTrue(mutate)
+            event.type = bridge.V4L2_EVENT_PRI_CLIENT_USAGE
+            count = ctypes.c_uint32(1)
+            ctypes.memmove(
+                ctypes.addressof(event) + bridge.V4L2Event.data.offset,
+                ctypes.byref(count),
+                ctypes.sizeof(count),
+            )
+
+        with mock.patch.object(bridge.fcntl, "ioctl", side_effect=fill_event):
+            self.assertEqual(bridge.dequeue_client_count(42), 1)
 
     def test_camera_subscription_requests_initial_client_usage(self) -> None:
         with (

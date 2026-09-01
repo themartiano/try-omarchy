@@ -96,10 +96,21 @@ class TimeSpec(ctypes.Structure):
     _fields_ = [("seconds", ctypes.c_long), ("nanoseconds", ctypes.c_long)]
 
 
+class V4L2EventData(ctypes.Union):
+    # The UAPI union contains struct v4l2_event_ctrl, whose signed 64-bit
+    # value64 member makes the union eight-byte aligned on aarch64. Without
+    # this explicit alignment, ctypes places the payload at offset 4 and the
+    # client count is read from padding instead of the event data at offset 8.
+    _fields_ = [
+        ("raw_data", ctypes.c_uint8 * 64),
+        ("alignment", ctypes.c_int64),
+    ]
+
+
 class V4L2Event(ctypes.Structure):
     _fields_ = [
         ("type", ctypes.c_uint32),
-        ("data", ctypes.c_uint8 * 64),
+        ("data", V4L2EventData),
         ("pending", ctypes.c_uint32),
         ("sequence", ctypes.c_uint32),
         ("timestamp", TimeSpec),
@@ -230,7 +241,7 @@ def dequeue_client_count(descriptor: int) -> int:
     fcntl.ioctl(descriptor, VIDIOC_DQEVENT, event, True)
     if event.type != V4L2_EVENT_PRI_CLIENT_USAGE:
         raise RuntimeError("v4l2loopback returned an unexpected event")
-    return int.from_bytes(bytes(event.data[:4]), sys.byteorder)
+    return int.from_bytes(bytes(event.data.raw_data[:4]), sys.byteorder)
 
 
 def handle_status(payload: bytes) -> None:
