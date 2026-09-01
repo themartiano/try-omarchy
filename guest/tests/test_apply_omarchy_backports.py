@@ -101,6 +101,40 @@ diff --git a/example.txt b/example.txt
             self.assertIn("unsafe target path", result.stderr)
             self.assertEqual(target.read_bytes(), self.before)
 
+    def test_patches_a_staged_root_command_without_replacing_its_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, spec, target = self.fixture(temporary)
+            target.unlink()
+            target = root / "usr/share/omarchy/bin/example"
+            target.parent.mkdir()
+            command = root / "usr/bin/example"
+            command.parent.mkdir(parents=True)
+            command.write_bytes(self.before)
+            target.symlink_to("/usr/bin/example")
+
+            payload = json.loads(spec.read_text(encoding="utf-8"))
+            backport = payload["authenticity"]["backports"][0]
+            backport["targets"][0]["path"] = "bin/example"
+            patch_payload = self.patch.replace(b"example.txt", b"bin/example")
+            (spec.parent / "example.patch").write_bytes(patch_payload)
+            backport["patchSha256"] = digest(patch_payload)
+            spec.write_text(json.dumps(payload), encoding="utf-8")
+
+            result = self.run_script(root, spec)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(target.is_symlink())
+            self.assertEqual(target.readlink(), Path("/usr/bin/example"))
+            self.assertEqual(command.read_bytes(), self.after)
+
+    def test_rejects_a_staged_command_symlink_outside_the_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, spec, target = self.fixture(temporary)
+            target.unlink()
+            target.symlink_to("/tmp/example")
+            result = self.run_script(root, spec)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("target is not a regular file", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

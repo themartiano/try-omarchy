@@ -6,7 +6,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path, PurePosixPath
 
 
@@ -33,6 +36,27 @@ def contained_file(base: Path, relative: str, label: str) -> Path:
     return candidate
 
 
+def staged_target_file(root: Path, omarchy_root: Path, relative: str) -> Path:
+    logical = PurePosixPath(relative)
+    if logical.is_absolute() or ".." in logical.parts or logical.as_posix() != relative:
+        fail(f"unsafe target path: {relative}")
+
+    candidate = omarchy_root.joinpath(*logical.parts)
+    if candidate.is_symlink():
+        link = PurePosixPath(os.readlink(candidate))
+        if not link.is_absolute() or ".." in link.parts:
+            fail(f"target has an unsafe staged-root symlink: {relative}")
+        candidate = root.joinpath(*link.parts[1:])
+
+    if candidate.is_symlink() or not candidate.is_file():
+        fail(f"target is not a regular file: {relative}")
+    try:
+        candidate.resolve().relative_to(root.resolve())
+    except ValueError:
+        fail(f"target escapes the staged root: {relative}")
+    return candidate
+
+
 def require_digest(value: object, label: str) -> str:
     rendered = str(value or "")
     if len(rendered) != 64 or any(character not in "0123456789abcdef" for character in rendered):
@@ -40,11 +64,10 @@ def require_digest(value: object, label: str) -> str:
     return rendered
 
 
-def verify_target(omarchy_root: Path, target: dict, digest_key: str, backport_id: str) -> None:
+def verify_target(path: Path, target: dict, digest_key: str, backport_id: str) -> None:
     if not isinstance(target, dict):
         fail(f"backport {backport_id} has a non-object target")
     relative = str(target.get("path", ""))
-    path = contained_file(omarchy_root, relative, "target")
     expected = require_digest(target.get(digest_key), f"{backport_id} {relative} {digest_key}")
     actual = sha256(path)
     if actual != expected:
@@ -54,7 +77,7 @@ def verify_target(omarchy_root: Path, target: dict, digest_key: str, backport_id
         )
 
 
-def apply_backport(spec_dir: Path, omarchy_root: Path, backport: dict) -> None:
+def apply_backport(spec_dir: Path, root: Path, omarchy_root: Path, backport: dict) -> None:
     if not isinstance(backport, dict):
         fail("backport metadata must contain JSON objects")
     backport_id = str(backport.get("id", ""))
@@ -76,23 +99,60 @@ def apply_backport(spec_dir: Path, omarchy_root: Path, backport: dict) -> None:
     targets = backport.get("targets")
     if not isinstance(targets, list) or not targets:
         fail(f"backport {backport_id} must declare at least one target")
+    target_paths: dict[str, Path] = {}
     for target in targets:
-        verify_target(omarchy_root, target, "beforeSha256", backport_id)
+        if not isinstance(target, dict):
+            fail(f"backport {backport_id} has a non-object target")
+        relative = str(target.get("path", ""))
+        if relative in target_paths:
+            fail(f"backport {backport_id} repeats target: {relative}")
+        target_path = staged_target_file(root, omarchy_root, relative)
+        verify_target(target_path, target, "beforeSha256", backport_id)
+        target_paths[relative] = target_path
 
-    result = subprocess.run(
-        ["git", "apply", "--no-index", "--whitespace=error", str(patch)],
-        cwd=omarchy_root,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "git apply failed"
-        fail(f"backport {backport_id} did not apply: {detail}")
+    # Patch isolated regular-file copies so package-path symlinks such as
+    # /usr/share/omarchy/bin/* remain intact and no undeclared staged file can
+    # be changed by a reviewed patch.
+    with tempfile.TemporaryDirectory() as temporary:
+        patch_root = Path(temporary)
+        for relative, target_path in target_paths.items():
+            destination = patch_root.joinpath(*PurePosixPath(relative).parts)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(target_path, destination)
 
-    for target in targets:
-        verify_target(omarchy_root, target, "afterSha256", backport_id)
+        result = subprocess.run(
+            ["git", "apply", "--no-index", "--whitespace=error", str(patch)],
+            cwd=patch_root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or "git apply failed"
+            fail(f"backport {backport_id} did not apply: {detail}")
+
+        actual_paths = {
+            path.relative_to(patch_root).as_posix()
+            for path in patch_root.rglob("*")
+            if path.is_file() or path.is_symlink()
+        }
+        if actual_paths != set(target_paths):
+            fail(f"backport {backport_id} changed files outside its declared targets")
+
+        for target in targets:
+            relative = str(target["path"])
+            verify_target(
+                patch_root.joinpath(*PurePosixPath(relative).parts),
+                target,
+                "afterSha256",
+                backport_id,
+            )
+        for relative, target_path in target_paths.items():
+            shutil.copy2(
+                patch_root.joinpath(*PurePosixPath(relative).parts),
+                target_path,
+            )
     print(f"Applied Omarchy backport {backport_id}")
 
 
@@ -107,7 +167,8 @@ def main() -> None:
     spec = args.spec.resolve()
     if not spec.is_file():
         fail(f"spec not found: {spec}")
-    omarchy_root = args.root.resolve() / "usr/share/omarchy"
+    root = args.root.resolve()
+    omarchy_root = root / "usr/share/omarchy"
     if not omarchy_root.is_dir():
         fail(f"materialized Omarchy tree not found: {omarchy_root}")
 
@@ -120,7 +181,7 @@ def main() -> None:
         fail("authenticity.backports must be an array")
 
     for backport in backports:
-        apply_backport(spec.parent, omarchy_root, backport)
+        apply_backport(spec.parent, root, omarchy_root, backport)
 
 
 if __name__ == "__main__":

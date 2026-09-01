@@ -7,7 +7,7 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 def digest_path(path: Path) -> str:
@@ -40,6 +40,27 @@ def digest_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def installed_target_file(root: Path, omarchy: Path, relative: str) -> Path:
+    logical = PurePosixPath(relative)
+    if logical.is_absolute() or ".." in logical.parts or logical.as_posix() != relative:
+        raise SystemExit(f"unsafe backport target path: {relative}")
+
+    installed = omarchy.joinpath(*logical.parts)
+    if installed.is_symlink():
+        link = PurePosixPath(os.readlink(installed))
+        if not link.is_absolute() or ".." in link.parts:
+            raise SystemExit(f"unsafe backport target symlink: {relative}")
+        installed = root.joinpath(*link.parts[1:])
+
+    if installed.is_symlink() or not installed.is_file():
+        raise SystemExit(f"missing installed backport target: {relative}")
+    try:
+        installed.resolve().relative_to(root.resolve())
+    except ValueError:
+        raise SystemExit(f"backport target escapes staged root: {relative}")
+    return installed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True, type=Path)
@@ -48,7 +69,8 @@ def main() -> None:
     args = parser.parse_args()
 
     spec = json.loads(args.spec.read_text())
-    omarchy = args.root / "usr/share/omarchy"
+    root = args.root.resolve()
+    omarchy = root / "usr/share/omarchy"
     authenticity = spec["authenticity"]
     verbatim_trees = authenticity["verbatimRuntimeTrees"]
     backported_trees = authenticity.get("backportedRuntimeTrees", [])
@@ -70,7 +92,7 @@ def main() -> None:
         if patch_digest != backport["patchSha256"]:
             raise SystemExit(f"backport patch digest mismatch: {backport['id']}")
         for target in backport["targets"]:
-            installed = omarchy / target["path"]
+            installed = installed_target_file(root, omarchy, target["path"])
             if digest_file(installed) != target["afterSha256"]:
                 raise SystemExit(f"backport target digest mismatch: {backport['id']} {target['path']}")
 

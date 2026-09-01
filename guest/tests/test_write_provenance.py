@@ -100,6 +100,30 @@ class WriteProvenanceTests(unittest.TestCase):
             self.assertIn("backport target digest mismatch", result.stderr)
             self.assertFalse(output.exists())
 
+    def test_verifies_a_staged_root_command_through_its_package_path_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, spec, _, output = self.fixture(temporary)
+            package_path = root / "usr/share/omarchy/bin/example"
+            package_path.unlink()
+            command = root / "usr/bin/example"
+            command.parent.mkdir(parents=True)
+            command.write_bytes(b"patched command\n")
+            package_path.symlink_to("/usr/bin/example")
+
+            payload = json.loads(spec.read_text(encoding="utf-8"))
+            payload["authenticity"]["backports"][0]["targets"].append(
+                {
+                    "path": "bin/example",
+                    "beforeSha256": digest(b"upstream command\n"),
+                    "afterSha256": digest(command.read_bytes()),
+                }
+            )
+            spec.write_text(json.dumps(payload), encoding="utf-8")
+
+            result = self.run_writer(root, spec, output)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(package_path.is_symlink())
+
 
 if __name__ == "__main__":
     unittest.main()
