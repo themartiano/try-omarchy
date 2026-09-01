@@ -74,7 +74,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        startMenuWindow?.refreshPermissionStatus()
+        startMenuWindow?.applicationDidBecomeActive()
     }
 
     private func showStartMenu() {

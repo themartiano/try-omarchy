@@ -64,6 +64,7 @@ final class PortForwardingEditor: NSObject, NSWindowDelegate, NSTextFieldDelegat
             defer: false
         )
         window.title = "Port Forwarding"
+        window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
         window.delegate = self

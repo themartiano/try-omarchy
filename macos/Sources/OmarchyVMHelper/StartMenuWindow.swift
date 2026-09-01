@@ -1,5 +1,19 @@
 import AppKit
 
+@MainActor
+enum StartMenuWindowChrome {
+    static func apply(to window: NSWindow) {
+        window.title = "Try Omarchy"
+        // The start menu draws its own heading inside a full-size content view.
+        // Keep the native title as the window identity, but do not composite a
+        // second copy over that custom heading in the transparent title bar.
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.isReleasedWhenClosed = false
+    }
+}
+
 private final class MouseIgnoringTextField: NSTextField {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
@@ -80,6 +94,42 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private weak var startMenuScrollView: NSScrollView?
     private(set) var portForwardingEditor: PortForwardingEditor?
     private weak var immersiveCaption: NSTextField?
+    private lazy var permissionWindowRestorer = PermissionWindowRestorer(
+        canRestore: { [weak self] in
+            guard let self else { return false }
+            return self.window.isVisible
+                && !self.launchInProgress
+                && !self.resetInProgress
+                && !self.microphoneRequestInFlight
+                && !self.cameraRequestInFlight
+                && self.window.attachedSheet == nil
+                && NSApp.modalWindow == nil
+                && self.portForwardingEditor == nil
+        },
+        isApplicationActive: { NSApp.isActive },
+        orderFrontRegardless: { [weak self] frame in
+            guard let self else { return }
+            self.window.setFrame(frame, display: false)
+            self.window.orderFrontRegardless()
+        },
+        activateApplication: {
+            // `activate(ignoringOtherApps:)` is deprecated on the deployment
+            // target. The system permission UI cooperatively yields to this
+            // modern activation request as it closes.
+            NSApp.activate()
+        },
+        makeKeyAndOrderFront: { [weak self] frame in
+            guard let self else { return }
+            self.window.setFrame(frame, display: false)
+            self.window.makeKeyAndOrderFront(nil)
+        },
+        retryDelays: [0.1, 0.3],
+        schedule: { delay, action in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                action()
+            }
+        }
+    )
 
     init(
         accessibilityStatus: @escaping () -> Bool,
@@ -140,10 +190,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         )
         super.init()
 
-        window.title = "Try Omarchy"
-        window.titlebarAppearsTransparent = true
-        window.isMovableByWindowBackground = true
-        window.isReleasedWhenClosed = false
+        StartMenuWindowChrome.apply(to: window)
         window.delegate = self
         window.contentView = content
     }
@@ -168,6 +215,13 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         render()
     }
 
+    func applicationDidBecomeActive() {
+        refreshPermissionStatus()
+        // Refresh replaces the view hierarchy, so key/front restoration must
+        // be the final operation rather than something a render can disturb.
+        permissionWindowRestorer.applicationDidBecomeActive()
+    }
+
     func promptForReset() {
         guard canResetStorage else { return }
         window.makeKeyAndOrderFront(nil)
@@ -175,6 +229,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     func dismiss() {
+        permissionWindowRestorer.cancel()
         portForwardingEditor?.dismiss()
         portForwardingEditor = nil
         window.orderOut(nil)
@@ -889,12 +944,15 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func beginAccessibilityRequest() {
+        permissionWindowRestorer.cancel()
         requestAccessibility()
         render()
     }
 
     @objc private func beginMicrophoneRequest() {
         guard microphoneStatus() == .notDetermined, !microphoneRequestInFlight else { return }
+        permissionWindowRestorer.cancel()
+        let windowFrame = window.frame
         microphoneRequestInFlight = true
         render()
         requestMicrophone { [weak self] _ in
@@ -902,12 +960,13 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 guard let self else { return }
                 self.microphoneRequestInFlight = false
                 self.render()
-                self.restoreAfterPermissionRequest()
+                self.permissionWindowRestorer.requestDidFinish(preserving: windowFrame)
             }
         }
     }
 
     @objc private func openMicrophoneSettings() {
+        permissionWindowRestorer.cancel()
         guard let url = URL(
             string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
         ) else { return }
@@ -916,6 +975,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
 
     @objc private func beginCameraRequest() {
         guard cameraStatus() == .notDetermined, !cameraRequestInFlight else { return }
+        permissionWindowRestorer.cancel()
+        let windowFrame = window.frame
         cameraRequestInFlight = true
         render()
         requestCamera { [weak self] _ in
@@ -923,20 +984,13 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 guard let self else { return }
                 self.cameraRequestInFlight = false
                 self.render()
-                self.restoreAfterPermissionRequest()
+                self.permissionWindowRestorer.requestDidFinish(preserving: windowFrame)
             }
         }
     }
 
-    private func restoreAfterPermissionRequest() {
-        // The system permission prompt can leave another process active. Since
-        // this launcher is an accessory app, ordering its window alone does not
-        // reliably raise it above windows belonging to that active app.
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
-    }
-
     @objc private func openCameraSettings() {
+        permissionWindowRestorer.cancel()
         guard let url = URL(
             string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
         ) else { return }
@@ -944,6 +998,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func openStorageLocation() {
+        permissionWindowRestorer.cancel()
         guard let storageLocationURL = storageLocationURL() else { return }
         do {
             if !FileManager.default.fileExists(atPath: storageLocationURL.path) {
@@ -993,6 +1048,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
 
     @objc private func beginStorageLocationSelection() {
         guard canResetStorage, !launchInProgress, !resetInProgress else { return }
+        permissionWindowRestorer.cancel()
         let panel = NSOpenPanel()
         panel.title = "Choose where to keep the Omarchy VM"
         panel.message = "Omarchy puts its VM files straight into the folder you choose \u{2014} it does not create a folder inside it. Pick an empty folder, or one Omarchy already uses. The drive must be APFS."
@@ -1057,6 +1113,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
               !resetInProgress,
               !microphoneRequestInFlight,
               !cameraRequestInFlight else { return }
+        permissionWindowRestorer.cancel()
         let panel = NSOpenPanel()
         panel.title = "Choose a folder to share with Omarchy"
         panel.message = "Omarchy will be able to read and change everything inside this folder, linked as ~/<folder name>."
@@ -1095,6 +1152,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
 
     @objc private func beginPortForwardingConfiguration() {
         guard !launchInProgress, !resetInProgress, portForwardingEditor == nil else { return }
+        permissionWindowRestorer.cancel()
         let editor = PortForwardingEditor(
             mappings: portForwardingStatus(),
             save: { [weak self] mappings in
@@ -1136,6 +1194,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
               !resetInProgress,
               !microphoneRequestInFlight,
               !cameraRequestInFlight else { return }
+        permissionWindowRestorer.cancel()
         let estimate = storageSpaceEstimate()
         let alert = NSAlert()
         alert.alertStyle = .critical
