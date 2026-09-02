@@ -108,6 +108,10 @@ fi
 }
 
 mkdir -p "$repo_dir/dist"
+# Keep generated development bundles out of Spotlight. The installed copy in
+# /Applications is the canonical user-facing app; indexing both makes
+# Command-Space offer an indistinguishable duplicate after a local build.
+touch "$repo_dir/dist/.metadata_never_index"
 cd "$macos_dir"
 mkdir -p "$module_cache/swift" "$module_cache/clang" "$module_cache/icon"
 export SWIFT_MODULECACHE_PATH="$module_cache/swift"

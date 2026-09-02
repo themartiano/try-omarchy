@@ -126,6 +126,13 @@ class BuildCacheTests(unittest.TestCase):
         self.assertNotEqual(0, invalid_release.returncode)
         self.assertNotIn("build-cache.py", invalid_release.stdout)
 
+    def test_development_app_is_excluded_from_spotlight(self) -> None:
+        build_script = (REPOSITORY / "macos/build-app.sh").read_text()
+        self.assertIn(
+            'touch "$repo_dir/dist/.metadata_never_index"',
+            build_script,
+        )
+
     def test_runtime_file_manifest_is_the_single_validated_closure(self) -> None:
         manifest = REPOSITORY / "macos/runtime-files.txt"
         expected = frozenset(manifest.read_text(encoding="ascii").splitlines())
