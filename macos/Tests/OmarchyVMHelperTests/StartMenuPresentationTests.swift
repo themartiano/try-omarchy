@@ -3,6 +3,105 @@ import Testing
 
 @Suite("Start menu presentation")
 struct StartMenuPresentationTests {
+    @Test("the reset notice describes actual compatibility failures, not app updates")
+    func incompatibleWorkspaceNotice() {
+        let detail = StartMenuPresentation.incompatibleWorkspaceDetail
+        #expect(detail.contains("storage or boot format"))
+        #expect(detail.contains("multiple saved VMs"))
+        #expect(detail.contains("permanently erases"))
+        #expect(!detail.contains("different Try Omarchy build"))
+    }
+
+    @Test("boot recovery notice promises preservation and no automatic upgrade")
+    func bootRecoveryNotice() {
+        let detail = StartMenuPresentation.bootRecoveryConfirmationDetail
+        #expect(detail.contains("one-time, read-only"))
+        #expect(detail.contains("saved disk"))
+        #expect(detail.contains("data remain intact"))
+        #expect(detail.contains("factory image"))
+        #expect(detail.contains("does not reset"))
+        #expect(detail.contains("upgrade Omarchy"))
+    }
+
+    @Test("continuing the one-time prompt grants consent for only that launch")
+    func bootRecoveryContinue() {
+        var promptCount = 0
+        let decision = BootRecoveryLaunchGate.decide(
+            preflight: .requiresConfirmation,
+            confirm: {
+                promptCount += 1
+                return true
+            }
+        )
+        #expect(promptCount == 1)
+        #expect(decision == .launch(allowBootRecovery: true))
+    }
+
+    @Test("cancelling the one-time prompt aborts launch")
+    func bootRecoveryCancel() {
+        var promptCount = 0
+        let decision = BootRecoveryLaunchGate.decide(
+            preflight: .requiresConfirmation,
+            confirm: {
+                promptCount += 1
+                return false
+            }
+        )
+        #expect(promptCount == 1)
+        #expect(decision == .cancel)
+    }
+
+    @Test("a paired VM suppresses the prompt and launches without consent")
+    func pairedVMSuppressesRecoveryPrompt() {
+        var promptCount = 0
+        let decision = BootRecoveryLaunchGate.decide(
+            preflight: .notRequired,
+            confirm: {
+                promptCount += 1
+                return true
+            }
+        )
+        #expect(promptCount == 0)
+        #expect(decision == .launch(allowBootRecovery: false))
+    }
+
+    @Test("the recovery handshake retries at most once per confirmation")
+    func bootRecoveryHandshakeIsBounded() {
+        let consentRequired = VMExitPresentationDecision.make(
+            status: VMExitPresentationDecision.bootRecoveryConsentRequiredStatus,
+            reachedVirtualMachineStart: false,
+            wasStopping: false
+        )
+        #expect(BootRecoveryChildExitGate.decide(
+            presentation: consentRequired,
+            launchWasAuthorized: false
+        ) == .requestConfirmation)
+
+        let accepted = BootRecoveryLaunchGate.decide(
+            preflight: .requiresConfirmation,
+            confirm: { true }
+        )
+        #expect(accepted == .launch(allowBootRecovery: true))
+        #expect(BootRecoveryChildExitGate.decide(
+            presentation: consentRequired,
+            launchWasAuthorized: true
+        ) == .reportFailure)
+
+        let recoveryFailed = VMExitPresentationDecision.make(
+            status: VMExitPresentationDecision.bootRecoveryFailedStatus,
+            reachedVirtualMachineStart: false,
+            wasStopping: false
+        )
+        #expect(BootRecoveryChildExitGate.decide(
+            presentation: recoveryFailed,
+            launchWasAuthorized: true
+        ) == .reportFailure)
+        #expect(BootRecoveryLaunchGate.decide(
+            preflight: .requiresConfirmation,
+            confirm: { false }
+        ) == .cancel)
+    }
+
     @Test("microphone permission states offer only valid actions")
     func microphoneStates() {
         let authorized = StartMenuPresentation.microphone(

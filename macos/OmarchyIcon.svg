@@ -1,7 +1,22 @@
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect x="100" y="100" width="824" height="824" rx="191" fill="#151912" stroke="#A8CD72" stroke-opacity="0.28" stroke-width="4"/>
-  <rect x="211" y="211" width="293" height="293" rx="67" fill="#A8CD72"/>
-  <rect x="581" y="211" width="231" height="231" rx="56" fill="#7C9E4C"/>
-  <rect x="211" y="581" width="231" height="231" rx="56" fill="#7C9E4C"/>
-  <rect x="521" y="521" width="291" height="291" rx="67" fill="#CAE0A6"/>
+<svg xmlns="http://www.w3.org/2000/svg"
+  width="1024" height="1024" viewBox="0 0 1024 1024"
+  role="img" aria-labelledby="title desc">
+  <title id="title">Try Omarchy app icon</title>
+  <desc id="desc">A centered green play symbol framed by Omarchy-inspired square geometry on a dark rounded tile.</desc>
+  <rect x="100" y="100" width="824" height="824" rx="191"
+    fill="#151912" stroke="#9ECE6A" stroke-opacity="0.28" stroke-width="4"/>
+  <g transform="translate(212 212) scale(2)">
+    <g fill="none" stroke="#9ECE6A" stroke-width="20"
+      stroke-linecap="butt" stroke-linejoin="miter">
+      <path d="M 0 10 H 260"/>
+      <path d="M 290 0 V 260"/>
+      <path d="M 40 290 H 300"/>
+      <path d="M 10 40 V 300"/>
+      <path d="M 120 60 H 60 V 120"/>
+      <path d="M 180 60 H 240 V 120"/>
+      <path d="M 240 180 V 240 H 180"/>
+      <path d="M 120 240 H 60 V 180"/>
+    </g>
+    <path d="M 128 112 L 194 150 L 128 188 Z" fill="#9ECE6A"/>
+  </g>
 </svg>

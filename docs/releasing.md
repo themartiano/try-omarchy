@@ -52,11 +52,29 @@ make release \
    restart preserves the persistent VM, and the documented endpoint-specific
    host-key recovery works after Reset/ephemeral replacement. Inspect the
    factory image to confirm it contains no SSH host private keys.
-4. Verify the app and DMG signatures with Apple's tools and confirm notarization.
-5. Audit `THIRD_PARTY_NOTICES.md`, the bundle's license material, the guest
+4. Install the release over a provisioned VM created by a different guest
+   build. Confirm launch preserves its disk and user data, selects the saved
+   boot kit instead of the release's bundled kernel/initramfs, and does not
+   materialize or charge free space for the new factory disk. For a schema-2 VM
+   without a boot kit, confirm the one-time read-only `/boot` export completes,
+   but only after the pre-launch dialog appears. Confirm **Cancel** starts no
+   QEMU process and changes no disk contents; confirm **Continue** performs the
+   recovery, the environment powers off without entering the old userspace,
+   and later launches do not repeat it. Separately confirm that new, reset, and
+   ephemeral VMs use the current factory.
+5. Verify the app and DMG signatures with Apple's tools and confirm notarization.
+6. Audit `THIRD_PARTY_NOTICES.md`, the bundle's license material, the guest
    package lock, and QEMU corresponding-source obligations.
-6. Record SHA-256 digests for the final app archive/DMG and publish them with the
+7. State in release notes that installing the app preserves existing VM
+   contents. Do not claim that the built-in updater reproduces factory changes:
+   the direct-boot kernel and headers, `try-omarchy-runtime`, and reviewed
+   backports remain pinned until an explicit in-guest migration channel exists.
+8. Record SHA-256 digests for the final app archive/DMG and publish them with the
    release notes.
 
 Never publish generated artifacts from an unreviewed or locally modified build
 input.
+
+The saved boot-kit ABI is a compatibility boundary. Do not change it or remove
+support for an existing value without a reviewed preserving migration or an
+explicitly confirmed reset path.

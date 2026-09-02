@@ -48,6 +48,23 @@ struct StorageLocationContractTests {
         #expect(library.contains("if [[ -n ${\(StorageLocationPolicy.environmentKey):-} ]]; then"))
     }
 
+    @Test("Swift and the launcher agree on the boot-recovery consent handshake")
+    func bootRecoveryConsentHandshake() throws {
+        let launcher = try source(named: "run-qemu-gpu.sh")
+        #expect(launcher.contains(
+            "boot_recovery_consent_required_status=\(VMExitPresentationDecision.bootRecoveryConsentRequiredStatus)"
+        ))
+        #expect(launcher.contains(
+            "boot_recovery_failed_status=\(VMExitPresentationDecision.bootRecoveryFailedStatus)"
+        ))
+        #expect(launcher.contains(
+            "case ${\(QEMUGPURuntimeEnvironment.bootRecoveryConsentKey):-0} in"
+        ))
+        #expect(launcher.contains(
+            "[[ ${\(QEMUGPURuntimeEnvironment.bootRecoveryConsentKey):-0} != 1 ]]"
+        ))
+    }
+
     private func source(named relativePath: String) throws -> String {
         let testFile = URL(fileURLWithPath: #filePath)
         let macosDirectory = testFile

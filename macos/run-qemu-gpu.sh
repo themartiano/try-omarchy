@@ -14,6 +14,17 @@ fail() {
 
 storage_mode=persistent
 reset_only=0
+boot_recovery_consent_required_status=80
+boot_recovery_failed_status=81
+# QEMU 11's HVF backend requires Apple's in-hypervisor GICv3. Keep recovery
+# and normal launches on one machine definition so they cannot drift apart.
+qemu_machine='virt,accel=hvf,gic-version=3'
+
+boot_recovery_fail() {
+  echo "run-qemu-gpu: $*" >&2
+  exit "$boot_recovery_failed_status"
+}
+
 case ${1:-} in
   --ephemeral)
     storage_mode=ephemeral
@@ -47,7 +58,7 @@ port_forwarding_library="$script_dir/qemu-port-forwarding.sh"
 [[ -d $guest_input && ! -L $guest_input ]] || fail "ARM guest directory is missing or unsafe: $guest_input"
 guest_dir=$(cd "$guest_input" && pwd -P)
 
-for command in codesign file getconf id mktemp ps sysctl; do
+for command in codesign file getconf id mktemp plutil ps sysctl; do
   command -v "$command" >/dev/null || fail "$command is required"
 done
 
@@ -977,6 +988,164 @@ reap_stale_work_dirs() {
 
 reap_stale_work_dirs
 
+boot_export_has_only_expected_contents() (
+  local candidate=''
+  local names=''
+
+  shopt -s nullglob dotglob
+  for candidate in "$1"/*; do
+    names+="${candidate##*/}"$'\n'
+  done
+  shopt -u nullglob dotglob
+  [[ $names == $'build-spec.json\ncomplete\ninitramfs\nkernel\n' ]]
+)
+
+assert_direct_owned_export_file() {
+  local path=$1
+  local label=$2
+
+  [[ -f $path && ! -L $path ]] || boot_recovery_fail "$label is missing or unsafe"
+  [[ $(_qps_lstat_kind "$path") == 'Regular File' ]] || {
+    boot_recovery_fail "$label is not a direct regular file"
+  }
+  [[ $(_qps_owner "$path") == $(id -u) ]] || {
+    boot_recovery_fail "$label is not owned by this user"
+  }
+}
+
+recover_persistent_boot_kit() {
+  local boot_export_dir="$work_dir/boot-export"
+  local recovery_argument=''
+  local recovery_command_line=''
+  local recovery_state=''
+  local recovery_status=0
+  local recovery_stopped=0
+  local attempt=0
+  local recovered_command_line=''
+
+  [[ $QEMU_SELECTED_STORAGE_MODE == persistent && \
+     -n $QEMU_PERSISTENT_STORAGE_IDENTITY ]] || {
+    boot_recovery_fail 'boot recovery requires a selected persistent VM'
+  }
+  [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 0 ]] || {
+    boot_recovery_fail 'this saved VM needs a one-time boot recovery; launch it normally before using dry-run mode'
+  }
+  mkdir -m 700 "$boot_export_dir" || boot_recovery_fail 'could not create the private boot-export directory'
+  [[ -d $boot_export_dir && ! -L $boot_export_dir ]] || {
+    boot_recovery_fail 'the private boot-export directory is unsafe'
+  }
+  [[ $(_qps_owner "$boot_export_dir") == $(id -u) && \
+     $(_qps_permissions "$boot_export_dir") == 700 ]] || {
+    boot_recovery_fail 'the private boot-export directory is not protected'
+  }
+
+  # The recovery initramfs mounts the old disk only far enough to read /boot.
+  # QEMU also exposes the block device read-only, so neither fsck nor a malformed
+  # guest can change user data while the matching boot pair is being recovered.
+  for recovery_argument in $kernel_command_line; do
+    if [[ $recovery_argument == rootflags=* ]]; then
+      continue
+    fi
+    if [[ $recovery_argument == rw ]]; then
+      recovery_argument=ro
+    fi
+    recovery_command_line+=" $recovery_argument"
+  done
+  recovery_command_line=${recovery_command_line# }
+  recovery_command_line+=' rootflags=noload fsck.mode=skip tryomarchy.export_boot=1'
+
+  echo '[qemu-gpu] Pairing the saved VM with its original boot files (one time).' >&2
+  "$qemu_bin" \
+    -name 'Try Omarchy Boot Recovery' \
+    -machine "$qemu_machine" \
+    -cpu 'host,pmu=off' \
+    -smp '2,sockets=1,cores=2,threads=1' \
+    -m 2G \
+    -nodefaults \
+    -no-reboot \
+    -display none \
+    -serial none \
+    -monitor none \
+    -qmp "unix:$qmp_socket,server=on,wait=off" \
+    -kernel "$bundled_kernel" \
+    -initrd "$bundled_initramfs" \
+    -append "$recovery_command_line" \
+    -drive "if=none,id=omarchy-recovery-root,file=$working_disk,format=raw,media=disk,cache=none,readonly=on" \
+    -device 'virtio-blk-pci,drive=omarchy-recovery-root,serial=omarchy-root' \
+    -device 'virtio-serial-pci,id=omarchy-recovery-serial' \
+    -chardev 'stdio,id=omarchy-recovery-hvc0,signal=off' \
+    -device 'virtconsole,bus=omarchy-recovery-serial.0,nr=0,chardev=omarchy-recovery-hvc0' \
+    -fsdev "local,id=omarchy-boot-export,path=$boot_export_dir,security_model=none,multidevs=remap" \
+    -device 'virtio-9p-pci,fsdev=omarchy-boot-export,mount_tag=try-omarchy-boot-export,romfile=' \
+    -add-fd "$QEMU_PERSISTENT_STORAGE_QEMU_ADD_FD" &
+  qemu_pid=$!
+  printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid" || \
+    boot_recovery_fail 'could not record the recovery process'
+  chmod 600 "$work_dir/.qemu.pid" || \
+    boot_recovery_fail 'could not protect the recovery process record'
+
+  for ((attempt = 0; attempt < 600; attempt++)); do
+    recovery_state=$(ps -p "$qemu_pid" -o state= 2>/dev/null || true)
+    if [[ -z $recovery_state || $recovery_state == *Z* ]]; then
+      recovery_stopped=1
+      break
+    fi
+    sleep 0.1
+  done
+  if (( recovery_stopped == 0 )); then
+    terminate_child "$qemu_pid" 40
+    qemu_pid=''
+    boot_recovery_fail 'the one-time boot recovery did not finish within 60 seconds'
+  fi
+  if wait "$qemu_pid"; then
+    recovery_status=0
+  else
+    recovery_status=$?
+  fi
+  qemu_pid=''
+  /bin/rm -f "$work_dir/.qemu.pid" || \
+    boot_recovery_fail 'could not clear the recovery process record'
+  [[ ! -e $qmp_socket && ! -L $qmp_socket ]] || \
+    /bin/rm -f "$qmp_socket" || boot_recovery_fail 'could not clear the recovery control socket'
+  (( recovery_status == 0 )) || {
+    boot_recovery_fail "the one-time boot recovery exited with status $recovery_status"
+  }
+
+  boot_export_has_only_expected_contents "$boot_export_dir" || {
+    boot_recovery_fail 'the one-time boot recovery did not publish an exact, complete export'
+  }
+  assert_direct_owned_export_file "$boot_export_dir/complete" 'boot-export marker'
+  assert_direct_owned_export_file "$boot_export_dir/kernel" 'recovered kernel'
+  assert_direct_owned_export_file "$boot_export_dir/initramfs" 'recovered initramfs'
+  assert_direct_owned_export_file "$boot_export_dir/build-spec.json" 'recovered build specification'
+  [[ $(_qps_size "$boot_export_dir/complete") == 27 && \
+     $(<"$boot_export_dir/complete") == try-omarchy-boot-export-v1 ]] || {
+    boot_recovery_fail 'the one-time boot recovery completion marker is invalid'
+  }
+  [[ $(_qps_size "$boot_export_dir/build-spec.json") =~ ^[1-9][0-9]*$ && \
+     $(_qps_size "$boot_export_dir/build-spec.json") -le 1048576 ]] || {
+    boot_recovery_fail 'the recovered build specification has an invalid size'
+  }
+  recovered_command_line=$(
+    /usr/bin/plutil -extract runtime.kernelCommandLine raw -expect string \
+      "$boot_export_dir/build-spec.json" 2>/dev/null
+  ) || boot_recovery_fail 'the recovered build specification has no kernel command line'
+  chmod 600 \
+    "$boot_export_dir/complete" \
+    "$boot_export_dir/kernel" \
+    "$boot_export_dir/initramfs" \
+    "$boot_export_dir/build-spec.json" || {
+      boot_recovery_fail 'could not protect the recovered boot files'
+    }
+  qemu_persistent_storage_stage_selected_boot_kit \
+    "$boot_export_dir/kernel" \
+    "$boot_export_dir/initramfs" \
+    "$recovered_command_line" || {
+      boot_recovery_fail 'could not pair the saved VM with its recovered boot files'
+    }
+  echo '[qemu-gpu] Saved VM boot files recovered; continuing normal launch.' >&2
+}
+
 umask 077
 work_dir=$(mktemp -d '/private/tmp/omarchy-qemu-gpu.XXXXXX') || {
   fail "could not create a private temporary directory"
@@ -1002,34 +1171,80 @@ clipboard_bridge_socket="/tmp/${work_dir##*/}/clipboard.sock"
 audio_route_dir="/tmp/${work_dir##*/}/audio-routes"
 mkdir -m 700 "$work_dir/audio-routes"
 
-source_disk="$guest_dir/rootfs.ext4"
-if [[ ! -e $source_disk && ! -L $source_disk ]]; then
-  qemu_persistent_storage_materialize_source \
+bundled_kernel="$guest_dir/vmlinuz-linux"
+bundled_initramfs="$guest_dir/initramfs-linux.img"
+selected_existing=0
+if [[ $storage_mode == persistent ]]; then
+  if qemu_persistent_storage_select_existing \
+    "$bundle_identity" "$bundled_kernel" "$bundled_initramfs" \
+    "$kernel_command_line"; then
+    selected_existing=1
+  else
+    storage_status=$?
+    if (( storage_status == QEMU_PERSISTENT_STORAGE_INCOMPATIBLE_STATUS )); then
+      exit "$storage_status"
+    fi
+    if (( storage_status != QEMU_PERSISTENT_STORAGE_MISSING_STATUS )); then
+      fail "could not inspect the saved VM disk"
+    fi
+  fi
+fi
+
+if (( selected_existing == 0 )); then
+  source_disk="$guest_dir/rootfs.ext4"
+  if [[ ! -e $source_disk && ! -L $source_disk ]]; then
+    qemu_persistent_storage_materialize_source \
+      "$bundle_identity" \
+      "$guest_dir/rootfs.ext4.zst" \
+      "$compressed_disk_bytes" \
+      "$source_disk_sha" \
+      "$source_disk_bytes" \
+      "$resources_dir/runtime/bin/zstd" || fail "could not materialize the bundled root disk"
+    source_disk=$QEMU_IMMUTABLE_SOURCE_DISK
+  fi
+  if qemu_persistent_storage_select \
+    "$storage_mode" \
     "$bundle_identity" \
-    "$guest_dir/rootfs.ext4.zst" \
-    "$compressed_disk_bytes" \
+    "$source_disk" \
     "$source_disk_sha" \
     "$source_disk_bytes" \
-    "$resources_dir/runtime/bin/zstd" || fail "could not materialize the bundled root disk"
-  source_disk=$QEMU_IMMUTABLE_SOURCE_DISK
-fi
-if qemu_persistent_storage_select \
-  "$storage_mode" \
-  "$bundle_identity" \
-  "$source_disk" \
-  "$source_disk_sha" \
-  "$source_disk_bytes" \
-  "$work_dir" \
-  "$expanded_disk_bytes"; then
-  :
-else
-  storage_status=$?
-  if (( storage_status == QEMU_PERSISTENT_STORAGE_INCOMPATIBLE_STATUS )); then
-    exit "$storage_status"
+    "$work_dir" \
+    "$expanded_disk_bytes" \
+    "$bundled_kernel" \
+    "$bundled_initramfs" \
+    "$kernel_command_line"; then
+    :
+  else
+    storage_status=$?
+    if (( storage_status == QEMU_PERSISTENT_STORAGE_INCOMPATIBLE_STATUS )); then
+      exit "$storage_status"
+    fi
+    fail "could not prepare the selected root disk"
   fi
-  fail "could not prepare the selected root disk"
 fi
 working_disk=$QEMU_SELECTED_DISK
+
+case ${OMARCHY_QEMU_GPU_DRY_RUN:-0} in
+  0|1) ;;
+  *) fail "OMARCHY_QEMU_GPU_DRY_RUN must be 0 or 1" ;;
+esac
+case ${OMARCHY_QEMU_GPU_ALLOW_BOOT_RECOVERY:-0} in
+  0|1) ;;
+  *) fail "OMARCHY_QEMU_GPU_ALLOW_BOOT_RECOVERY must be 0 or 1" ;;
+esac
+if (( QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY )); then
+  if [[ ${OMARCHY_QEMU_GPU_ALLOW_BOOT_RECOVERY:-0} != 1 ]]; then
+    echo '[qemu-gpu] This older saved VM needs consent for one-time read-only boot pairing.' >&2
+    exit "$boot_recovery_consent_required_status"
+  fi
+  recover_persistent_boot_kit
+fi
+launch_kernel=$QEMU_SELECTED_KERNEL
+launch_initramfs=$QEMU_SELECTED_INITRAMFS
+launch_kernel_command_line=$QEMU_SELECTED_KERNEL_COMMAND_LINE
+[[ -n $launch_kernel && -n $launch_initramfs && -n $launch_kernel_command_line ]] || {
+  fail 'the selected VM has no complete boot kit'
+}
 
 if ((reset_only)); then
   qemu_persistent_storage_release_lock
@@ -1045,9 +1260,7 @@ esac
 
 qemu_args=(
   -name 'Try Omarchy'
-  # HVF exposes the ARM virtual GICv2 interface on current Apple Silicon.
-  # Eight vCPUs is the architectural GICv2 limit and matches our host cap.
-  -machine 'virt,accel=hvf,gic-version=3'
+  -machine "$qemu_machine"
   # HVF does not provide a usable guest PMU on Apple Silicon. Do not advertise
   # one: Linux otherwise probes the dead device and prints a misleading failure.
   -cpu 'host,pmu=off'
@@ -1064,9 +1277,9 @@ qemu_args=(
   -serial none
   -monitor none
   -qmp "unix:$qmp_socket,server=on,wait=off"
-  -kernel "$guest_dir/vmlinuz-linux"
-  -initrd "$guest_dir/initramfs-linux.img"
-  -append "$kernel_command_line omarchy.qemu_virgl=1$shared_folder_kernel_argument$ssh_kernel_argument"
+  -kernel "$launch_kernel"
+  -initrd "$launch_initramfs"
+  -append "$launch_kernel_command_line omarchy.qemu_virgl=1$shared_folder_kernel_argument$ssh_kernel_argument"
   -drive "if=none,id=omarchy-root,file=$working_disk,format=raw,media=disk,cache=writeback"
   -device 'virtio-blk-pci,drive=omarchy-root,serial=omarchy-root'
   -device "$gpu_device"

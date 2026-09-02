@@ -81,9 +81,23 @@ struct QEMUGPURuntimeEnvironmentTests {
             "KEEP_ME": "yes",
             QEMUGPURuntimeEnvironment.inspectOnlyKey: "1",
             QEMUGPURuntimeEnvironment.dryRunKey: "1",
+            QEMUGPURuntimeEnvironment.bootRecoveryConsentKey: "1",
         ])
 
         #expect(environment == ["KEEP_ME": "yes"])
+    }
+
+    @Test("boot recovery consent is an explicit one-launch environment addition")
+    func addsBootRecoveryConsent() {
+        let ordinary = QEMUGPURuntimeEnvironment.sanitizedForLaunch(["KEEP_ME": "yes"])
+        let approved = QEMUGPURuntimeEnvironment.withBootRecoveryConsent(ordinary)
+
+        #expect(ordinary == ["KEEP_ME": "yes"])
+        #expect(approved == [
+            "KEEP_ME": "yes",
+            QEMUGPURuntimeEnvironment.bootRecoveryConsentKey: "1",
+        ])
+        #expect(QEMUGPURuntimeEnvironment.sanitizedForLaunch(approved) == ordinary)
     }
 
     @Test("storage reset ignores inherited integration settings")
@@ -96,6 +110,7 @@ struct QEMUGPURuntimeEnvironmentTests {
             PortForwardPolicy.environmentKey,
             QEMUGPURuntimeEnvironment.inspectOnlyKey,
             QEMUGPURuntimeEnvironment.dryRunKey,
+            QEMUGPURuntimeEnvironment.bootRecoveryConsentKey,
         ]
         var inherited = ["KEEP_ME": "yes"]
         for key in controlledKeys {

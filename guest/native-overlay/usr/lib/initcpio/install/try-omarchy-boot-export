@@ -1,0 +1,20 @@
+#!/bin/bash
+
+build() {
+  add_module 9p
+  add_module 9pnet
+  add_module 9pnet_virtio
+  add_runscript
+
+  for binary in cp mkdir mv rm stat sync; do
+    add_binary "/usr/bin/$binary"
+  done
+}
+
+help() {
+  cat <<'EOF'
+Export the installed kernel, initramfs, and recorded boot configuration to the
+launcher-owned 9p share when tryomarchy.export_boot=1 is present on the kernel
+command line.
+EOF
+}

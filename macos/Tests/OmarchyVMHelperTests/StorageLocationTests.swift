@@ -69,6 +69,47 @@ private func writeValidRootMarker(in container: URL) throws -> URL {
     return marker
 }
 
+/// Writes a persistent-disk directory in the canonical form accepted by both
+/// `recordedPersistentDisk` and `_qps_validate_recorded_workspace`.
+@discardableResult
+private func writeRecordedPersistentDisk(
+    in container: URL,
+    directoryName: String,
+    identity: String,
+    schemaVersion: Int = 2
+) throws -> URL {
+    let disks = container.appendingPathComponent("disks", isDirectory: true)
+    try FileManager.default.createDirectory(at: disks, withIntermediateDirectories: true)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: disks.path
+    )
+    let directory = disks.appendingPathComponent(directoryName, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: directory.path
+    )
+
+    let sourceSHA = String(repeating: "d", count: 64)
+    let metadata = directory.appendingPathComponent("metadata.json", isDirectory: false)
+    try Data(
+        "{\"bundleIdentity\":\"\(identity)\",\"kind\":\"omarchy-qemu-persistent-disk\",\"schemaVersion\":\(schemaVersion),\"sourceRootfs\":{\"bytes\":1,\"sha256\":\"\(sourceSHA)\"}}\n".utf8
+    ).write(to: metadata)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o600],
+        ofItemAtPath: metadata.path
+    )
+
+    let disk = directory.appendingPathComponent("rootfs.ext4", isDirectory: false)
+    try Data([0x5a]).write(to: disk)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o600],
+        ofItemAtPath: disk.path
+    )
+    return disk
+}
+
 @Suite("Storage location policy")
 struct StorageLocationPolicyTests {
     @Test("accepts an owned, empty APFS folder and uses it directly")
@@ -351,6 +392,114 @@ struct StorageLocationPolicyTests {
         }
     }
 
+    @Test("an existing VM from a previous app build is not charged for the new factory image")
+    func previousBundleDiskSkipsFactorySpaceRequirement() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        try writeValidRootMarker(in: container)
+        let previousIdentity = String(repeating: "b", count: 64)
+        try writeRecordedPersistentDisk(
+            in: container,
+            directoryName: "current",
+            identity: previousIdentity
+        )
+
+        #expect(!StorageLocationPolicy.hasMaterializedSource(
+            stateRoot: container.path,
+            identity: metrics.identity
+        ))
+        let resolution = try StorageLocationPolicy.validate(
+            container.path,
+            metrics: metrics,
+            probe: FakeVolumeProbe(result: volume(available: 1))
+        )
+        #expect(resolution.stateRoot == container.path)
+        #expect(resolution.spaceWarning == nil)
+    }
+
+    @Test("a legacy identity-scoped VM is recognized before launcher migration")
+    func legacyDiskSkipsFactorySpaceRequirement() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        try writeValidRootMarker(in: container)
+        let previousIdentity = String(repeating: "b", count: 64)
+        try writeRecordedPersistentDisk(
+            in: container,
+            directoryName: previousIdentity,
+            identity: previousIdentity
+        )
+
+        let resolution = try StorageLocationPolicy.validate(
+            container.path,
+            metrics: metrics,
+            probe: FakeVolumeProbe(result: volume(available: 1))
+        )
+        #expect(resolution.stateRoot == container.path)
+        #expect(resolution.spaceWarning == nil)
+    }
+
+    @Test("a workspace marker without a recorded disk still needs factory-image space")
+    func markerAloneDoesNotSkipFactorySpaceRequirement() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        try writeValidRootMarker(in: container)
+
+        #expect(throws: StorageLocationPolicyError.self) {
+            try StorageLocationPolicy.validate(
+                container.path,
+                metrics: metrics,
+                probe: FakeVolumeProbe(result: volume(available: 1))
+            )
+        }
+    }
+
+    @Test("an unsupported schema-1 disk does not bypass new-VM space validation")
+    func schemaOneDiskDoesNotSkipFactorySpaceRequirement() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        try writeValidRootMarker(in: container)
+        try writeRecordedPersistentDisk(
+            in: container,
+            directoryName: "current",
+            identity: String(repeating: "b", count: 64),
+            schemaVersion: 1
+        )
+
+        #expect(throws: StorageLocationPolicyError.self) {
+            try StorageLocationPolicy.validate(
+                container.path,
+                metrics: metrics,
+                probe: FakeVolumeProbe(result: volume(available: 1))
+            )
+        }
+    }
+
+    @Test("ambiguous multiple saved VMs do not bypass new-VM space validation")
+    func multipleDisksDoNotSkipFactorySpaceRequirement() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        try writeValidRootMarker(in: container)
+        try writeRecordedPersistentDisk(
+            in: container,
+            directoryName: "current",
+            identity: String(repeating: "b", count: 64)
+        )
+        let legacyIdentity = String(repeating: "c", count: 64)
+        try writeRecordedPersistentDisk(
+            in: container,
+            directoryName: legacyIdentity,
+            identity: legacyIdentity
+        )
+
+        #expect(throws: StorageLocationPolicyError.self) {
+            try StorageLocationPolicy.validate(
+                container.path,
+                metrics: metrics,
+                probe: FakeVolumeProbe(result: volume(available: 1))
+            )
+        }
+    }
+
     @Test("accepts with a warning between the floor and the comfort target")
     func warnsWhenRoomIsTight() throws {
         let container = try temporaryDirectory()
@@ -429,6 +578,85 @@ struct StorageLocationPolicyTests {
                 )
             )
         }
+    }
+}
+
+@Suite("Boot recovery preflight")
+struct BootRecoveryPreflightTests {
+    @Test("an older canonical VM without a boot kit requests one-time confirmation")
+    func olderDiskNeedsConfirmation() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        try writeValidRootMarker(in: container)
+        let previousIdentity = String(repeating: "b", count: 64)
+        try writeRecordedPersistentDisk(
+            in: container,
+            directoryName: "current",
+            identity: previousIdentity
+        )
+
+        #expect(QEMUGPUStorageSpaceEstimate.bootRecoveryPreflight(
+            environment: [StorageLocationPolicy.environmentKey: container.path],
+            bundleIdentity: metrics.identity
+        ) == .requiresConfirmation)
+    }
+
+    @Test("a legacy identity-scoped VM requests confirmation before migration")
+    func legacyDiskNeedsConfirmation() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        try writeValidRootMarker(in: container)
+        let previousIdentity = String(repeating: "b", count: 64)
+        try writeRecordedPersistentDisk(
+            in: container,
+            directoryName: previousIdentity,
+            identity: previousIdentity
+        )
+
+        #expect(QEMUGPUStorageSpaceEstimate.bootRecoveryPreflight(
+            environment: [StorageLocationPolicy.environmentKey: container.path],
+            bundleIdentity: metrics.identity
+        ) == .requiresConfirmation)
+    }
+
+    @Test("an existing boot-kit entry suppresses the one-time prompt on later launches")
+    func pairedDiskDoesNotPromptAgain() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        try writeValidRootMarker(in: container)
+        let previousIdentity = String(repeating: "b", count: 64)
+        try writeRecordedPersistentDisk(
+            in: container,
+            directoryName: "current",
+            identity: previousIdentity
+        )
+        let boot = container.appendingPathComponent("boot", isDirectory: true)
+        try FileManager.default.createDirectory(at: boot, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: boot.path)
+        let kit = boot.appendingPathComponent(previousIdentity, isDirectory: true)
+        try FileManager.default.createDirectory(at: kit, withIntermediateDirectories: false)
+
+        #expect(QEMUGPUStorageSpaceEstimate.bootRecoveryPreflight(
+            environment: [StorageLocationPolicy.environmentKey: container.path],
+            bundleIdentity: metrics.identity
+        ) == .notRequired)
+    }
+
+    @Test("a VM created from the current bundle stages its boot kit without recovery")
+    func currentDiskDoesNotNeedRecovery() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        try writeValidRootMarker(in: container)
+        try writeRecordedPersistentDisk(
+            in: container,
+            directoryName: "current",
+            identity: metrics.identity
+        )
+
+        #expect(QEMUGPUStorageSpaceEstimate.bootRecoveryPreflight(
+            environment: [StorageLocationPolicy.environmentKey: container.path],
+            bundleIdentity: metrics.identity
+        ) == .notRequired)
     }
 }
 

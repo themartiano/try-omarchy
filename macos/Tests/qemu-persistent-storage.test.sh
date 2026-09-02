@@ -7,6 +7,12 @@ native_dir=$(cd "$test_dir/.." && pwd -P)
 # shellcheck source=../qemu-persistent-storage.sh
 source "$native_dir/qemu-persistent-storage.sh"
 
+grep -Fq '/bin/rm -rf -x "$qps_discarded"' \
+  "$native_dir/qemu-persistent-storage.sh" || {
+    printf 'qemu-persistent-storage.test: structural boot reset may cross a nested mount\n' >&2
+    exit 1
+  }
+
 fail() {
   printf 'qemu-persistent-storage.test: %s\n' "$*" >&2
   exit 1
@@ -162,6 +168,60 @@ identity_bad=$(printf 'bundle-bad' | shasum -a 256 | awk '{print $1}')
 identity_expanded=$(printf 'bundle-expanded' | shasum -a 256 | awk '{print $1}')
 identity_compressed=$(printf 'bundle-compressed' | shasum -a 256 | awk '{print $1}')
 
+# Direct-kernel boots must stay paired with the userspace on each saved disk.
+# These tiny fixtures carry the two file signatures enforced by the storage
+# library while remaining visibly different across bundle generations.
+kernel_a="$test_root/kernel-a"
+kernel_b="$test_root/kernel-b"
+initramfs_a="$test_root/initramfs-a"
+initramfs_b="$test_root/initramfs-b"
+initramfs_zstd="$test_root/initramfs-zstd"
+initramfs_zstd_truncated="$test_root/initramfs-zstd-truncated"
+dd if=/dev/zero of="$kernel_a" bs=1 count=64 >/dev/null 2>&1
+dd if=/dev/zero of="$kernel_b" bs=1 count=64 >/dev/null 2>&1
+printf 'A' | dd of="$kernel_a" bs=1 seek=0 conv=notrunc >/dev/null 2>&1
+printf 'B' | dd of="$kernel_b" bs=1 seek=0 conv=notrunc >/dev/null 2>&1
+printf '\x41\x52\x4d\x64' | dd of="$kernel_a" bs=1 seek=56 conv=notrunc >/dev/null 2>&1
+printf '\x41\x52\x4d\x64' | dd of="$kernel_b" bs=1 seek=56 conv=notrunc >/dev/null 2>&1
+printf '070701initramfs-a\n' >"$initramfs_a"
+printf '070701initramfs-b\n' >"$initramfs_b"
+printf '\x28\xb5\x2f\xfdzstd-initramfs\n' >"$initramfs_zstd"
+printf '\x28\xb5\x2f\xfd' >"$initramfs_zstd_truncated"
+kernel_command_line_a='root=/dev/vda rw rootwait console=tty0 console=hvc0 loglevel=4'
+kernel_command_line_b='root=/dev/vda rw rootwait console=tty0 console=hvc0 loglevel=5'
+
+# Inspecting a new location reports "missing" without asking for, copying, or
+# materializing a factory disk. A full selection then creates the VM and pairs
+# it with the current bundle's boot files.
+export OMARCHY_QEMU_GPU_STATE_ROOT="$test_root/missing-state"
+export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=0
+assert_status "$QEMU_PERSISTENT_STORAGE_MISSING_STATUS" \
+  qemu_persistent_storage_select_existing \
+    "$identity_a" "$kernel_a" "$initramfs_a" "$kernel_command_line_a"
+assert test ! -e "$OMARCHY_QEMU_GPU_STATE_ROOT/disks/current"
+qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" '' \
+  "$source_bytes" "$kernel_a" "$initramfs_a" "$kernel_command_line_a"
+assert cmp -s "$QEMU_SELECTED_KERNEL" "$kernel_a"
+assert cmp -s "$QEMU_SELECTED_INITRAMFS" "$initramfs_a"
+assert_eq "$QEMU_SELECTED_KERNEL_COMMAND_LINE" "$kernel_command_line_a"
+assert_eq "$QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY" 0
+qemu_persistent_storage_release_lock
+
+# The published v0.1.0 and v0.2.0 images used mkinitcpio's zstd compression.
+# Their saved VMs must be able to retain the exact compressed initramfs too.
+export OMARCHY_QEMU_GPU_STATE_ROOT="$test_root/zstd-boot-state"
+qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" '' \
+  "$source_bytes" "$kernel_a" "$initramfs_zstd" "$kernel_command_line_a"
+assert cmp -s "$QEMU_SELECTED_INITRAMFS" "$initramfs_zstd"
+qemu_persistent_storage_release_lock
+assert_fails _qps_assert_boot_source_file \
+  "$initramfs_zstd_truncated" 'truncated zstd initramfs' 1073741824
+
+export OMARCHY_QEMU_GPU_STATE_ROOT="$test_root/state"
+export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=1
+
 # A compressed app payload is expanded once into the private immutable-image
 # cache, verified against the raw manifest digest, and reused thereafter.
 compressed_disk="$test_root/source.ext4.zst"
@@ -230,37 +290,138 @@ assert test "$persistent_b" != "$persistent_a"
 assert cmp -s "$persistent_b" "$source_disk"
 qemu_persistent_storage_release_lock
 
-# A user-facing launch must never relabel an older factory disk as a newer app
-# build. The mismatch is reported with a dedicated status, leaves every byte
-# untouched, and only the explicit reset replaces it with the new factory.
+# A release update reuses the one saved VM across bundle identities. The disk
+# keeps its recorded identity and original boot kit; the newer factory image
+# and boot files are relevant only after an explicit reset.
 export OMARCHY_QEMU_GPU_STATE_ROOT="$test_root/single-state"
 export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=1
 qemu_persistent_storage_select \
-  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" '' \
+  "$source_bytes" "$kernel_a" "$initramfs_a" "$kernel_command_line_a"
 legacy_single_disk=$QEMU_SELECTED_DISK
 printf 'single-user-data' | dd of="$legacy_single_disk" bs=1 seek=512 conv=notrunc >/dev/null 2>&1
 legacy_single_metadata_sha=$(shasum -a 256 "${legacy_single_disk%/*}/metadata.json" | awk '{print $1}')
 qemu_persistent_storage_release_lock
 
 export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=0
-assert_status "$QEMU_PERSISTENT_STORAGE_INCOMPATIBLE_STATUS" \
-  qemu_persistent_storage_select \
-    persistent "$identity_b" "$source_disk_b" "$source_sha_b" "$source_bytes_b" ''
-assert test -f "$legacy_single_disk"
-assert_eq "$(dd if="$legacy_single_disk" bs=1 skip=512 count=16 2>/dev/null)" single-user-data
+qemu_persistent_storage_select_existing \
+  "$identity_b" "$kernel_b" "$initramfs_b" "$kernel_command_line_b"
+single_disk=$QEMU_SELECTED_DISK
+assert_eq "$single_disk" "$OMARCHY_QEMU_GPU_STATE_ROOT/disks/current/rootfs.ext4"
+assert test ! -e "$legacy_single_disk"
+assert_eq "$(dd if="$single_disk" bs=1 skip=512 count=16 2>/dev/null)" single-user-data
 assert_eq \
-  "$(shasum -a 256 "${legacy_single_disk%/*}/metadata.json" | awk '{print $1}')" \
+  "$(shasum -a 256 "${single_disk%/*}/metadata.json" | awk '{print $1}')" \
   "$legacy_single_metadata_sha"
-assert test ! -e "$OMARCHY_QEMU_GPU_STATE_ROOT/disks/current"
+assert_eq "$QEMU_PERSISTENT_STORAGE_IDENTITY" "$identity_a"
+assert_eq "$QEMU_SELECTED_KERNEL" "$OMARCHY_QEMU_GPU_STATE_ROOT/boot/$identity_a/kernel"
+assert_eq "$QEMU_SELECTED_INITRAMFS" "$OMARCHY_QEMU_GPU_STATE_ROOT/boot/$identity_a/initramfs"
+assert cmp -s "$QEMU_SELECTED_KERNEL" "$kernel_a"
+assert cmp -s "$QEMU_SELECTED_INITRAMFS" "$initramfs_a"
+assert_eq "$QEMU_SELECTED_KERNEL_COMMAND_LINE" "$kernel_command_line_a"
+assert_eq "$QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY" 0
+assert test ! -e "$OMARCHY_QEMU_GPU_STATE_ROOT/boot/$identity_b"
+qemu_persistent_storage_release_lock
 
 qemu_persistent_storage_select \
-  reset "$identity_b" "$source_disk_b" "$source_sha_b" "$source_bytes_b" ''
+  reset "$identity_b" "$source_disk_b" "$source_sha_b" "$source_bytes_b" '' \
+  "$source_bytes_b" "$kernel_b" "$initramfs_b" "$kernel_command_line_b"
 single_disk=$QEMU_SELECTED_DISK
 assert_eq "$single_disk" "$OMARCHY_QEMU_GPU_STATE_ROOT/disks/current/rootfs.ext4"
 assert cmp -s "$single_disk" "$source_disk_b"
-assert test ! -e "$legacy_single_disk"
 assert grep -Fq '"schemaVersion":2' "${single_disk%/*}/metadata.json"
 assert grep -Fq "\"bundleIdentity\":\"$identity_b\"" "${single_disk%/*}/metadata.json"
+assert_eq "$QEMU_PERSISTENT_STORAGE_IDENTITY" "$identity_b"
+assert cmp -s "$QEMU_SELECTED_KERNEL" "$kernel_b"
+assert cmp -s "$QEMU_SELECTED_INITRAMFS" "$initramfs_b"
+assert_eq "$QEMU_SELECTED_KERNEL_COMMAND_LINE" "$kernel_command_line_b"
+assert_eq "$QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY" 0
+assert test ! -e "$OMARCHY_QEMU_GPU_STATE_ROOT/boot/$identity_a"
+qemu_persistent_storage_release_lock
+
+# Schema-2 disks created before boot kits existed remain reusable. Selection
+# reports that one-time recovery is needed without substituting the new app's
+# kernel; the launcher can then stage the files exported from the old disk.
+export OMARCHY_QEMU_GPU_STATE_ROOT="$test_root/boot-recovery-state"
+export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=0
+qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+recovery_disk=$QEMU_SELECTED_DISK
+printf 'recovery-user-data' | dd of="$recovery_disk" bs=1 seek=544 conv=notrunc >/dev/null 2>&1
+qemu_persistent_storage_release_lock
+
+qemu_persistent_storage_select_existing \
+  "$identity_b" "$kernel_b" "$initramfs_b" "$kernel_command_line_b"
+assert_eq "$QEMU_PERSISTENT_STORAGE_IDENTITY" "$identity_a"
+assert_eq "$QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY" 1
+assert_eq "$QEMU_SELECTED_KERNEL" ''
+assert_eq "$QEMU_SELECTED_INITRAMFS" ''
+assert_eq "$QEMU_SELECTED_KERNEL_COMMAND_LINE" ''
+assert test ! -e "$OMARCHY_QEMU_GPU_STATE_ROOT/boot/$identity_b"
+qemu_persistent_storage_stage_selected_boot_kit \
+  "$kernel_a" "$initramfs_a" "$kernel_command_line_a"
+assert_eq "$QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY" 0
+assert_eq "$QEMU_SELECTED_KERNEL" "$OMARCHY_QEMU_GPU_STATE_ROOT/boot/$identity_a/kernel"
+assert cmp -s "$QEMU_SELECTED_KERNEL" "$kernel_a"
+assert cmp -s "$QEMU_SELECTED_INITRAMFS" "$initramfs_a"
+assert_eq "$QEMU_SELECTED_KERNEL_COMMAND_LINE" "$kernel_command_line_a"
+assert_eq "$(dd if="$QEMU_SELECTED_DISK" bs=1 skip=544 count=18 2>/dev/null)" recovery-user-data
+qemu_persistent_storage_release_lock
+
+# A boot kit is security-sensitive executable input. Hash corruption and
+# symlink substitution both fail closed while leaving the VM disk untouched.
+printf 'X' | dd \
+  of="$OMARCHY_QEMU_GPU_STATE_ROOT/boot/$identity_a/kernel" \
+  bs=1 seek=0 conv=notrunc >/dev/null 2>&1
+assert_status 1 qemu_persistent_storage_select_existing \
+  "$identity_b" "$kernel_b" "$initramfs_b" "$kernel_command_line_b"
+assert_eq "$(dd if="$recovery_disk" bs=1 skip=544 count=18 2>/dev/null)" recovery-user-data
+
+export OMARCHY_QEMU_GPU_STATE_ROOT="$test_root/symlink-boot-state"
+qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" '' \
+  "$source_bytes" "$kernel_a" "$initramfs_a" "$kernel_command_line_a"
+symlink_boot_disk=$QEMU_SELECTED_DISK
+printf 'symlink-user-data' | dd of="$symlink_boot_disk" bs=1 seek=576 conv=notrunc >/dev/null 2>&1
+qemu_persistent_storage_release_lock
+/bin/rm -f "$OMARCHY_QEMU_GPU_STATE_ROOT/boot/$identity_a/kernel"
+ln -s "$kernel_a" "$OMARCHY_QEMU_GPU_STATE_ROOT/boot/$identity_a/kernel"
+assert_status 1 qemu_persistent_storage_select_existing \
+  "$identity_b" "$kernel_b" "$initramfs_b" "$kernel_command_line_b"
+assert test -L "$OMARCHY_QEMU_GPU_STATE_ROOT/boot/$identity_a/kernel"
+assert_eq "$(dd if="$symlink_boot_disk" bs=1 skip=576 count=17 2>/dev/null)" symlink-user-data
+
+# Reset is the escape hatch for an unusable boot kit. It removes the exact
+# app-owned entry without following corrupt contents such as this symlink.
+qemu_persistent_storage_select \
+  reset "$identity_b" "$source_disk_b" "$source_sha_b" "$source_bytes_b" '' \
+  "$source_bytes_b" "$kernel_b" "$initramfs_b" "$kernel_command_line_b"
+assert cmp -s "$QEMU_SELECTED_DISK" "$source_disk_b"
+assert cmp -s "$QEMU_SELECTED_KERNEL" "$kernel_b"
+assert cmp -s "$QEMU_SELECTED_INITRAMFS" "$initramfs_b"
+assert test -f "$kernel_a"
+assert test ! -e "$OMARCHY_QEMU_GPU_STATE_ROOT/boot/$identity_a"
+qemu_persistent_storage_release_lock
+
+# An interrupted earlier reset may have removed the disk before its corrupt
+# current-identity boot kit. A new confirmed reset must still clear that orphan
+# and publish a complete fresh disk/boot pair.
+export OMARCHY_QEMU_GPU_STATE_ROOT="$test_root/orphan-boot-state"
+qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" '' \
+  "$source_bytes" "$kernel_a" "$initramfs_a" "$kernel_command_line_a"
+orphan_boot_disk_directory=${QEMU_SELECTED_DISK%/*}
+qemu_persistent_storage_release_lock
+/bin/rm -rf "$orphan_boot_disk_directory"
+printf 'X' | dd \
+  of="$OMARCHY_QEMU_GPU_STATE_ROOT/boot/$identity_a/kernel" \
+  bs=1 seek=0 conv=notrunc >/dev/null 2>&1
+qemu_persistent_storage_select \
+  reset "$identity_a" "$source_disk" "$source_sha" "$source_bytes" '' \
+  "$source_bytes" "$kernel_a" "$initramfs_a" "$kernel_command_line_a"
+assert cmp -s "$QEMU_SELECTED_DISK" "$source_disk"
+assert cmp -s "$QEMU_SELECTED_KERNEL" "$kernel_a"
+assert cmp -s "$QEMU_SELECTED_INITRAMFS" "$initramfs_a"
 qemu_persistent_storage_release_lock
 
 # Schema 1 is never trusted for launch, even if it claims the current bundle:
