@@ -5,6 +5,34 @@ import Testing
 @Suite("Start menu width", .serialized)
 @MainActor
 struct StartMenuWindowWidthTests {
+    @Test("reset confirmation requires the exact application name")
+    func resetConfirmationIsTypedAndExact() {
+        let prompt = ResetConfirmationPrompt(detail: "This cannot be undone.")
+        #expect(prompt.confirmationField.identifier?.rawValue == "reset-confirmation-field")
+        #expect(!prompt.resetButton.isEnabled)
+
+        for invalidValue in [
+            "try omarchy",
+            "TRY OMARCHY",
+            "Try Omarchy ",
+            " Try Omarchy",
+        ] {
+            prompt.confirmationField.stringValue = invalidValue
+            NotificationCenter.default.post(
+                name: NSControl.textDidChangeNotification,
+                object: prompt.confirmationField
+            )
+            #expect(!prompt.resetButton.isEnabled)
+        }
+
+        prompt.confirmationField.stringValue = "Try Omarchy"
+        NotificationCenter.default.post(
+            name: NSControl.textDidChangeNotification,
+            object: prompt.confirmationField
+        )
+        #expect(prompt.resetButton.isEnabled)
+    }
+
     @Test("dynamic storage details cannot widen or escape the start menu")
     func storageDetailsStayWithinMenuWidth() throws {
         _ = NSApplication.shared

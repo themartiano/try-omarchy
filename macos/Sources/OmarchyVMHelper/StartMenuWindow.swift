@@ -1,5 +1,101 @@
 import AppKit
 
+enum ResetConfirmationPolicy {
+    static let requiredText = "Try Omarchy"
+
+    static func allowsReset(_ text: String) -> Bool {
+        text == requiredText
+    }
+}
+
+@MainActor
+final class ResetConfirmationPrompt {
+    let alert: NSAlert
+    let confirmationField: NSTextField
+    let resetButton: NSButton
+
+    private var textChangeObserver: NSObjectProtocol?
+
+    init(detail: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Reset Omarchy to factory settings?"
+        alert.informativeText = detail
+        alert.addButton(withTitle: "Cancel")
+        let resetButton = alert.addButton(withTitle: "Reset")
+        resetButton.hasDestructiveAction = true
+        resetButton.isEnabled = false
+
+        let instruction = NSTextField(
+            labelWithString: "Type \(ResetConfirmationPolicy.requiredText) to confirm"
+        )
+        instruction.font = .systemFont(ofSize: 12, weight: .medium)
+        instruction.translatesAutoresizingMaskIntoConstraints = false
+
+        let confirmationField = NSTextField(string: "")
+        confirmationField.placeholderString = ResetConfirmationPolicy.requiredText
+        confirmationField.identifier = NSUserInterfaceItemIdentifier("reset-confirmation-field")
+        confirmationField.setAccessibilityLabel(
+            "Type \(ResetConfirmationPolicy.requiredText) to confirm reset"
+        )
+        confirmationField.translatesAutoresizingMaskIntoConstraints = false
+
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 52))
+        accessory.addSubview(instruction)
+        accessory.addSubview(confirmationField)
+        NSLayoutConstraint.activate([
+            instruction.leadingAnchor.constraint(equalTo: accessory.leadingAnchor),
+            instruction.trailingAnchor.constraint(lessThanOrEqualTo: accessory.trailingAnchor),
+            instruction.topAnchor.constraint(equalTo: accessory.topAnchor),
+            confirmationField.leadingAnchor.constraint(equalTo: accessory.leadingAnchor),
+            confirmationField.trailingAnchor.constraint(equalTo: accessory.trailingAnchor),
+            confirmationField.topAnchor.constraint(equalTo: instruction.bottomAnchor, constant: 7),
+            confirmationField.bottomAnchor.constraint(equalTo: accessory.bottomAnchor),
+        ])
+        alert.accessoryView = accessory
+
+        self.alert = alert
+        self.confirmationField = confirmationField
+        self.resetButton = resetButton
+        textChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSControl.textDidChangeNotification,
+            object: confirmationField,
+            queue: .main
+        ) { [weak confirmationField, weak resetButton] _ in
+            resetButton?.isEnabled = ResetConfirmationPolicy.allowsReset(
+                confirmationField?.stringValue ?? ""
+            )
+        }
+    }
+
+    deinit {
+        if let textChangeObserver {
+            NotificationCenter.default.removeObserver(textChangeObserver)
+        }
+    }
+
+    func present(for window: NSWindow, completion: @escaping (Bool) -> Void) {
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else {
+                completion(false)
+                return
+            }
+            let confirmed = response == .alertSecondButtonReturn
+                && ResetConfirmationPolicy.allowsReset(confirmationField.stringValue)
+            completion(confirmed)
+        }
+        DispatchQueue.main.async { [weak window, weak confirmationField] in
+            guard let window, let confirmationField else { return }
+            window.makeFirstResponder(confirmationField)
+        }
+    }
+
+    func cancel(in window: NSWindow) {
+        guard window.attachedSheet === alert.window else { return }
+        window.endSheet(alert.window, returnCode: .alertFirstButtonReturn)
+    }
+}
+
 @MainActor
 enum StartMenuWindowChrome {
     static func apply(to window: NSWindow) {
@@ -121,6 +217,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private var resetInProgress = false
     private var launchInProgress = false
     private var pendingResetSpaceEstimate: String?
+    private var resetConfirmationPrompt: ResetConfirmationPrompt?
     private weak var startMenuScrollView: NSScrollView?
     private(set) var portForwardingEditor: PortForwardingEditor?
     private weak var immersiveCaption: NSTextField?
@@ -266,6 +363,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
 
     func dismiss() {
         permissionWindowRestorer.cancel()
+        resetConfirmationPrompt?.cancel(in: window)
+        resetConfirmationPrompt = nil
         portForwardingEditor?.dismiss()
         portForwardingEditor = nil
         window.orderOut(nil)
@@ -1249,12 +1348,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
               !launchInProgress,
               !resetInProgress,
               !microphoneRequestInFlight,
-              !cameraRequestInFlight else { return }
+              !cameraRequestInFlight,
+              resetConfirmationPrompt == nil else { return }
         permissionWindowRestorer.cancel()
         let estimate = storageSpaceEstimate()
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "Reset Omarchy to factory settings?"
         var detail = "This permanently erases everything in this Omarchy virtual machine, including apps, files, accounts, and settings. This cannot be undone or recovered."
         // With a chosen data folder there can be more than one workspace on the
         // Mac, so say which one is about to be erased.
@@ -1277,15 +1374,19 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         if let estimate {
             detail += " Resetting may free up to \(estimate) of disk space."
         }
-        alert.informativeText = detail
-        alert.addButton(withTitle: "Cancel")
-        let resetButton = alert.addButton(withTitle: "Reset")
-        resetButton.hasDestructiveAction = true
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
-        pendingResetSpaceEstimate = estimate
-        resetInProgress = true
-        render()
-        resetStorage()
+        let prompt = ResetConfirmationPrompt(detail: detail)
+        resetConfirmationPrompt = prompt
+        prompt.present(for: window) { [weak self, weak prompt] confirmed in
+            guard let self,
+                  let prompt,
+                  resetConfirmationPrompt === prompt else { return }
+            resetConfirmationPrompt = nil
+            guard confirmed else { return }
+            pendingResetSpaceEstimate = estimate
+            resetInProgress = true
+            render()
+            resetStorage()
+        }
     }
 
     @objc private func launchOmarchy() {
