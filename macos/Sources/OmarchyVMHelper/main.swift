@@ -128,7 +128,11 @@ do {
         // isolated while `NSApplication.run()` services its event loop.
         let status = MainActor.assumeIsolated { () -> Int32 in
             let application = NSApplication.shared
-            application.setActivationPolicy(.accessory)
+            application.setActivationPolicy(ApplicationPresentation.prelaunchActivationPolicy)
+            ApplicationPresentation.installMainMenu(
+                in: application,
+                applicationName: "Try Omarchy"
+            )
             let controller = VMApplicationController(
                 launcherURL: launcher,
                 initialArguments: launcherArguments

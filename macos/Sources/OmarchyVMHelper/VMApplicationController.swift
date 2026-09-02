@@ -414,6 +414,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
 
     private func virtualMachineDidStart() {
         virtualMachineReachedStart = true
+        NSApp.setActivationPolicy(ApplicationPresentation.runningActivationPolicy)
         startMenuWindow?.dismiss()
         startMenuWindow = nil
     }
