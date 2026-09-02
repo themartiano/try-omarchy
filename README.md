@@ -261,6 +261,8 @@ does not remove or replace this data. An existing VM keeps both its writable
 disk and the exact kernel, initramfs, and base command line that were paired
 with that disk. A newer app's bundled factory image is used only to create a
 new VM, after a confirmed **Reset Omarchy**, or for an ephemeral launch.
+Before Reset is enabled, the confirmation sheet requires typing `Try Omarchy`
+exactly; cancelling the sheet returns to the start menu without changing the VM.
 
 VMs created before paired boot files were introduced are preserved too. On the
 first launch that needs them, Try Omarchy explains the transition in a

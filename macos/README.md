@@ -73,6 +73,9 @@ base command line over a private 9p share, and powers off without entering the
 old userspace. The launcher validates and atomically stages that boot kit before
 the normal launch. Unsupported storage or boot ABIs, and ambiguous multiple
 legacy disks, still use the user-facing, confirmed Reset Omarchy flow.
+That destructive flow keeps **Reset** disabled until the user types
+`Try Omarchy` exactly in a native sheet. Cancelling or dismissing the sheet
+returns control without invoking the storage reset.
 
 The start menu can move that workspace to any APFS folder the user picks; the
 folder is used exactly as chosen, never with a folder created inside it — a
