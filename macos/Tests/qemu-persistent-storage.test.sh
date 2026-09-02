@@ -466,8 +466,8 @@ if [[ ! -x $qemu_bin ]]; then
   printf 'qemu-persistent-storage.test: SKIP staged-QEMU lock inheritance (binary absent)\n' >&2
 else
   qemu_version=$($qemu_bin --version | sed -n '1p')
-  [[ $qemu_version == 'QEMU emulator version 10.2.50' ]] || {
-    fail "staged QEMU version is not 10.2.50: $qemu_version"
+  [[ $qemu_version == 'QEMU emulator version 11.1.1' ]] || {
+    fail "staged QEMU version is not 11.1.1: $qemu_version"
   }
   holder_pid_file="$test_root/qemu-launcher.pid"
   qemu_pid_file="$test_root/qemu.pid"

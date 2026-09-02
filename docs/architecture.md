@@ -33,6 +33,13 @@ inside Linux. Graphics travel from Linux through virtio-gpu and VirGL to the
 native Cocoa window. Storage, networking, audio, and input use their matching
 QEMU virtual devices and host backends.
 
+Before the real VM starts, the launcher asks the bundled QEMU to create a tiny
+disposable HVF machine with ARM virtualization extensions and Apple's platform
+GICv3. On M3 and newer Apple Silicon that probe succeeds, so the real guest
+starts at EL2 and Linux exposes `/dev/kvm`; on older chips the launcher keeps
+the existing platform-GIC/EL1 configuration. The pinned QEMU 11.1.1 runtime
+contains the upstream HVF vGIC and nested-virtualization implementation.
+
 One small host-integration channel sits beside those devices. A virtio-serial
 port (`dev.tryomarchy.clipboard`) carries newline-delimited JSON between a
 Swift bridge on the Mac, which watches the `NSPasteboard` change count, and a
@@ -99,7 +106,8 @@ creates the account on first boot.
 - The Swift code is a separate macOS launcher and helper.
 - A few QEMU C and Objective-C files are patched before QEMU is compiled. These
   patches cover the Cocoa app identity, display behavior, graphics integration,
-  host audio-device routing, and shared-folder ownership mapping.
+  host audio-device routing, and shared-folder ownership mapping. Nested
+  virtualization uses QEMU's upstream Apple HVF implementation unchanged.
 - The pinned Omarchy runtime trees are copied from upstream. Reviewed temporary
   backports are applied strictly against declared file hashes and recorded in
   artifact provenance. Guest overlays add the QEMU and ARM64 integration around

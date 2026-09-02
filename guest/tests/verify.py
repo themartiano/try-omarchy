@@ -289,6 +289,21 @@ def main() -> None:
         "rounded-border Hyprland patch digest matches the build spec",
     )
     launcher = read(REPO / "macos/run-qemu-gpu.sh")
+    runtime_preparer = read(REPO / "macos/prepare-qemu-gpu-runtime.sh")
+    check(
+        "hv_vm_config_set_el2_enabled" in runtime_preparer
+        and "hv_gic_create" in runtime_preparer
+        and "virtualization=<bool>" in runtime_preparer,
+        "runtime validation requires the HVF EL2 and platform-GIC contract",
+    )
+    check(
+        "virt,gic-version=3,virtualization=on" in launcher
+        and "hvf,kernel-irqchip=on" in launcher
+        and "virt,accel=hvf,gic-version=3" in launcher
+        and '{"execute":"qmp_capabilities"}' in launcher
+        and "Nested virtualization is enabled." in launcher,
+        "native launcher probes nested HVF and preserves the older-Mac fallback",
+    )
     hyprland_identity = hashlib.sha256(
         json.dumps(
             hyprland,

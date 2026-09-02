@@ -11,6 +11,7 @@ Try Omarchy is not official or affiliated with Omarchy.
 ## Highlights
 
 - Hardware-accelerated ARM64 virtualization and VirGL graphics
+- Nested KVM virtualization on M3 and newer Apple Silicon
 - Resizable native window with automatic guest resolution and HiDPI scale updates
 - Mac audio input/output selection inside Omarchy, with live routing and system-default fallback
 - FaceTime HD and other Mac cameras exposed to Omarchy as an on-demand 720p webcam
@@ -248,6 +249,10 @@ the same Mac; guest SSH authentication is still required.
 - Apple Silicon Mac (`arm64`)
 - macOS 15 or newer
 - At least 8 GB free initially
+
+On M3 and newer Apple Silicon, Try Omarchy also exposes ARM EL2 to Linux, so
+the guest provides `/dev/kvm` for nested VMs and compatible VMMs. Older Apple
+Silicon Macs automatically keep the normal non-nested launch path.
 
 ## Data and updates
 
