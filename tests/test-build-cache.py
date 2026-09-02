@@ -223,6 +223,25 @@ class BuildCacheTests(unittest.TestCase):
             with self.assertRaisesRegex(build_cache.CacheError, "metadata changed"):
                 build_cache.validate_guest(root, {"outputs": snapshot})
 
+    def test_app_validation_requires_packaged_icon(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "dist/Try Omarchy.app"
+            for relative in (
+                "Contents/MacOS/omarchy-vm-helper",
+                "Contents/Resources/runtime/bin/Try Omarchy",
+                "Contents/Resources/guest/rootfs.ext4.zst",
+                "Contents/Resources/guest/launch.plist",
+            ):
+                path = app / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fixture\n")
+
+            with self.assertRaisesRegex(
+                build_cache.CacheError, "app bundle is missing or unsafe"
+            ):
+                build_cache.validate_app(root, None)
+
     def test_state_write_is_readable_and_replaces_old_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state = Path(temporary) / "state/component.json"

@@ -31,6 +31,36 @@ private final class PermissionActionButton: NSButton {
     }
 }
 
+final class PermissionCardView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configureLayer()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureLayer()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBorderColor()
+    }
+
+    private func configureLayer() {
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.borderWidth = 1
+        updateBorderColor()
+    }
+
+    private func updateBorderColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.borderColor = NSColor.separatorColor.cgColor
+        }
+    }
+}
+
 private final class LinkCursorTextField: NSTextField {
     override func resetCursorRects() {
         super.resetCursorRects()
@@ -490,11 +520,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             row.widthAnchor.constraint(equalTo: permissionRows.widthAnchor).isActive = true
         }
 
-        let permissionCard = NSView()
-        permissionCard.wantsLayer = true
-        permissionCard.layer?.cornerRadius = 12
-        permissionCard.layer?.borderWidth = 1
-        permissionCard.layer?.borderColor = NSColor.separatorColor.cgColor
+        let permissionCard = PermissionCardView(frame: .zero)
         permissionCard.addSubview(permissionRows)
         NSLayoutConstraint.activate([
             permissionRows.leadingAnchor.constraint(equalTo: permissionCard.leadingAnchor, constant: 20),

@@ -1,4 +1,8 @@
-# Try Omarchy
+<p align="center">
+  <img src="macos/OmarchyIcon.svg" width="128" height="128" alt="Try Omarchy logo">
+</p>
+
+<h1 align="center">Try Omarchy</h1>
 
 Run the upstream [Omarchy](https://github.com/basecamp/omarchy) desktop as a native, hardware-accelerated app on an Apple Silicon Mac.
 
