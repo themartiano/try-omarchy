@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# omarchy:summary=Open the Omarchy background switcher
+# omarchy:group=theme
+# omarchy:name=bg-switcher
+# omarchy:aliases=omarchy background
+
+theme_name=$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null)
+current_background=$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null)
+
+# Try Omarchy seeds its wallpaper in the supported user background directory.
+# List that directory first so the seeded wallpaper is the picker's first card.
+omarchy-menu-images \
+  --selected "$current_background" \
+  "$HOME/.config/omarchy/backgrounds/$theme_name" \
+  "$HOME/.local/state/omarchy/current/theme/backgrounds"

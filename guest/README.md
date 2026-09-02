@@ -47,6 +47,14 @@ provenance, package inventory, licenses, manifest, and SHA-256 sums. Generated
 output belongs under the repository's ignored `dist/` directory and must not be
 committed.
 
+The default Tokyo Night wallpaper is seeded as a per-user background at
+`native-overlay/etc/skel/.config/omarchy/backgrounds/tokyo-night/try-omarchy-wallpaper.jpg`.
+Omarchy checks that directory before the packaged theme backgrounds during
+first-time owner provisioning, so the project image becomes the default without
+changing the pinned upstream theme tree. The narrowly audited
+`omarchy-theme-bg-switcher` override passes the same directory to the picker
+first, making the project wallpaper its first option as well.
+
 OpenSSH is an explicit factory package. A systemd generator requests the vendor
 `sshd.service` only for a boot carrying the exact
 `tryomarchy.ssh_access=1` kernel token, which the Mac launcher derives from a

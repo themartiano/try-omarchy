@@ -20,6 +20,10 @@ from pathlib import Path
 
 GUEST = Path(__file__).resolve().parents[1]
 REPO = GUEST.parent
+DEFAULT_WALLPAPER = (
+    GUEST
+    / "native-overlay/etc/skel/.config/omarchy/backgrounds/tokyo-night/try-omarchy-wallpaper.jpg"
+)
 
 
 def check(condition: bool, message: str) -> None:
@@ -36,6 +40,53 @@ def json_file(path: Path) -> dict:
     value = json.loads(read(path))
     check(isinstance(value, dict), f"{path.name} contains a JSON object")
     return value
+
+
+def jpeg_dimensions(data: bytes) -> tuple[int, int]:
+    if not data.startswith(b"\xff\xd8"):
+        raise ValueError("not a JPEG image")
+
+    start_of_frame = {
+        0xC0,
+        0xC1,
+        0xC2,
+        0xC3,
+        0xC5,
+        0xC6,
+        0xC7,
+        0xC9,
+        0xCA,
+        0xCB,
+        0xCD,
+        0xCE,
+        0xCF,
+    }
+    offset = 2
+    while offset < len(data):
+        while offset < len(data) and data[offset] != 0xFF:
+            offset += 1
+        while offset < len(data) and data[offset] == 0xFF:
+            offset += 1
+        if offset >= len(data):
+            break
+
+        marker = data[offset]
+        offset += 1
+        if marker in {0x01, 0xD8, 0xD9} or 0xD0 <= marker <= 0xD7:
+            continue
+        if offset + 2 > len(data):
+            break
+
+        length = int.from_bytes(data[offset : offset + 2], "big")
+        if length < 2 or offset + length > len(data):
+            break
+        if marker in start_of_frame and length >= 7:
+            height = int.from_bytes(data[offset + 3 : offset + 5], "big")
+            width = int.from_bytes(data[offset + 5 : offset + 7], "big")
+            return width, height
+        offset += length
+
+    raise ValueError("JPEG dimensions not found")
 
 
 def encoded_share_name(name: str) -> str:
@@ -82,6 +133,23 @@ def main() -> None:
     check(set(spec["inputs"]) == {"packages", "packageLock", "pacmanConfig"}, "spec has a minimal input set")
     for path in spec["inputs"].values():
         check((GUEST / path).is_file(), f"spec input exists: {path}")
+
+    wallpaper = DEFAULT_WALLPAPER.read_bytes()
+    check(
+        hashlib.sha256(wallpaper).hexdigest()
+        == "4fda2ceedab22b868c3cbfccb09a66243e91f93a94acb92816e47876cadd268e",
+        "default wallpaper matches the supplied image",
+    )
+    check(
+        wallpaper.startswith(b"\xff\xd8\xff") and jpeg_dimensions(wallpaper) == (5120, 2880),
+        "default wallpaper is a 5120x2880 JPEG",
+    )
+    check(
+        DEFAULT_WALLPAPER.name == "try-omarchy-wallpaper.jpg"
+        and DEFAULT_WALLPAPER.parent.name == "tokyo-night"
+        and "tokyo-night" in spec["themes"],
+        "default wallpaper is in the dedicated Tokyo Night user background directory",
+    )
 
     authenticity = spec["authenticity"]
     verbatim_trees = authenticity["verbatimRuntimeTrees"]
@@ -460,9 +528,10 @@ def main() -> None:
     check(
         '"$root/usr/bin/omarchy-audio-input-set-default"' in configure
         and '"$root/usr/bin/omarchy-screensaver"' in configure
-        and "for native_command in omarchy-audio-input-set-default omarchy-screensaver" in configure
+        and '"$root/usr/bin/omarchy-theme-bg-switcher"' in configure
+        and "omarchy-theme-bg-switcher; do" in configure
         and "did not replace the upstream command" in configure,
-        "native input selection and screensaver cleanup replace upstream commands",
+        "native input, screensaver, and background picker commands replace upstream commands",
     )
     check("cmp -s" not in configure, "rootfs configuration uses only declared build tools")
 
@@ -471,6 +540,12 @@ def main() -> None:
         "verify-screensaver-override.py" in build
         and build.index("verify-screensaver-override.py") < build.index("materialize-omarchy.sh"),
         "every guest build checks the screensaver override against its pinned source",
+    )
+    check(
+        "verify-background-switcher-override.py" in build
+        and build.index("verify-background-switcher-override.py")
+        < build.index("materialize-omarchy.sh"),
+        "every guest build checks the background picker override against its pinned source",
     )
     check(
         "apply-omarchy-backports.py" in build
@@ -841,13 +916,26 @@ def main() -> None:
     check(audio_input_helper.stat().st_mode & stat.S_IXUSR != 0, "native audio input helper is executable")
 
     screensaver_override = GUEST / "native-overlay/usr/bin/omarchy-screensaver"
+    background_switcher_override = GUEST / "native-overlay/usr/bin/omarchy-theme-bg-switcher"
     cursor_restore = GUEST / "native-overlay/usr/local/bin/omarchy-native-cursor-restore"
     check(screensaver_override.stat().st_mode & stat.S_IXUSR != 0, "native screensaver override is executable")
+    check(
+        background_switcher_override.stat().st_mode & stat.S_IXUSR != 0,
+        "native background picker override is executable",
+    )
     check(cursor_restore.stat().st_mode & stat.S_IXUSR != 0, "native cursor restore helper is executable")
     check(
         "/usr/local/bin/omarchy-native-cursor-restore 2>/dev/null || true"
         in read(screensaver_override),
         "screensaver cleanup delegates to the native cursor policy",
+    )
+    background_switcher_source = read(background_switcher_override)
+    picker_user_backgrounds = '"$HOME/.config/omarchy/backgrounds/$theme_name"'
+    picker_theme_backgrounds = '"$HOME/.local/state/omarchy/current/theme/backgrounds"'
+    check(
+        background_switcher_source.index(picker_user_backgrounds)
+        < background_switcher_source.index(picker_theme_backgrounds),
+        "background picker presents user backgrounds before packaged theme backgrounds",
     )
 
     display_sync = GUEST / "native-overlay/usr/local/bin/omarchy-native-display-sync"
@@ -948,6 +1036,7 @@ HOTPLUG=1
     shell_files = [
         GUEST / "test",
         screensaver_override,
+        background_switcher_override,
         cursor_restore,
         display_sync,
         mac_share,
@@ -982,6 +1071,58 @@ HOTPLUG=1
         check(tagged_commit == expected_commit, "optional Omarchy source checkout matches the release tag")
         for relative in spec["authenticity"]["requiredPaths"]:
             check((source / relative).exists(), f"pinned source contains {relative}")
+
+        default_theme_setup = read(source / "install/user/theme.sh")
+        theme_set = read(source / "bin/omarchy-theme-set")
+        menu_images = read(source / "bin/omarchy-menu-images")
+        default_user_backgrounds = '"$HOME/.config/omarchy/backgrounds/$THEME_NAME/"'
+        default_theme_backgrounds = '"$CURRENT_THEME_PATH/backgrounds/"'
+        check(
+            'omarchy-theme-set "Tokyo Night"' in default_theme_setup
+            and theme_set.index(default_user_backgrounds)
+            < theme_set.index(default_theme_backgrounds)
+            and 'CHOSEN_THEME_BACKGROUND="${backgrounds[0]}"' in theme_set,
+            "first-run Tokyo Night searches user backgrounds before choosing the first image",
+        )
+
+        supported_image_suffixes = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
+        upstream_backgrounds = source / "themes/tokyo-night/backgrounds"
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            user_wallpaper = (
+                home
+                / ".config/omarchy/backgrounds/tokyo-night"
+                / DEFAULT_WALLPAPER.name
+            )
+            staged_theme_backgrounds = home / ".local/state/omarchy/current/theme/backgrounds"
+            candidates = [user_wallpaper]
+            candidates.extend(
+                staged_theme_backgrounds / path.name
+                for path in upstream_backgrounds.iterdir()
+                if path.is_file() and path.suffix.lower() in supported_image_suffixes
+            )
+            check(
+                min(candidates) == user_wallpaper,
+                "fresh-user background sorting selects the Try Omarchy wallpaper by default",
+            )
+
+        subprocess.run(
+            [
+                "python3",
+                str(GUEST / "scripts/verify-background-switcher-override.py"),
+                "--source",
+                str(source / "bin/omarchy-theme-bg-switcher"),
+                "--override",
+                str(background_switcher_override),
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        check(
+            'for dir in "${image_dirs[@]}"' in menu_images and "| sort -z)" in menu_images,
+            "background picker preserves directory order and sorts within each directory",
+        )
 
         for backport in backports:
             for target in backport["targets"]:

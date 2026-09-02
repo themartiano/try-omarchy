@@ -104,7 +104,13 @@ creates the account on first boot.
   backports are applied strictly against declared file hashes and recorded in
   artifact provenance. Guest overlays add the QEMU and ARM64 integration around
   them, including narrowly audited command replacements for host-backed audio
-  selection and VM-aware cursor restoration after the screensaver exits.
+  selection, VM-aware cursor restoration after the screensaver exits, and
+  user-first ordering in the background picker.
+- A project wallpaper is seeded in each new user's dedicated Tokyo Night
+  background directory. Omarchy's first-run theme flow searches that directory
+  before the packaged theme and selects the image as the default; the audited
+  picker override presents the same directory first without changing the
+  packaged upstream theme tree.
 - The guest normally consumes upstream Arch Linux ARM packages. Hyprland is the
   documented exception: an upstream package is reproducibly rebuilt with a
   guarded rounded-border coverage patch for the VM graphics path, then held in

@@ -61,16 +61,18 @@ cp -a "$guest_dir/factory-overlay/." "$root/"
 
 # Session-config customizations are additive, so each fragment remains
 # independently auditable against Basecamp's pinned config. The native overlay
-# also carries two deliberate command replacements: safe PipeWire input
-# switching and VM-aware cursor restoration after the screensaver exits. The
-# display fragment selects Cocoa's host-composited cursor path and keeps the
-# guest mode synchronized when QEMU changes the virtual EDID.
+# also carries three deliberate command replacements: safe PipeWire input
+# switching, VM-aware cursor restoration after the screensaver exits, and
+# user-first ordering in the background picker. The display fragment selects
+# Cocoa's host-composited cursor path and keeps the guest mode synchronized when
+# QEMU changes the virtual EDID.
 # The clipboard bridge mirrors the Mac pasteboard into the Wayland session,
 # and the Mac folder mount completes the host integration.
 cp -a "$guest_dir/native-overlay/." "$root/"
 chmod 0755 \
   "$root/usr/bin/omarchy-audio-input-set-default" \
   "$root/usr/bin/omarchy-screensaver" \
+  "$root/usr/bin/omarchy-theme-bg-switcher" \
   "$root/usr/local/bin/omarchy-native-audio-bridge" \
   "$root/usr/local/bin/omarchy-native-camera-bridge" \
   "$root/usr/local/bin/omarchy-native-clipboard-bridge" \
@@ -78,7 +80,10 @@ chmod 0755 \
   "$root/usr/local/bin/omarchy-native-display-sync" \
   "$root/usr/local/bin/omarchy-native-mac-share" \
   "$root/usr/lib/systemd/system-generators/try-omarchy-ssh-access"
-for native_command in omarchy-audio-input-set-default omarchy-screensaver; do
+for native_command in \
+  omarchy-audio-input-set-default \
+  omarchy-screensaver \
+  omarchy-theme-bg-switcher; do
   source_digest=$(sha256sum "$guest_dir/native-overlay/usr/bin/$native_command")
   source_digest=${source_digest%% *}
   installed_digest=$(sha256sum "$root/usr/bin/$native_command")
