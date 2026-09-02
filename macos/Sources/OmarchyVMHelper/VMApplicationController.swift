@@ -135,6 +135,12 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             resetStorage: { [weak self] in
                 self?.resetVirtualMachine()
             },
+            backupStorage: { [weak self] path in
+                self?.backupVirtualMachine(to: path)
+            },
+            validateBackupDestination: { [weak self] path in
+                self?.validateBackupDestination(path)
+            },
             sharedFolderStatus: { [weak self] in
                 self?.sharedFolderMenuState() ?? SharedFolderMenuState.disabled
             },
@@ -209,11 +215,12 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
 
     private func launchArguments() -> [String] {
         var arguments = initialArguments
-        let resetOptions = [
+        let storageOnlyOptions = [
             QEMUGPUStorageOption.resetStorage.rawValue,
             QEMUGPUStorageOption.resetStorageOnly.rawValue,
+            QEMUGPUStorageOption.backupStorageOnly.rawValue,
         ]
-        if let first = arguments.first, resetOptions.contains(first) {
+        if let first = arguments.first, storageOnlyOptions.contains(first) {
             arguments.removeFirst()
         }
         return arguments
@@ -222,6 +229,12 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private func resetArguments() -> [String] {
         var arguments = launchArguments()
         arguments.insert(QEMUGPUStorageOption.resetStorageOnly.rawValue, at: 0)
+        return arguments
+    }
+
+    private func backupArguments() -> [String] {
+        var arguments = launchArguments()
+        arguments.insert(QEMUGPUStorageOption.backupStorageOnly.rawValue, at: 0)
         return arguments
     }
 
@@ -271,6 +284,54 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         } else {
             startMenuWindow?.resetDidFinish(
                 errorMessage: "The VM disk could not be reset. Try again, or reinstall the latest Try Omarchy app."
+            )
+        }
+    }
+
+    private func backupVirtualMachine(to path: String) {
+        guard resolveStorageLocationAvailability() == .available else {
+            startMenuWindow?.backupDidAbort()
+            return
+        }
+        do {
+            let context = childLaunchContext()
+            guard context.storageUnavailableReason == nil else {
+                startMenuWindow?.backupDidFinish(
+                    errorMessage: context.storageUnavailableReason
+                )
+                return
+            }
+            activeStateRoot = context.stateRoot
+            try supervisor.start(
+                executableURL: launcherURL,
+                arguments: backupArguments(),
+                environment: QEMUGPURuntimeEnvironment.sanitizedForBackup(
+                    context.environment,
+                    destination: path
+                )
+            ) { [weak self] status in
+                self?.backupDidExit(status: status)
+            }
+            childRunning = true
+        } catch {
+            startMenuWindow?.backupDidFinish(errorMessage: error.localizedDescription)
+        }
+    }
+
+    private func backupDidExit(status: Int32) {
+        guard childRunning else { return }
+        childRunning = false
+        let wasStopping = lifecycle.isStopping
+        lifecycle.childExited()
+        if applicationTerminationPending {
+            NSApp.reply(toApplicationShouldTerminate: true)
+        } else if wasStopping {
+            finish(status: status)
+        } else if status == 0 {
+            startMenuWindow?.backupDidFinish(errorMessage: nil)
+        } else {
+            startMenuWindow?.backupDidFinish(
+                errorMessage: "The VM disk could not be copied. Quit Try Omarchy if it is still running elsewhere, then try again."
             )
         }
     }
@@ -435,6 +496,24 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             _ = try StorageLocationPolicy.validate(
                 path,
                 metrics: bundledMetrics,
+                probe: volumeProbe,
+                volumeRootDetector: volumeRootDetector
+            )
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Returns an error message when the folder cannot receive a VM copy.
+    private func validateBackupDestination(_ path: String) -> String? {
+        do {
+            _ = try StorageLocationPolicy.validateBackupDestination(
+                path,
+                currentStateRoot: QEMUGPUStorageSpaceEstimate.storageRootURL(
+                    environment: baseEnvironment,
+                    preference: storageLocationStore.load()
+                )?.path,
                 probe: volumeProbe,
                 volumeRootDetector: volumeRootDetector
             )

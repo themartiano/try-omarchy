@@ -253,6 +253,24 @@ the same Mac; guest SSH authentication is still required.
 
 Normal launches keep one persistent VM under `~/Library/Application Support/Try Omarchy/VM/v1`. Removing the app does not remove this data. The start menu can reset it, and requires confirmation before replacing a disk that is incompatible with a new factory guest build.
 
+### Backing up before an update
+
+A new Try Omarchy guest build cannot boot an existing VM. The start menu then asks you to **Reset Omarchy**, which erases the disk. Automatic disk migration between releases is not reliable yet, so `v0.1.0` disks are not moved onto `v0.2.0`.
+
+**Keep your files.** Before resetting, copy anything you need out of Omarchy with the shared folder, or with SSH if you enabled it. Import those files into the new VM after Reset.
+
+**Keep the whole VM.** Quit Try Omarchy, then use **Backup…** on the start menu. The copy is an APFS clone of the working disk, so it stays sparse and is nearly instant on the same volume. The destination becomes a valid workspace: choose it later as **VM Location**. Restoring that copy still needs the **same** Try Omarchy version — it will not boot on a newer guest.
+
+From a checkout, the same copy is:
+
+```sh
+make backup DEST="$HOME/Backups/Try Omarchy"
+```
+
+`DEST` must be an empty folder on a local APFS volume, or a path that can be created as one. Do not copy the live folder in Finder: Finder copies can expand the sparse working disk to its full size (around 24 GB) and land the 0600 workspace marker as 0644, so the launcher then refuses to open it.
+
+Factory images under `images/` are not part of the backup. The matching Try Omarchy build rematerializes them.
+
 ### Choosing where the VM lives
 
 **Change…** on the start menu's **VM Location** row moves the VM to any folder
@@ -333,7 +351,7 @@ Run the complete contract and native test suite with:
 make test
 ```
 
-Run `make help` for component builds, persistent-storage reset, ephemeral mode, and cleanup commands.
+Run `make help` for component builds, persistent-storage reset, VM backup, ephemeral mode, and cleanup commands.
 
 To reclaim development build space, run:
 

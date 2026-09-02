@@ -24,6 +24,10 @@ struct QEMUGPULaunchRequestTests {
             storageOption: .resetStorageOnly,
             guestDirectoryPath: guest
         ))
+        #expect(QEMUGPULaunchRequest(arguments: ["--backup-storage-only", guest]) == QEMUGPULaunchRequest(
+            storageOption: .backupStorageOnly,
+            guestDirectoryPath: guest
+        ))
         #expect(QEMUGPULaunchRequest(arguments: [guest]) == QEMUGPULaunchRequest(
             storageOption: nil,
             guestDirectoryPath: guest
@@ -81,6 +85,7 @@ struct QEMUGPURuntimeEnvironmentTests {
             "KEEP_ME": "yes",
             QEMUGPURuntimeEnvironment.inspectOnlyKey: "1",
             QEMUGPURuntimeEnvironment.dryRunKey: "1",
+            QEMUGPURuntimeEnvironment.backupRootKey: "/private/tmp/backup",
         ])
 
         #expect(environment == ["KEEP_ME": "yes"])
@@ -96,6 +101,7 @@ struct QEMUGPURuntimeEnvironmentTests {
             PortForwardPolicy.environmentKey,
             QEMUGPURuntimeEnvironment.inspectOnlyKey,
             QEMUGPURuntimeEnvironment.dryRunKey,
+            QEMUGPURuntimeEnvironment.backupRootKey,
         ]
         var inherited = ["KEEP_ME": "yes"]
         for key in controlledKeys {
@@ -104,6 +110,24 @@ struct QEMUGPURuntimeEnvironmentTests {
 
         #expect(QEMUGPURuntimeEnvironment.sanitizedForReset(inherited)
             == ["KEEP_ME": "yes"])
+    }
+
+    @Test("storage backup publishes only the chosen destination")
+    func sanitizesBackup() {
+        let environment = QEMUGPURuntimeEnvironment.sanitizedForBackup(
+            [
+                "KEEP_ME": "yes",
+                QEMUGPURuntimeEnvironment.backupRootKey: "/private/tmp/stale",
+                QEMUGPURuntimeEnvironment.inspectOnlyKey: "1",
+                SharedFolderPolicy.environmentKey: "/Users/me/Work",
+            ],
+            destination: "/private/tmp/omarchy-backup"
+        )
+
+        #expect(environment == [
+            "KEEP_ME": "yes",
+            QEMUGPURuntimeEnvironment.backupRootKey: "/private/tmp/omarchy-backup",
+        ])
     }
 }
 

@@ -730,4 +730,90 @@ export OMARCHY_QEMU_GPU_STATE_ROOT=$marker_root
 assert_fails _qps_prepare_state_root
 export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_marker_state_root
 
+# Backup copies the live workspace into an empty folder with the same private
+# modes the launcher requires. Finder copies land the marker as 0644 and can
+# expand the sparse disk; this path must not.
+export OMARCHY_QEMU_GPU_STATE_ROOT="$test_root/backup-source"
+export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=0
+qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+backup_source_disk=$QEMU_SELECTED_DISK
+printf 'backup-user-data' | dd of="$backup_source_disk" bs=1 seek=256 conv=notrunc >/dev/null 2>&1
+qemu_persistent_storage_release_lock
+
+backup_dest="$test_root/backup-dest"
+mkdir "$backup_dest"
+chmod 755 "$backup_dest"
+qemu_persistent_storage_backup "$backup_dest"
+assert_eq "$QEMU_PERSISTENT_STORAGE_BACKUP_ROOT" "$(cd "$backup_dest" && pwd -P)"
+assert _qps_validate_root_marker "$backup_dest/.omarchy-qemu-storage"
+assert_eq "$(/usr/bin/stat -f '%Lp' "$backup_dest")" 700
+assert_eq "$(/usr/bin/stat -f '%Lp' "$backup_dest/disks")" 700
+assert_eq "$(/usr/bin/stat -f '%Lp' "$backup_dest/disks/current")" 700
+assert_eq "$(/usr/bin/stat -f '%Lp' "$backup_dest/disks/current/metadata.json")" 600
+assert_eq "$(/usr/bin/stat -f '%Lp' "$backup_dest/disks/current/rootfs.ext4")" 600
+assert_eq \
+  "$(dd if="$backup_dest/disks/current/rootfs.ext4" bs=1 skip=256 count=16 2>/dev/null)" \
+  backup-user-data
+assert cmp -s \
+  "$backup_source_disk" \
+  "$backup_dest/disks/current/rootfs.ext4"
+assert test \
+  "$(_qps_file_identity "$backup_source_disk")" != \
+  "$(_qps_file_identity "$backup_dest/disks/current/rootfs.ext4")"
+assert test ! -e "$backup_dest/locks"
+assert test ! -e "$backup_dest/images"
+assert_eq \
+  "$(dd if="$backup_source_disk" bs=1 skip=256 count=16 2>/dev/null)" \
+  backup-user-data
+
+# The copy is a workspace the launcher will actually boot, and it still holds
+# the user bytes after the original is reset.
+export OMARCHY_QEMU_GPU_STATE_ROOT=$backup_dest
+qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+assert_eq "$QEMU_SELECTED_DISK" "$backup_dest/disks/current/rootfs.ext4"
+assert_eq \
+  "$(dd if="$QEMU_SELECTED_DISK" bs=1 skip=256 count=16 2>/dev/null)" \
+  backup-user-data
+qemu_persistent_storage_release_lock
+
+export OMARCHY_QEMU_GPU_STATE_ROOT="$test_root/backup-source"
+qemu_persistent_storage_select \
+  reset "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+assert cmp -s "$QEMU_SELECTED_DISK" "$source_disk"
+qemu_persistent_storage_release_lock
+assert_eq \
+  "$(dd if="$backup_dest/disks/current/rootfs.ext4" bs=1 skip=256 count=16 2>/dev/null)" \
+  backup-user-data
+
+# Refusals: live workspace, existing workspace, nonempty folder, missing VM.
+assert_fails qemu_persistent_storage_backup "$test_root/backup-source"
+assert_fails qemu_persistent_storage_backup "$backup_dest"
+nonempty_dest="$test_root/backup-nonempty"
+mkdir "$nonempty_dest"
+printf 'notes\n' >"$nonempty_dest/notes.txt"
+assert_fails qemu_persistent_storage_backup "$nonempty_dest"
+assert test -f "$nonempty_dest/notes.txt"
+empty_workspace="$test_root/backup-empty-source"
+mkdir -p "$empty_workspace/disks" "$empty_workspace/images" "$empty_workspace/locks"
+chmod 700 "$empty_workspace" "$empty_workspace/disks" "$empty_workspace/images" \
+  "$empty_workspace/locks"
+_qps_write_root_marker "$empty_workspace/.omarchy-qemu-storage"
+export OMARCHY_QEMU_GPU_STATE_ROOT=$empty_workspace
+fresh_dest="$test_root/backup-fresh-dest"
+mkdir "$fresh_dest"
+assert_fails qemu_persistent_storage_backup "$fresh_dest"
+assert test ! -e "$fresh_dest/disks"
+assert test ! -e "$fresh_dest/.omarchy-qemu-storage"
+
+# A .DS_Store in the destination is still empty enough, matching the picker.
+finder_dest="$test_root/backup-finder-dest"
+mkdir "$finder_dest"
+: >"$finder_dest/.DS_Store"
+export OMARCHY_QEMU_GPU_STATE_ROOT="$test_root/backup-source"
+qemu_persistent_storage_backup "$finder_dest"
+assert _qps_validate_root_marker "$finder_dest/.omarchy-qemu-storage"
+assert test -f "$finder_dest/.DS_Store"
+
 printf 'qemu-persistent-storage.test: PASS\n'

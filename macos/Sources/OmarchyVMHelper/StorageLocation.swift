@@ -103,6 +103,8 @@ enum StorageLocationPolicyError: LocalizedError, Equatable {
     case unsafeRoot(String)
     case isVolumeRoot(String)
     case notEmpty(String)
+    case alreadyAWorkspace(String)
+    case isCurrentWorkspace(String)
     case invalidWorkspaceMarker(String)
     case volumeUnreadable(String)
     case notLocalVolume(String)
@@ -129,6 +131,10 @@ enum StorageLocationPolicyError: LocalizedError, Equatable {
             "Choose a folder inside \(path), not the drive itself. For example, create a folder named \"\(StorageLocationPolicy.workspaceDirectoryName)\" there and pick that."
         case .notEmpty(let path):
             "This folder already has files in it: \(path). Omarchy only uses an empty folder, so it never mixes its virtual machine with anything else stored there. Choose or create an empty folder instead."
+        case .alreadyAWorkspace(let path):
+            "That folder is already an Omarchy workspace: \(path). Choose an empty folder so the backup is not mixed with another VM."
+        case .isCurrentWorkspace(let path):
+            "Choose a different folder. That one is the live Omarchy VM: \(path)."
         case .invalidWorkspaceMarker(let path):
             "This folder looks like an Omarchy workspace, but its \"\(StorageLocationPolicy.rootMarkerName)\" file is damaged, so the VM here cannot be opened safely: \(path). Delete that file to reuse the folder as an empty one, or choose a different folder."
         case .volumeUnreadable(let path):
@@ -235,12 +241,23 @@ enum StorageLocationPolicy {
         return entries.allSatisfy { ignorableEntries.contains($0.lastPathComponent) }
     }
 
+    /// Whether a chosen folder may already be an Omarchy workspace.
+    enum WorkspaceAcceptance: Equatable {
+        /// Empty folder, or one this app has already used.
+        case emptyOrExisting
+        /// Empty folder only. Existing workspaces are refused so a backup
+        /// cannot mix with, or overwrite, another VM.
+        case emptyOnly
+    }
+
     static func validate(
         _ path: String,
         metrics: BundledGuestMetrics?,
         probe: VolumeProbing,
         volumeRootDetector: VolumeRootDetecting = FileManagerVolumeRootDetector(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        workspaceAcceptance: WorkspaceAcceptance = .emptyOrExisting,
+        currentStateRoot: String? = nil
     ) throws -> StorageLocationResolution {
         guard path.hasPrefix("/") else { throw StorageLocationPolicyError.notAbsolute }
         guard !path.contains("\n"), !path.contains("\r"), !path.utf8.contains(0) else {
@@ -271,7 +288,19 @@ enum StorageLocationPolicy {
         }
 
         let containerURL = URL(fileURLWithPath: container, isDirectory: true)
+        let root = stateRoot(forContainer: container)
+        if let currentStateRoot, !currentStateRoot.isEmpty {
+            let currentRoot = URL(fileURLWithPath: currentStateRoot, isDirectory: true)
+                .standardizedFileURL.path
+            if root == currentRoot {
+                throw StorageLocationPolicyError.isCurrentWorkspace(root)
+            }
+        }
+
         let isExistingWorkspace = hasValidRootMarker(in: containerURL)
+        if workspaceAcceptance == .emptyOnly, isExistingWorkspace {
+            throw StorageLocationPolicyError.alreadyAWorkspace(container)
+        }
         if !isExistingWorkspace, hasRootMarkerEntry(in: containerURL) {
             // The launcher would refuse this folder too, but only after the user
             // committed to it. Say so now, while they can still pick another.
@@ -290,7 +319,6 @@ enum StorageLocationPolicy {
                 throw StorageLocationPolicyError.notEmpty(container)
             }
         }
-        let root = stateRoot(forContainer: container)
 
         let capabilities: VolumeCapabilities
         do {
@@ -337,6 +365,30 @@ enum StorageLocationPolicy {
             stateRoot: root,
             capabilities: capabilities,
             spaceWarning: warning
+        )
+    }
+
+    /// An empty APFS folder that can receive a copy of the live VM.
+    ///
+    /// Existing workspaces are refused: a backup must not mix with, or
+    /// overwrite, another VM. The live workspace is refused for the same
+    /// reason. Factory-image space is not demanded here — backup copies the
+    /// working disk, not a new guest build.
+    static func validateBackupDestination(
+        _ path: String,
+        currentStateRoot: String?,
+        probe: VolumeProbing,
+        volumeRootDetector: VolumeRootDetecting = FileManagerVolumeRootDetector(),
+        fileManager: FileManager = .default
+    ) throws -> StorageLocationResolution {
+        try validate(
+            path,
+            metrics: nil,
+            probe: probe,
+            volumeRootDetector: volumeRootDetector,
+            fileManager: fileManager,
+            workspaceAcceptance: .emptyOnly,
+            currentStateRoot: currentStateRoot
         )
     }
 

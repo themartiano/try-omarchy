@@ -15,7 +15,7 @@ PACKAGE_NOTARY_PROFILE ?= $(RELEASE_NOTARY_PROFILE)
 FORCE ?= 0
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor test guest runtime app build run run-ephemeral reset update-omarchy package package-preflight release release-preflight clean clean-all clean-guest
+.PHONY: help doctor test guest runtime app build run run-ephemeral reset backup update-omarchy package package-preflight release release-preflight clean clean-all clean-guest
 
 help:
 	@printf '%s\n' \
@@ -41,6 +41,8 @@ help:
 	  'Storage:' \
 	  '  make run-ephemeral  Run without retaining VM changes' \
 	  '  make reset          Open the confirmed factory-reset flow' \
+	  '  make backup DEST=/path/to/empty/folder' \
+	  '                      Copy the saved VM into DEST (APFS clone)' \
 	  '  make clean          Remove all project builds and build caches' \
 	  '  make clean-all      Also remove VM data and stale temporary files'
 
@@ -92,6 +94,10 @@ run-ephemeral: app
 
 reset: app
 	@$(ROOT)/macos/open-qemu-gpu.sh --reset-storage
+
+backup:
+	@[[ -n "$(strip $(DEST))" ]] || { echo 'error: DEST=/path/to/empty/folder is required' >&2; exit 1; }
+	@$(ROOT)/macos/backup-qemu-storage.sh "$(DEST)"
 
 update-omarchy:
 	@[[ -n "$(strip $(OMARCHY_RELEASE))" ]] || { echo 'error: OMARCHY_RELEASE=x.y.z is required' >&2; exit 1; }

@@ -17,6 +17,9 @@ QEMU_PERSISTENT_STORAGE_QEMU_ADD_FD='fd=9,set=77,opaque=omarchy-persistent-lock'
 QEMU_PERSISTENT_STORAGE_INCOMPATIBLE_STATUS=78
 # Room the guest needs beyond whatever the workspace itself costs to create.
 QEMU_PERSISTENT_STORAGE_HEADROOM_BYTES=1073741824
+# Destination folder for `--backup-storage-only`. Kept byte-identical to
+# `QEMUGPURuntimeEnvironment.backupRootKey` in QEMUGPULauncher.swift.
+QEMU_PERSISTENT_STORAGE_BACKUP_ROOT_ENV='OMARCHY_QEMU_GPU_BACKUP_ROOT'
 
 QEMU_SELECTED_DISK=''
 QEMU_SELECTED_STORAGE_MODE=''
@@ -24,6 +27,7 @@ QEMU_PERSISTENT_STORAGE_DIRECTORY=''
 QEMU_PERSISTENT_STORAGE_IDENTITY=''
 QEMU_PERSISTENT_STORAGE_LOCK_PATH=''
 QEMU_PERSISTENT_STORAGE_WORKING_BYTES=''
+QEMU_PERSISTENT_STORAGE_BACKUP_ROOT=''
 QEMU_IMMUTABLE_SOURCE_DISK=''
 QPS_LEGACY_LOCK_PATH=''
 QPS_METADATA_SCHEMA=''
@@ -1378,4 +1382,314 @@ qemu_persistent_storage_select() {
       "$qps_mode" "$qps_identity" "$qps_source" "$qps_source_sha" \
       "$qps_source_bytes" "$qps_working_bytes"
   fi
+}
+
+_qps_allocated_bytes() {
+  local qps_blocks=''
+
+  qps_blocks=$(/usr/bin/stat -f '%b' "$1" 2>/dev/null) || return 1
+  [[ $qps_blocks =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$((qps_blocks * 512))"
+}
+
+# `df -P` puts the mount point in field 6 onward, so a volume named
+# "My Disk" is recovered by joining the remainder of the line.
+_qps_volume_mount_point() {
+  local qps_path=$1
+
+  /bin/df -P "$qps_path" 2>/dev/null | awk 'NR == 2 {
+    mount = $6
+    for (i = 7; i <= NF; i++) mount = mount " " $i
+    print mount
+  }'
+}
+
+_qps_is_volume_root() {
+  local qps_path=$1
+  local qps_mount=''
+
+  qps_mount=$(_qps_volume_mount_point "$qps_path")
+  [[ -n $qps_mount && $qps_path == "$qps_mount" ]]
+}
+
+# Finder-owned entries that do not count as real content when deciding whether
+# a picked folder is empty enough to receive a backup. Kept in agreement with
+# `StorageLocationPolicy.ignorableEntries`.
+_qps_directory_is_effectively_empty() {
+  local qps_directory=$1
+  local qps_entry=''
+
+  shopt -s nullglob dotglob
+  for qps_entry in "$qps_directory"/*; do
+    case ${qps_entry##*/} in
+      .DS_Store|.localized|'Icon'$'\r') ;;
+      *)
+        shopt -u nullglob dotglob
+        return 1
+        ;;
+    esac
+  done
+  shopt -u nullglob dotglob
+  return 0
+}
+
+# Resolve the live workspace without creating one. Backup must not initialize
+# an empty Application Support folder just to report that there is nothing in
+# it.
+_qps_open_existing_state_root() {
+  local qps_configured_root=''
+  local qps_root=''
+  local qps_marker=''
+  local qps_child=''
+
+  if [[ -n ${OMARCHY_QEMU_GPU_STATE_ROOT:-} ]]; then
+    qps_configured_root=$OMARCHY_QEMU_GPU_STATE_ROOT
+  else
+    [[ -n ${HOME:-} ]] || {
+      _qps_fail 'HOME is unavailable; cannot locate Application Support'
+      return 1
+    }
+    qps_configured_root="$HOME/Library/Application Support/Try Omarchy/VM/v1"
+  fi
+  _qps_assert_safe_root_path "$qps_configured_root" || return 1
+  [[ -d $qps_configured_root && ! -L $qps_configured_root ]] || {
+    _qps_fail "there is no saved Omarchy VM to back up at $qps_configured_root"
+    return 1
+  }
+  _qps_assert_volume_supported "$qps_configured_root" || return 1
+  _qps_assert_private_directory "$qps_configured_root" 'state root' || return 1
+  qps_root=$(cd "$qps_configured_root" && pwd -P) || {
+    _qps_fail "cannot resolve state root: $qps_configured_root"
+    return 1
+  }
+  _qps_assert_safe_root_path "$qps_root" || return 1
+
+  qps_marker="$qps_root/.omarchy-qemu-storage"
+  _qps_validate_root_marker "$qps_marker" || return 1
+  for qps_child in disks images locks; do
+    _qps_assert_private_directory "$qps_root/$qps_child" "state $qps_child directory" || return 1
+  done
+
+  QEMU_PERSISTENT_STORAGE_ROOT=$qps_root
+  QEMU_PERSISTENT_STORAGE_DISKS_ROOT="$qps_root/disks"
+  QEMU_PERSISTENT_STORAGE_IMAGES_ROOT="$qps_root/images"
+  QEMU_PERSISTENT_STORAGE_LOCKS_ROOT="$qps_root/locks"
+}
+
+_qps_prepare_backup_destination() {
+  local qps_dest=$1
+  local qps_resolved=''
+
+  QEMU_PERSISTENT_STORAGE_BACKUP_ROOT=''
+  _qps_assert_safe_root_path "$qps_dest" || return 1
+  [[ -d $qps_dest && ! -L $qps_dest ]] || {
+    _qps_fail "backup destination is not a direct directory: $qps_dest"
+    return 1
+  }
+  [[ $(_qps_lstat_kind "$qps_dest") == Directory ]] || {
+    _qps_fail "backup destination has an unsafe file type: $qps_dest"
+    return 1
+  }
+  [[ $(_qps_owner "$qps_dest") == $(id -u) ]] || {
+    _qps_fail "backup destination is not owned by the current user: $qps_dest"
+    return 1
+  }
+  qps_resolved=$(cd "$qps_dest" && pwd -P) || {
+    _qps_fail "cannot resolve backup destination: $qps_dest"
+    return 1
+  }
+  _qps_assert_safe_root_path "$qps_resolved" || return 1
+  [[ $qps_resolved != "$QEMU_PERSISTENT_STORAGE_ROOT" ]] || {
+    _qps_fail 'backup destination cannot be the live Omarchy workspace'
+    return 1
+  }
+  if _qps_is_volume_root "$qps_resolved"; then
+    _qps_fail "choose a folder inside $qps_resolved, not the drive itself"
+    return 1
+  fi
+  _qps_assert_volume_supported "$qps_resolved" || return 1
+  if [[ -e $qps_resolved/.omarchy-qemu-storage || -L $qps_resolved/.omarchy-qemu-storage ]]; then
+    _qps_fail "backup destination is already an Omarchy workspace: $qps_resolved"
+    return 1
+  fi
+  _qps_directory_is_effectively_empty "$qps_resolved" || {
+    _qps_fail "backup destination already has files in it: $qps_resolved"
+    return 1
+  }
+  chmod 700 "$qps_resolved" 2>/dev/null
+  _qps_assert_private_directory "$qps_resolved" 'backup destination' || return 1
+  QEMU_PERSISTENT_STORAGE_BACKUP_ROOT=$qps_resolved
+}
+
+_qps_backup_cleanup_destination() {
+  local qps_dest=$1
+
+  [[ -n $qps_dest ]] || return 0
+  /bin/rm -rf \
+    "$qps_dest/disks" \
+    "$qps_dest/images" \
+    "$qps_dest/locks" \
+    "$qps_dest/.omarchy-qemu-storage"
+}
+
+_qps_collect_backup_stores() {
+  local qps_candidate=''
+  local qps_name=''
+
+  QPS_BACKUP_STORES=()
+  if [[ -d $QEMU_PERSISTENT_STORAGE_DISKS_ROOT/current && \
+        ! -L $QEMU_PERSISTENT_STORAGE_DISKS_ROOT/current ]] && \
+    _qps_validate_recorded_workspace "$QEMU_PERSISTENT_STORAGE_DISKS_ROOT/current"; then
+    QPS_BACKUP_STORES+=("$QEMU_PERSISTENT_STORAGE_DISKS_ROOT/current")
+  fi
+  for qps_candidate in "$QEMU_PERSISTENT_STORAGE_DISKS_ROOT"/*; do
+    [[ -d $qps_candidate && ! -L $qps_candidate ]] || continue
+    qps_name=${qps_candidate##*/}
+    [[ $qps_name == current ]] && continue
+    [[ $qps_name =~ ^[0-9a-f]{64}$ ]] || continue
+    if _qps_validate_recorded_workspace "$qps_candidate" && \
+      [[ $QPS_METADATA_IDENTITY == "$qps_name" ]]; then
+      QPS_BACKUP_STORES+=("$qps_candidate")
+    else
+      _qps_error "leaving unrecognized workspace untouched during backup: $qps_name"
+    fi
+  done
+}
+
+_qps_backup_store() {
+  local qps_source=$1
+  local qps_dest=$2
+  local qps_existing_bytes=''
+  local qps_identity=''
+  local qps_schema=''
+  local qps_source_sha=''
+  local qps_source_bytes=''
+
+  _qps_validate_recorded_workspace "$qps_source" || return 1
+  qps_existing_bytes=$QPS_RECORDED_EXISTING_BYTES
+  qps_identity=$QPS_METADATA_IDENTITY
+  qps_schema=$QPS_METADATA_SCHEMA
+  qps_source_sha=$QPS_METADATA_SOURCE_SHA
+  qps_source_bytes=$QPS_METADATA_SOURCE_BYTES
+
+  mkdir "$qps_dest" || {
+    _qps_fail "cannot create backup store directory: $qps_dest"
+    return 1
+  }
+  chmod 700 "$qps_dest" || return 1
+  _qps_assert_private_directory "$qps_dest" 'backup store directory' || return 1
+  /bin/cp "$qps_source/metadata.json" "$qps_dest/metadata.json" || {
+    _qps_fail 'cannot copy persistent-disk metadata'
+    return 1
+  }
+  chmod 600 "$qps_dest/metadata.json" || return 1
+  if ! _qps_clone_disk "$qps_source/rootfs.ext4" "$qps_dest/rootfs.ext4" "$qps_existing_bytes"; then
+    return 1
+  fi
+  _qps_validate_store_directory \
+    "$qps_dest" "$qps_identity" "$qps_source_sha" "$qps_source_bytes" \
+    "$qps_existing_bytes" 0 "$qps_schema"
+}
+
+# Copy every recognized persistent disk into an empty APFS folder.
+#
+# The destination becomes a valid workspace: choosing it as VM Location boots
+# the same disk. Factory images under images/ are not copied — the matching
+# Try Omarchy build rematerializes them. Locks are not copied. Finder copies
+# are not a substitute: they expand the sparse working disk and land the
+# 0600 marker as 0644, which the launcher then refuses.
+#
+# Arguments:
+#   1. absolute path of an empty directory on a local APFS volume
+qemu_persistent_storage_backup() {
+  local qps_dest=${1:-}
+  local qps_store=''
+  local qps_name=''
+  local qps_disks=''
+  local qps_required=$QEMU_PERSISTENT_STORAGE_HEADROOM_BYTES
+  local qps_allocated=0
+  local qps_file_allocated=''
+  local qps_source_device=''
+  local qps_dest_device=''
+  local qps_status=0
+
+  QPS_BACKUP_STORES=()
+  [[ -n $qps_dest ]] || {
+    _qps_fail 'backup destination is required'
+    return 1
+  }
+
+  _qps_open_existing_state_root || return 1
+  _qps_prepare_backup_destination "$qps_dest" || return 1
+  qps_dest=$QEMU_PERSISTENT_STORAGE_BACKUP_ROOT
+
+  _qps_acquire_lock current || return 1
+
+  _qps_collect_backup_stores
+  if (( ${#QPS_BACKUP_STORES[@]} == 0 )); then
+    qemu_persistent_storage_release_lock
+    _qps_fail 'there is no saved Omarchy VM to back up'
+    return 1
+  fi
+
+  qps_source_device=$(_qps_file_identity "$QEMU_PERSISTENT_STORAGE_ROOT" | sed 's/:.*//')
+  qps_dest_device=$(_qps_file_identity "$qps_dest" | sed 's/:.*//')
+  if [[ $qps_source_device != "$qps_dest_device" ]]; then
+    for qps_store in "${QPS_BACKUP_STORES[@]}"; do
+      qps_file_allocated=$(_qps_allocated_bytes "$qps_store/rootfs.ext4") || {
+        qemu_persistent_storage_release_lock
+        _qps_fail "cannot measure $qps_store/rootfs.ext4"
+        return 1
+      }
+      qps_allocated=$((qps_allocated + qps_file_allocated))
+    done
+    qps_required=$((qps_allocated + QEMU_PERSISTENT_STORAGE_HEADROOM_BYTES))
+  fi
+  if ! _qps_assert_free_space "$qps_dest" "$qps_required"; then
+    qemu_persistent_storage_release_lock
+    return 1
+  fi
+
+  qps_disks="$qps_dest/disks"
+  if ! mkdir "$qps_disks" || ! chmod 700 "$qps_disks"; then
+    qemu_persistent_storage_release_lock
+    _qps_backup_cleanup_destination "$qps_dest"
+    _qps_fail "cannot create backup disks directory: $qps_disks"
+    return 1
+  fi
+
+  for qps_store in "${QPS_BACKUP_STORES[@]}"; do
+    qps_name=${qps_store##*/}
+    if [[ $qps_name != current ]]; then
+      if ! _qps_acquire_legacy_lock "$qps_name"; then
+        qemu_persistent_storage_release_lock
+        _qps_backup_cleanup_destination "$qps_dest"
+        return 1
+      fi
+    fi
+    if ! _qps_backup_store "$qps_store" "$qps_disks/$qps_name"; then
+      qps_status=$?
+      if [[ $qps_name != current ]]; then
+        _qps_release_legacy_lock
+      fi
+      qemu_persistent_storage_release_lock
+      _qps_backup_cleanup_destination "$qps_dest"
+      return "$qps_status"
+    fi
+    if [[ $qps_name != current ]]; then
+      _qps_release_legacy_lock
+    fi
+  done
+
+  if ! _qps_write_root_marker "$qps_dest/.omarchy-qemu-storage" || \
+    ! _qps_validate_root_marker "$qps_dest/.omarchy-qemu-storage" || \
+    ! _qps_fsync "$qps_dest"; then
+    qemu_persistent_storage_release_lock
+    _qps_backup_cleanup_destination "$qps_dest"
+    _qps_fail "cannot finish the backup at $qps_dest"
+    return 1
+  fi
+
+  qemu_persistent_storage_release_lock
+  _qps_error "backed up the Omarchy VM to $qps_dest"
 }

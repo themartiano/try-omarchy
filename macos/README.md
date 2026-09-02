@@ -56,7 +56,9 @@ and specialized development runs can opt into identity-keyed parallel disks by
 setting `OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=1`; release behavior leaves it
 unset. The disk's guest-build identity is immutable so an older root filesystem
 can never boot with incompatible bundled kernel modules. A changed guest build
-requires the user-facing, confirmed Reset Omarchy flow.
+requires the user-facing, confirmed Reset Omarchy flow. **Backup…** (or
+`make backup DEST=…`) APFS-clones that workspace into an empty folder so the
+original can be restored with the matching app version after a reset.
 
 The start menu can move that workspace to any APFS folder the user picks; the
 folder is used exactly as chosen, never with a folder created inside it — a

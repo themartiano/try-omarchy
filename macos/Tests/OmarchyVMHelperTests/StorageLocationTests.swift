@@ -144,6 +144,48 @@ struct StorageLocationPolicyTests {
         #expect(resolution.stateRoot == container.path)
     }
 
+    @Test("a backup destination must be empty, not an existing workspace")
+    func backupRejectsExistingWorkspace() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        try writeValidRootMarker(in: container)
+
+        #expect(throws: StorageLocationPolicyError.alreadyAWorkspace(container.path)) {
+            try StorageLocationPolicy.validateBackupDestination(
+                container.path,
+                currentStateRoot: nil,
+                probe: FakeVolumeProbe(result: volume())
+            )
+        }
+    }
+
+    @Test("a backup destination cannot be the live workspace")
+    func backupRejectsCurrentWorkspace() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        #expect(throws: StorageLocationPolicyError.isCurrentWorkspace(container.path)) {
+            try StorageLocationPolicy.validateBackupDestination(
+                container.path,
+                currentStateRoot: container.path,
+                probe: FakeVolumeProbe(result: volume())
+            )
+        }
+    }
+
+    @Test("an empty APFS folder is accepted as a backup destination")
+    func backupAcceptsEmptyFolder() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        let resolution = try StorageLocationPolicy.validateBackupDestination(
+            container.path,
+            currentStateRoot: "/private/tmp/other-workspace",
+            probe: FakeVolumeProbe(result: volume())
+        )
+        #expect(resolution.stateRoot == container.path)
+    }
+
     /// Each of these is a marker the launcher's `_qps_validate_root_marker`
     /// refuses. The picker must refuse them too, or it hands the user a folder
     /// that only fails once QEMU is already starting.

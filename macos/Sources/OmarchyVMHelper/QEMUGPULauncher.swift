@@ -6,6 +6,7 @@ enum QEMUGPUStorageOption: String, Equatable {
     case ephemeral = "--ephemeral"
     case resetStorage = "--reset-storage"
     case resetStorageOnly = "--reset-storage-only"
+    case backupStorageOnly = "--backup-storage-only"
 }
 
 /// Build-only controls and user-facing integration values must never leak
@@ -13,11 +14,16 @@ enum QEMUGPUStorageOption: String, Equatable {
 enum QEMUGPURuntimeEnvironment {
     static let inspectOnlyKey = "OMARCHY_QEMU_GPU_INSPECT_ONLY"
     static let dryRunKey = "OMARCHY_QEMU_GPU_DRY_RUN"
+    /// Kept byte-identical to `QEMU_PERSISTENT_STORAGE_BACKUP_ROOT_ENV` in
+    /// qemu-persistent-storage.sh. Change one and you must change both;
+    /// StorageLocationContractTests pins them together.
+    static let backupRootKey = "OMARCHY_QEMU_GPU_BACKUP_ROOT"
 
     static func sanitizedForLaunch(_ base: [String: String]) -> [String: String] {
         var environment = base
         environment.removeValue(forKey: inspectOnlyKey)
         environment.removeValue(forKey: dryRunKey)
+        environment.removeValue(forKey: backupRootKey)
         return environment
     }
 
@@ -32,6 +38,15 @@ enum QEMUGPURuntimeEnvironment {
         ] {
             environment.removeValue(forKey: key)
         }
+        return environment
+    }
+
+    static func sanitizedForBackup(
+        _ base: [String: String],
+        destination: String
+    ) -> [String: String] {
+        var environment = sanitizedForReset(base)
+        environment[backupRootKey] = destination
         return environment
     }
 }

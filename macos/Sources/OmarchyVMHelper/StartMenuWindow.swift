@@ -70,6 +70,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let requestCamera: (@escaping (Bool) -> Void) -> Void
     private let storageSpaceEstimate: () -> String?
     private let resetStorage: () -> Void
+    private let backupStorage: (String) -> Void
+    private let validateBackupDestination: (String) -> String?
     private let sharedFolderStatus: () -> SharedFolderMenuState
     private let chooseSharedFolder: (String) -> String?
     private let setSharedFolderEnabled: (Bool) -> Void
@@ -89,7 +91,17 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private var microphoneRequestInFlight = false
     private var cameraRequestInFlight = false
     private var resetInProgress = false
+    private var backupInProgress = false
     private var launchInProgress = false
+    private var pendingBackupPath: String?
+
+    private var isBusy: Bool {
+        launchInProgress
+            || resetInProgress
+            || backupInProgress
+            || microphoneRequestInFlight
+            || cameraRequestInFlight
+    }
     private var pendingResetSpaceEstimate: String?
     private weak var startMenuScrollView: NSScrollView?
     private(set) var portForwardingEditor: PortForwardingEditor?
@@ -100,6 +112,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             return self.window.isVisible
                 && !self.launchInProgress
                 && !self.resetInProgress
+                && !self.backupInProgress
                 && !self.microphoneRequestInFlight
                 && !self.cameraRequestInFlight
                 && self.window.attachedSheet == nil
@@ -149,6 +162,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         chooseStorageLocation: @escaping (String) -> String?,
         useDefaultStorageLocation: @escaping () -> Void,
         resetStorage: @escaping () -> Void,
+        backupStorage: @escaping (String) -> Void = { _ in },
+        validateBackupDestination: @escaping (String) -> String? = { _ in nil },
         sharedFolderStatus: @escaping () -> SharedFolderMenuState,
         chooseSharedFolder: @escaping (String) -> String?,
         setSharedFolderEnabled: @escaping (Bool) -> Void,
@@ -173,6 +188,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         self.chooseStorageLocation = chooseStorageLocation
         self.useDefaultStorageLocation = useDefaultStorageLocation
         self.resetStorage = resetStorage
+        self.backupStorage = backupStorage
+        self.validateBackupDestination = validateBackupDestination
         self.sharedFolderStatus = sharedFolderStatus
         self.chooseSharedFolder = chooseSharedFolder
         self.setSharedFolderEnabled = setSharedFolderEnabled
@@ -217,7 +234,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     func refreshPermissionStatus() {
-        guard window.isVisible, !launchInProgress, !resetInProgress else { return }
+        guard window.isVisible, !launchInProgress, !resetInProgress, !backupInProgress else { return }
         render()
     }
 
@@ -265,6 +282,46 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         alert.beginSheetModal(for: window)
     }
 
+    func backupDidFinish(errorMessage: String?) {
+        guard backupInProgress else { return }
+        backupInProgress = false
+        render()
+
+        let alert = NSAlert()
+        if let errorMessage {
+            alert.alertStyle = .critical
+            alert.messageText = "Omarchy couldn’t be backed up"
+            alert.informativeText = errorMessage
+        } else {
+            alert.alertStyle = .informational
+            alert.messageText = "Omarchy has been backed up"
+            if let path = pendingBackupPath {
+                alert.informativeText = """
+                    The VM was copied to \(path). To use it later, choose that \
+                    folder as VM Location. A newer Try Omarchy guest still cannot \
+                    boot this disk — copy files out through a shared folder or SSH \
+                    if you are updating.
+                    """
+            } else {
+                alert.informativeText = """
+                    The VM was copied. A newer Try Omarchy guest still cannot boot \
+                    this disk — copy files out through a shared folder or SSH if \
+                    you are updating.
+                    """
+            }
+        }
+        pendingBackupPath = nil
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window)
+    }
+
+    func backupDidAbort() {
+        guard backupInProgress else { return }
+        backupInProgress = false
+        pendingBackupPath = nil
+        render()
+    }
+
     /// Clears the launching state when the controller stopped before the
     /// launcher was ever started. The controller presents its own explanation.
     func launchDidAbort() {
@@ -291,7 +348,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Reset Omarchy to continue"
-        alert.informativeText = "This VM was created by a different Try Omarchy build. Reset Omarchy to use this version. Resetting permanently erases everything in the VM."
+        alert.informativeText = "This VM was created by a different Try Omarchy build. Reset Omarchy to use this version. Resetting permanently erases everything in the VM. Use Backup… first if you want a copy, or copy files out through a shared folder or SSH."
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window)
     }
@@ -503,6 +560,18 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             permissionRows.bottomAnchor.constraint(equalTo: permissionCard.bottomAnchor, constant: -5),
         ])
 
+        let backup = NSButton(
+            title: backupInProgress ? "Backing up Omarchy…" : "Backup…",
+            target: self,
+            action: #selector(backupOmarchy)
+        )
+        backup.bezelStyle = .rounded
+        backup.controlSize = .small
+        backup.isEnabled = canResetStorage && !isBusy
+        backup.toolTip = canResetStorage
+            ? "Copy this VM to an empty folder without changing the original"
+            : "Backup is unavailable for a disposable VM"
+
         let reset = NSButton(
             title: resetInProgress ? "Resetting Omarchy…" : "Reset Omarchy",
             target: self,
@@ -511,16 +580,17 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         reset.bezelStyle = .rounded
         reset.controlSize = .small
         reset.contentTintColor = .systemRed
-        reset.isEnabled = canResetStorage
-            && !launchInProgress
-            && !resetInProgress
-            && !microphoneRequestInFlight
-            && !cameraRequestInFlight
+        reset.isEnabled = canResetStorage && !isBusy
         reset.toolTip = canResetStorage
             ? "Erase this VM and return it to factory settings"
             : "Reset is unavailable for a disposable VM"
 
-        let resetViews: [NSView] = [reset]
+        let storageActions = NSStackView(views: [backup, reset])
+        storageActions.orientation = .horizontal
+        storageActions.alignment = .centerY
+        storageActions.spacing = 8
+
+        let resetViews: [NSView] = [storageActions]
         let resetSection = NSStackView(views: resetViews)
         resetSection.orientation = .vertical
         resetSection.alignment = .leading
@@ -537,10 +607,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         launchButton.bezelStyle = .rounded
         launchButton.controlSize = .large
         launchButton.font = launchButtonFont
-        launchButton.isEnabled = !launchInProgress
-            && !resetInProgress
-            && !microphoneRequestInFlight
-            && !cameraRequestInFlight
+        launchButton.isEnabled = !isBusy
         launchButton.title = ""
         launchButton.identifier = NSUserInterfaceItemIdentifier("launch-button")
         let launchButtonLabel = MouseIgnoringTextField(labelWithString: launchButtonTitle)
@@ -800,9 +867,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             button.controlSize = .regular
             button.isEnabled = actionsEnabled
                 && !microphoneRequestInFlight
-                && !cameraRequestInFlight
-                && !launchInProgress
-                && !resetInProgress
+                && !isBusy
             let identifier = actions.count == 1
                 ? "permission-action-\(symbolName)"
                 : "permission-action-\(symbolName)-\(index)"
@@ -931,7 +996,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         toggle.state = isEnabled ? .on : .off
         toggle.target = self
         toggle.action = #selector(changeImmersiveMode(_:))
-        toggle.isEnabled = !microphoneRequestInFlight && !launchInProgress && !resetInProgress
+        toggle.isEnabled = !isBusy
         toggle.identifier = NSUserInterfaceItemIdentifier("immersive-toggle")
         toggle.setAccessibilityLabel("Immersive mode")
         toggle.setAccessibilityTitleUIElement(title)
@@ -1062,8 +1127,12 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         confirmReset()
     }
 
+    @objc private func backupOmarchy() {
+        confirmBackup()
+    }
+
     @objc private func beginStorageLocationSelection() {
-        guard canResetStorage, !launchInProgress, !resetInProgress else { return }
+        guard canResetStorage, !isBusy else { return }
         permissionWindowRestorer.cancel()
         let panel = NSOpenPanel()
         panel.title = "Choose where to keep the Omarchy VM"
@@ -1119,14 +1188,13 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func useDefaultStorageLocationAction() {
-        guard canResetStorage, !launchInProgress, !resetInProgress else { return }
+        guard canResetStorage, !isBusy else { return }
         useDefaultStorageLocation()
         render()
     }
 
     @objc private func beginSharedFolderSelection() {
-        guard !launchInProgress,
-              !resetInProgress,
+        guard !isBusy,
               !microphoneRequestInFlight,
               !cameraRequestInFlight else { return }
         permissionWindowRestorer.cancel()
@@ -1167,7 +1235,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func beginPortForwardingConfiguration() {
-        guard !launchInProgress, !resetInProgress, portForwardingEditor == nil else { return }
+        guard !isBusy, portForwardingEditor == nil else { return }
         permissionWindowRestorer.cancel()
         let editor = PortForwardingEditor(
             mappings: portForwardingStatus(),
@@ -1188,7 +1256,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func changeImmersiveMode(_ sender: NSSwitch) {
-        guard !launchInProgress, !resetInProgress else { return }
+        guard !isBusy else { return }
         let isEnabled = sender.state == .on
         setImmersiveMode(isEnabled)
         let detailText = StartMenuPresentation.immersiveDetail(isEnabled: isEnabled)
@@ -1205,17 +1273,13 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     private func confirmReset() {
-        guard canResetStorage,
-              !launchInProgress,
-              !resetInProgress,
-              !microphoneRequestInFlight,
-              !cameraRequestInFlight else { return }
+        guard canResetStorage, !isBusy else { return }
         permissionWindowRestorer.cancel()
         let estimate = storageSpaceEstimate()
         let alert = NSAlert()
         alert.alertStyle = .critical
         alert.messageText = "Reset Omarchy to factory settings?"
-        var detail = "This permanently erases everything in this Omarchy virtual machine, including apps, files, accounts, and settings. This cannot be undone or recovered."
+        var detail = "This permanently erases everything in this Omarchy virtual machine, including apps, files, accounts, and settings. This cannot be undone or recovered. Use Backup… first if you want a copy of this VM."
         // With a chosen data folder there can be more than one workspace on the
         // Mac, so say which one is about to be erased.
         let location = storageLocationStatus()
@@ -1248,9 +1312,55 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         resetStorage()
     }
 
+    private func confirmBackup() {
+        guard canResetStorage, !isBusy else { return }
+        permissionWindowRestorer.cancel()
+        let panel = NSOpenPanel()
+        panel.title = "Choose where to copy the Omarchy VM"
+        panel.message = "The copy goes straight into the folder you choose. Pick an empty folder on an APFS disk. On the same disk the copy is almost instant; on another disk it can take several minutes."
+        panel.prompt = "Backup"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = true
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        if let problem = validateBackupDestination(url.path) {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "That folder can’t hold a backup"
+            alert.informativeText = problem
+            alert.addButton(withTitle: "OK")
+            alert.beginSheetModal(for: window)
+            return
+        }
+
+        let destination = StorageLocationPolicy.stateRoot(forContainer: url.path)
+        let confirmation = NSAlert()
+        confirmation.alertStyle = .informational
+        confirmation.messageText = "Copy the Omarchy VM here?"
+        confirmation.informativeText = """
+            Omarchy will copy the VM into \(destination) without changing the \
+            original. The copy still belongs to this Try Omarchy version; a newer \
+            guest cannot boot it.
+            """
+        confirmation.addButton(withTitle: "Cancel")
+        confirmation.addButton(withTitle: "Backup")
+        guard confirmation.runModal() == .alertSecondButtonReturn else { return }
+
+        pendingBackupPath = StorageLocationPolicy.displayPath(
+            destination,
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path
+        )
+        backupInProgress = true
+        render()
+        backupStorage(destination)
+    }
+
     @objc private func launchOmarchy() {
-        guard !launchInProgress,
-              !resetInProgress,
+        guard !isBusy,
               !microphoneRequestInFlight,
               !cameraRequestInFlight else { return }
         launchInProgress = true

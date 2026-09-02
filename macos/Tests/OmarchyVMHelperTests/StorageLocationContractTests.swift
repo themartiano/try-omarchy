@@ -37,6 +37,18 @@ struct StorageLocationContractTests {
         #expect(library.contains("[[ $(_qps_owner \"$qps_file\") == $(id -u) ]]"))
     }
 
+    @Test("the backup destination environment key matches the launcher")
+    func backupDestinationEnvironmentKey() throws {
+        let library = try source(named: "qemu-persistent-storage.sh")
+        #expect(
+            library.contains(
+                "QEMU_PERSISTENT_STORAGE_BACKUP_ROOT_ENV='\(QEMUGPURuntimeEnvironment.backupRootKey)'"
+            )
+        )
+        let launcher = try source(named: "run-qemu-gpu.sh")
+        #expect(launcher.contains("backup_root=${OMARCHY_QEMU_GPU_BACKUP_ROOT:-}"))
+    }
+
     @Test("the default state root the launcher falls back to is still the documented one")
     func defaultStateRoot() throws {
         let library = try source(named: "qemu-persistent-storage.sh")

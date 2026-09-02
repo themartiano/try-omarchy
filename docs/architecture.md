@@ -119,7 +119,11 @@ disk remain unchanged. Normal user launches use one private writable disk under
 `~/Library/Application Support/Try Omarchy/VM/v1`. Its factory-image identity is immutable:
 the launcher never pairs a saved root filesystem with a different bundled kernel
 or initramfs. When a guest build changes, the start menu asks for an explicitly
-confirmed factory reset before creating the replacement disk. A compatible
+confirmed factory reset before creating the replacement disk. **Backup…** copies
+recognized persistent disks into an empty APFS folder with `cp -c`, preserving
+sparse allocation and the 0600/0700 modes the launcher requires. The copy is a
+valid workspace for the same guest identity; it does not make an older disk boot
+on a newer factory image. A compatible
 legacy identity-keyed disk can be migrated into the single workspace without
 discarding its contents. If several recognized legacy disks exist, normal launch
 stops at the start menu; confirmed reset safely removes them before publishing

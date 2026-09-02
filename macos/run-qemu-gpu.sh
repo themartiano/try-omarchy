@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: macos/run-qemu-gpu.sh [--ephemeral | --reset-storage | --reset-storage-only] [GUEST_DIR]" >&2
+  echo "Usage: macos/run-qemu-gpu.sh [--ephemeral | --reset-storage | --reset-storage-only | --backup-storage-only] [GUEST_DIR]" >&2
   exit 64
 }
 
@@ -26,6 +26,10 @@ case ${1:-} in
   --reset-storage-only)
     storage_mode=reset
     reset_only=1
+    shift
+    ;;
+  --backup-storage-only)
+    storage_mode=backup
     shift
     ;;
   --*) usage ;;
@@ -784,6 +788,15 @@ fi
 # a build-time path and exits without sourcing any shell library.
 # shellcheck source=qemu-persistent-storage.sh
 source "$storage_library"
+
+if [[ $storage_mode == backup ]]; then
+  backup_root=${OMARCHY_QEMU_GPU_BACKUP_ROOT:-}
+  [[ -n $backup_root ]] || fail "$QEMU_PERSISTENT_STORAGE_BACKUP_ROOT_ENV is required for --backup-storage-only"
+  qemu_persistent_storage_backup "$backup_root" || fail "could not back up the Omarchy VM"
+  echo "[qemu-gpu] Backup complete." >&2
+  exit 0
+fi
+
 # shellcheck source=qemu-port-forwarding.sh
 source "$port_forwarding_library"
 
