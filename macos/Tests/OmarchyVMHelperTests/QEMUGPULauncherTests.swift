@@ -94,6 +94,7 @@ struct QEMUGPURuntimeEnvironmentTests {
             AudioLaunchConfiguration.inputDeviceNameKey,
             SharedFolderPolicy.environmentKey,
             PortForwardPolicy.environmentKey,
+            MemoryPolicy.environmentKey,
             QEMUGPURuntimeEnvironment.inspectOnlyKey,
             QEMUGPURuntimeEnvironment.dryRunKey,
         ]

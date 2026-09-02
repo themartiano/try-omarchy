@@ -13,6 +13,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let sharedFolderStore: SharedFolderPreferenceStore
     private let portForwardingStore: PortForwardingPreferenceStore
     private let fullscreenPreferenceStore: FullscreenPreferenceStore
+    private let memoryPreferenceStore: MemoryPreferenceStore
     private let storageLocationStore: StorageLocationPreferenceStore
     private let volumeProbe: VolumeProbing
     private let volumeRootDetector: VolumeRootDetecting
@@ -47,6 +48,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         sharedFolderStore: SharedFolderPreferenceStore = SharedFolderPreferenceStore(),
         portForwardingStore: PortForwardingPreferenceStore = PortForwardingPreferenceStore(),
         fullscreenPreferenceStore: FullscreenPreferenceStore = FullscreenPreferenceStore(),
+        memoryPreferenceStore: MemoryPreferenceStore = MemoryPreferenceStore(),
         storageLocationStore: StorageLocationPreferenceStore = StorageLocationPreferenceStore(),
         volumeProbe: VolumeProbing = URLVolumeProbe(),
         volumeRootDetector: VolumeRootDetecting = FileManagerVolumeRootDetector(),
@@ -61,6 +63,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         self.sharedFolderStore = sharedFolderStore
         self.portForwardingStore = portForwardingStore
         self.fullscreenPreferenceStore = fullscreenPreferenceStore
+        self.memoryPreferenceStore = memoryPreferenceStore
         self.storageLocationStore = storageLocationStore
         self.volumeProbe = volumeProbe
         self.volumeRootDetector = volumeRootDetector
@@ -156,6 +159,15 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             setImmersiveMode: { [weak self] isImmersive in
                 self?.fullscreenPreferenceStore.save(
                     FullscreenPreferences(isImmersive: isImmersive)
+                )
+            },
+            memoryChoiceMiB: { [weak self] in
+                self?.memoryPreferenceStore.load().memoryMiB
+                    ?? MemoryPolicy.defaultMemoryMiB
+            },
+            setMemoryChoiceMiB: { [weak self] memoryMiB in
+                self?.memoryPreferenceStore.save(
+                    MemoryPreferences(memoryMiB: memoryMiB)
                 )
             },
             launch: { [weak self] in
@@ -333,8 +345,13 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             baseEnvironment: forwarding.environment,
             preferences: fullscreenPreferenceStore.load()
         )
-        let storage = StorageLocationLaunchConfiguration.make(
+        let memory = MemoryLaunchConfiguration.make(
             baseEnvironment: fullscreen.environment,
+            preferences: memoryPreferenceStore.load(),
+            hostMemoryMiB: MemoryPolicy.hostMemoryMiB()
+        )
+        let storage = StorageLocationLaunchConfiguration.make(
+            baseEnvironment: memory.environment,
             preference: storageLocationStore.load(),
             metrics: bundledMetrics,
             probe: volumeProbe,
