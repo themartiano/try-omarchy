@@ -68,11 +68,11 @@ struct FullscreenLaunchConfigurationTests {
         #expect(immersive.environment["KEEP_ME"] == "yes")
         #expect(immersive.environment[FullscreenLaunchConfiguration.immersiveEnvironmentKey] == "1")
 
-        let standard = FullscreenLaunchConfiguration.make(
+        let windowed = FullscreenLaunchConfiguration.make(
             baseEnvironment: inherited,
             preferences: FullscreenPreferences(isImmersive: false)
         )
-        #expect(standard.environment["KEEP_ME"] == "yes")
-        #expect(standard.environment[FullscreenLaunchConfiguration.immersiveEnvironmentKey] == "0")
+        #expect(windowed.environment["KEEP_ME"] == "yes")
+        #expect(windowed.environment[FullscreenLaunchConfiguration.immersiveEnvironmentKey] == "0")
     }
 }

@@ -339,7 +339,7 @@ assert_contains "$(<"$test_root/disabled/storage.log")" create
 run_scenario non-immersive 0 '' OMARCHY_QEMU_GPU_IMMERSIVE=0
 non_immersive_qemu=$(<"$test_root/non-immersive/qemu.log")
 assert_contains "$non_immersive_qemu" \
-  'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,immersive=off,swap-opt-cmd=off'
+  'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=off,full-grab=on,immersive=off,swap-opt-cmd=off'
 
 # Simulate installing a newer app build after the first VM was created. The
 # saved VM must be selected before the launcher even considers the absent new

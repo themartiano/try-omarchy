@@ -181,7 +181,7 @@ enum StartMenuPresentation {
 
     static func immersiveDetail(isEnabled: Bool) -> String {
         isEnabled
-            ? "Mac menu bar and Dock stay hidden while Omarchy is Full Screen."
-            : "Mac menu bar and Dock remain available at the screen edges while Omarchy is Full Screen."
+            ? "Omarchy opens Full Screen with the Mac menu bar and Dock hidden."
+            : "Omarchy opens in a window with the Mac menu bar and Dock available."
     }
 }

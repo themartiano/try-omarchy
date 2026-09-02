@@ -262,11 +262,11 @@ struct StartMenuPresentationTests {
         ])
     }
 
-    @Test("immersive guidance describes fullscreen presentation only")
+    @Test("immersive guidance distinguishes windowed and fullscreen launch")
     func immersiveGuidance() {
         #expect(StartMenuPresentation.immersiveDetail(isEnabled: true)
-            == "Mac menu bar and Dock stay hidden while Omarchy is Full Screen.")
+            == "Omarchy opens Full Screen with the Mac menu bar and Dock hidden.")
         #expect(StartMenuPresentation.immersiveDetail(isEnabled: false)
-            == "Mac menu bar and Dock remain available at the screen edges while Omarchy is Full Screen.")
+            == "Omarchy opens in a window with the Mac menu bar and Dock available.")
     }
 }

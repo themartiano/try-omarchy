@@ -7,9 +7,10 @@ QEMU's Cocoa fullscreen always replaces AppKit's auto-hidden menu bar and Dock
 with hard-hidden variants. Add an independent immersive display option so the
 user can choose that presentation without changing who owns the keyboard.
 Full grab remains solely an input policy: when enabled, focused Command chords
-belong to the guest in either presentation mode. Both modes begin fullscreen
-and keep normal guest pointer handling. The View menu also follows the current
-state so its exit action stays obvious.
+belong to the guest in either presentation mode. The initial fullscreen state
+remains an independent display option, and normal guest pointer handling is
+unchanged. The View menu also follows the current state so its exit action
+stays obvious.
 
 `fullScreenMenuItem` is a file-scope static rather than a
 `QemuCocoaAppController` ivar: `create_initial_menus` is a plain C function

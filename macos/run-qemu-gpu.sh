@@ -1253,8 +1253,14 @@ if ((reset_only)); then
 fi
 
 case ${OMARCHY_QEMU_GPU_IMMERSIVE:-1} in
-  1) cocoa_immersive=on ;;
-  0) cocoa_immersive=off ;;
+  1)
+    cocoa_full_screen=on
+    cocoa_immersive=on
+    ;;
+  0)
+    cocoa_full_screen=off
+    cocoa_immersive=off
+    ;;
   *) fail "OMARCHY_QEMU_GPU_IMMERSIVE must be 0 or 1" ;;
 esac
 
@@ -1286,9 +1292,9 @@ qemu_args=(
   # Cocoa forwards its live backing-pixel dimensions and the current host
   # display refresh rate through Virtio GPU EDID. Its accessibility-backed
   # Full grab keeps every Command chord with the focused guest in either
-  # presentation mode. Immersive controls only whether Cocoa hard-hides the
-  # Mac menu bar and Dock instead of using standard fullscreen auto-hide.
-  -display "cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,immersive=$cocoa_immersive,swap-opt-cmd=off"
+  # presentation mode. Immersive launches Full Screen and hard-hides the Mac
+  # menu bar and Dock; otherwise Cocoa opens a centered, resizable window.
+  -display "cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=$cocoa_full_screen,full-grab=on,immersive=$cocoa_immersive,swap-opt-cmd=off"
   -device 'virtio-keyboard-pci,romfile='
   -device 'virtio-tablet-pci,romfile='
   -object 'rng-random,id=omarchy-rng,filename=/dev/urandom'
