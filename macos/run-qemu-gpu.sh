@@ -148,6 +148,11 @@ for marker in guest_owner_uid guest_owner_gid; do
     fail "staged QEMU lacks the shared-folder owner mapping; run make runtime"
   }
 done
+for marker in hv_vm_config_set_el2_enabled hv_gic_create; do
+  LC_ALL=C grep -aFq "$marker" "$qemu_bin" || {
+    fail "staged QEMU lacks HVF nested virtualization; run make runtime"
+  }
+done
 
 qemu_entitlements=$(codesign -d --entitlements - "$qemu_bin" 2>&1) || {
   fail "staged QEMU is not code-signed for HVF"
@@ -1043,11 +1048,35 @@ case ${OMARCHY_QEMU_GPU_IMMERSIVE:-1} in
   *) fail "OMARCHY_QEMU_GPU_IMMERSIVE must be 0 or 1" ;;
 esac
 
+# M3 and newer Apple Silicon can expose EL2 to this Linux guest. Probe the
+# actual Hypervisor.framework capability instead of guessing from a model name;
+# older Apple Silicon keeps the existing platform-GIC/EL1 launch path.
+qemu_virtualization_args=(-machine 'virt,accel=hvf,gic-version=3')
+if printf '%s\n' \
+    '{"execute":"qmp_capabilities"}' \
+    '{"execute":"quit"}' | \
+  "$qemu_bin" \
+    -machine 'virt,gic-version=3,virtualization=on' \
+    -accel 'hvf,kernel-irqchip=on' \
+    -cpu 'host,pmu=off' \
+    -smp 1 \
+    -m 128M \
+    -nodefaults \
+    -display none \
+    -S \
+    -qmp stdio >/dev/null 2>&1; then
+  qemu_virtualization_args=(
+    -machine 'virt,gic-version=3,virtualization=on'
+    -accel 'hvf,kernel-irqchip=on'
+  )
+  echo '[qemu-gpu] Nested virtualization is enabled.' >&2
+else
+  echo '[qemu-gpu] Nested virtualization is unavailable; using the compatible EL1 path.' >&2
+fi
+
 qemu_args=(
   -name 'Try Omarchy'
-  # HVF exposes the ARM virtual GICv2 interface on current Apple Silicon.
-  # Eight vCPUs is the architectural GICv2 limit and matches our host cap.
-  -machine 'virt,accel=hvf,gic-version=3'
+  "${qemu_virtualization_args[@]}"
   # HVF does not provide a usable guest PMU on Apple Silicon. Do not advertise
   # one: Linux otherwise probes the dead device and prints a misleading failure.
   -cpu 'host,pmu=off'

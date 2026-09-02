@@ -313,6 +313,7 @@ verify_runtime_tree() {
   local zstd_version
   local accel_help
   local machine_help
+  local virt_help
   local cpu_help
   local display_help
   local device_help
@@ -371,6 +372,10 @@ verify_runtime_tree() {
   ) || die "relocated QEMU cannot load its pinned dependencies: $version_output"
   [[ $version_output == QEMU\ emulator\ version\ 11.1.1* ]] || \
     die "relocated QEMU returned an unexpected version string: $version_output"
+  grep -aFq 'hv_vm_config_set_el2_enabled' "$qemu" || \
+    die "relocated QEMU is missing the HVF EL2 API"
+  grep -aFq 'hv_gic_create' "$qemu" || \
+    die "relocated QEMU is missing the HVF platform GIC API"
 
   zstd_version=$(
     unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FRAMEWORK_PATH
@@ -388,6 +393,10 @@ verify_runtime_tree() {
     die "relocated QEMU could not enumerate machines: $machine_help"
   printf '%s\n' "$machine_help" | awk '$1 == "virt" { found = 1 } END { exit !found }' || \
     die "relocated QEMU is missing the ARM virt machine"
+  virt_help=$("$qemu" -machine virt,help 2>&1) || \
+    die "relocated QEMU could not inspect the ARM virt machine: $virt_help"
+  printf '%s\n' "$virt_help" | grep -Fq 'virtualization=<bool>' || \
+    die "relocated QEMU is missing the ARM virtualization-extension switch"
 
   cpu_help=$("$qemu" -cpu help 2>&1) || \
     die "relocated QEMU could not enumerate CPUs: $cpu_help"
