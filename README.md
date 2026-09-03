@@ -10,8 +10,6 @@ Try Omarchy packages a project-built ARM64 Arch Linux image configured with Omar
 
 <img width="800" src="https://github.com/user-attachments/assets/1368a8f5-5099-43e4-8d3b-3d7d7fba0326" />
 
-Try Omarchy is not official or affiliated with Omarchy.
-
 ## Highlights
 
 - Hardware-accelerated ARM64 virtualization and VirGL graphics
@@ -429,7 +427,7 @@ The architecture and trust boundaries are documented in [`docs/architecture.md`]
 
 ## Project status and support
 
-Try Omarchy is pre-1.0 and under active development. It is an independent open-source project and is not affiliated with or endorsed by Basecamp. Omarchy and bundled dependencies retain their own licenses; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+Try Omarchy is pre-1.0 and under active development. Omarchy and bundled dependencies retain their own licenses; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 Report ordinary bugs through [GitHub Issues](https://github.com/themartiano/try-omarchy/issues). Report suspected vulnerabilities using the private process in [`SECURITY.md`](SECURITY.md), not a public issue.
 

@@ -616,7 +616,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             launchButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 500),
         ])
 
-        let footerText = "by @martiano  •  Not affiliated with Omarchy."
+        let footerText = "by @martiano"
         let footerTitle = NSMutableAttributedString(
             string: footerText,
             attributes: [
@@ -632,14 +632,6 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             ],
             range: footerNSString.range(of: "@martiano")
         )
-        footerTitle.addAttributes(
-            [
-                .link: URL(string: "https://omarchy.org")!,
-                .foregroundColor: NSColor.linkColor,
-            ],
-            range: footerNSString.range(of: "Omarchy")
-        )
-
         let footer = LinkCursorTextField(labelWithAttributedString: footerTitle)
         footer.isSelectable = true
         footer.allowsEditingTextAttributes = true
