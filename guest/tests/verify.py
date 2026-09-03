@@ -167,6 +167,7 @@ def main() -> None:
             "1password-arm64-installer",
             "notification-hover-close",
             "notification-screen-privacy",
+            "update-free-space-message",
         ],
         "Omarchy backports are explicitly ordered and identified",
     )
@@ -187,6 +188,13 @@ def main() -> None:
                 and re.fullmatch(r"[0-9a-f]{64}", target.get("afterSha256", "")) is not None,
                 f"backport target digests are pinned: {backport['id']} {target['path']}",
             )
+    update_free_space_patch = read(GUEST / "patches/omarchy/update-free-space-message.patch")
+    check(
+        "Omarchy VM disk, not on your Mac" in update_free_space_patch
+        and "/usr/share/try-omarchy/build-spec.json" in update_free_space_patch
+        and "df -h /" in update_free_space_patch,
+        "update free-space backport clarifies the guest VM disk requirement",
+    )
 
     post_build_installers = authenticity["postBuildUserInstallers"]
     check(

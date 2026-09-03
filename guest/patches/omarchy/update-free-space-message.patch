@@ -1,0 +1,18 @@
+diff --git a/bin/omarchy-update-requires-free-space b/bin/omarchy-update-requires-free-space
+index 07523eb..0d47c5e 100755
+--- a/bin/omarchy-update-requires-free-space
++++ b/bin/omarchy-update-requires-free-space
+@@ -11,6 +11,13 @@ elif read -r available_bytes < <(df --output=avail --block-size=1 / 2>/dev/null
+   [[ $available_bytes =~ ^[0-9]+$ ]] &&
+   (( available_bytes < 10 * 1024 * 1024 * 1024 )); then
+   echo "You need at least 10 GiB free to safely update Omarchy."
++  if [[ -f /usr/share/try-omarchy/build-spec.json ]]; then
++    echo "This is free space inside the Omarchy VM disk, not on your Mac."
++    echo
++    df -h / 2>/dev/null || true
++    echo
++    echo "Free space with: sudo pacman -Scc, remove unused packages, or enlarge the VM disk."
++  fi
+   exit 1
+ else
+   exit 0

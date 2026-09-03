@@ -187,6 +187,20 @@
             "afterSha256": "43f7d1dbf07885316ea7cb58b4513ad4ff5287abe5da1b91b85daace6b940b46"
           }
         ]
+      },
+      {
+        "id": "update-free-space-message",
+        "description": "Clarify that Omarchy's 10 GiB update free-space check measures the guest VM disk, not the Mac host.",
+        "reference": "https://github.com/basecamp/omarchy/blob/346e69e1cec6c4e8924531874af6ba010a1bc99e/bin/omarchy-update-requires-free-space",
+        "patch": "patches/omarchy/update-free-space-message.patch",
+        "patchSha256": "fd561df117ea2e2aac073206bbec5c8a7ca0e01d8d988d61032482a397962fa7",
+        "targets": [
+          {
+            "path": "bin/omarchy-update-requires-free-space",
+            "beforeSha256": "50a5ddef021dac5e79f789a53643fa91a6b8d7193b4d27786516d142525eca93",
+            "afterSha256": "0255ca210965a2f08cc5f937b0cb5d997a5a633fe27308a9af974cb3cfbc4ff0"
+          }
+        ]
       }
     ],
     "postBuildUserInstallers": [
