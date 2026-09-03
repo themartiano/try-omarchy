@@ -1120,6 +1120,54 @@ HOTPLUG=1
                 "fresh-user background sorting selects the Try Omarchy wallpaper by default",
             )
 
+        with tempfile.TemporaryDirectory() as temporary:
+            staged_root = Path(temporary) / "root"
+            subprocess.run(
+                [
+                    "bash",
+                    str(GUEST / "scripts/materialize-omarchy.sh"),
+                    "--root",
+                    str(staged_root),
+                    "--source",
+                    str(source),
+                    "--spec",
+                    str(GUEST / "spec.json"),
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            staged_icons = staged_root / "usr/share/icons/hicolor/256x256/apps"
+            icon_names = {path.name for path in staged_icons.iterdir() if path.is_file()}
+            expected_normalized_icons = {
+                "disk-usage.png",
+                "google-contacts.png",
+                "google-maps.png",
+                "google-messages.png",
+                "google-photos.png",
+                "retro-gaming.png",
+            }
+            check(
+                expected_normalized_icons <= icon_names
+                and not {
+                    "Disk Usage.png",
+                    "Google Contacts.png",
+                    "Google Maps.png",
+                    "Google Messages.png",
+                    "Google Photos.png",
+                    "Retro Gaming.png",
+                }
+                & icon_names,
+                "materialized application icons match their desktop icon names",
+            )
+            check(
+                all(
+                    all(0x21 <= byte <= 0x7E for byte in os.fsencode(path.name))
+                    for path in staged_icons.iterdir()
+                ),
+                "materialized application icon paths are GTK cache-safe",
+            )
+
         subprocess.run(
             [
                 "python3",
