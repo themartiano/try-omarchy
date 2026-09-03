@@ -427,6 +427,20 @@ def main() -> None:
         and "omarchy-provision-autologin-once.service" in native_autologin,
         "native provisioning keeps direct graphical login across VM boots",
     )
+    fcitx_guard = read(
+        GUEST / "native-overlay/etc/systemd/user/omarchy-fcitx5.service.d/10-guard.conf"
+    )
+    check(
+        "ConditionPathExists=/usr/bin/fcitx5" in fcitx_guard,
+        "fcitx5 user unit is inert until the omitted binary is installed",
+    )
+    bt_agent_guard = read(
+        GUEST / "native-overlay/etc/systemd/user/bt-agent.service.d/10-guard.conf"
+    )
+    check(
+        "ConditionPathExists=/usr/bin/bt-agent" in bt_agent_guard,
+        "bt-agent user unit is inert until the omitted binary is installed",
+    )
     check("omarchy-native-audio-bridge" in configure, "guest installs native host-audio integration")
     check(
         "default.target.wants/omarchy-native-camera-bridge.service" in configure,
