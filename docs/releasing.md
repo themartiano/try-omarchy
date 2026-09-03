@@ -22,7 +22,7 @@ before continuing with the normal build and verification sequence.
 
 Outputs are written to:
 
-- `dist/Try Omarchy.app`
+- `dist/app.noindex/Try Omarchy.app`
 - `dist/TryOmarchy.dmg`
 - `dist/guest/`
 

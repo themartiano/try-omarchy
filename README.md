@@ -348,6 +348,11 @@ individual component command).
 Artifacts created before their `.build/state/` record exists are rebuilt once;
 the cache never adopts an output whose successful inputs it did not observe.
 
+The generated app lives under `dist/app.noindex/`. macOS can run and package
+the bundle normally, but Spotlight will not present it beside an installed
+copy as a second, indistinguishable Command-Space result. The first app rebuild
+after this layout change removes the old generated bundle from `dist/`.
+
 Launching also ensures that the guest, runtime, and native app are current, so
 the normal follow-up command is:
 
@@ -393,7 +398,8 @@ All generated output has one predictable home:
 
 ```text
 dist/
-├── Try Omarchy.app
+├── app.noindex/
+│   └── Try Omarchy.app
 ├── TryOmarchy.dmg        # after make package or make release
 └── guest/                # verified guest build artifacts
 ```

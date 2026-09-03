@@ -402,7 +402,7 @@ def validate_runtime(root: Path, previous: dict[str, Any] | None) -> dict[str, A
 
 
 def validate_app(root: Path, previous: dict[str, Any] | None) -> dict[str, Any]:
-    app = root / "dist/Try Omarchy.app"
+    app = root / "dist/app.noindex/Try Omarchy.app"
     required = [
         app / "Contents/MacOS/omarchy-vm-helper",
         app / "Contents/Resources/TryOmarchy.icns",

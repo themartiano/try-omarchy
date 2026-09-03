@@ -103,7 +103,9 @@ class BuildCacheTests(unittest.TestCase):
         self.assertLess(guest, runtime)
         self.assertLess(runtime, app)
         self.assertIn("Build output:", dry_run)
-        self.assertIn(str(REPOSITORY / "dist/Try Omarchy.app"), dry_run)
+        self.assertIn(
+            str(REPOSITORY / "dist/app.noindex/Try Omarchy.app"), dry_run
+        )
 
         forced = subprocess.run(
             ["make", "-n", "build", "FORCE=1"],
@@ -128,9 +130,20 @@ class BuildCacheTests(unittest.TestCase):
 
     def test_development_app_is_excluded_from_spotlight(self) -> None:
         build_script = (REPOSITORY / "macos/build-app.sh").read_text()
+        open_script = (REPOSITORY / "macos/open-qemu-gpu.sh").read_text()
         self.assertIn(
-            'touch "$repo_dir/dist/.metadata_never_index"',
+            'app="$repo_dir/dist/app.noindex/Try Omarchy.app"',
             build_script,
+        )
+        self.assertIn(
+            'legacy_app="$repo_dir/dist/Try Omarchy.app"',
+            build_script,
+        )
+        self.assertIn('rm -rf -- "$legacy_app"', build_script)
+        self.assertNotIn(".metadata_never_index", build_script)
+        self.assertIn(
+            'app="$repo_dir/dist/app.noindex/Try Omarchy.app"',
+            open_script,
         )
 
     def test_runtime_file_manifest_is_the_single_validated_closure(self) -> None:
@@ -233,7 +246,7 @@ class BuildCacheTests(unittest.TestCase):
     def test_app_validation_requires_packaged_icon(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            app = root / "dist/Try Omarchy.app"
+            app = root / "dist/app.noindex/Try Omarchy.app"
             for relative in (
                 "Contents/MacOS/omarchy-vm-helper",
                 "Contents/Resources/runtime/bin/Try Omarchy",

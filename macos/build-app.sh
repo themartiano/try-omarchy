@@ -47,7 +47,8 @@ done
 macos_dir=$(cd "$(dirname "$0")" && pwd)
 repo_dir=$(cd "$macos_dir/.." && pwd -P)
 helper="$macos_dir/.build/release/omarchy-vm-helper"
-app="$repo_dir/dist/Try Omarchy.app"
+legacy_app="$repo_dir/dist/Try Omarchy.app"
+app="$repo_dir/dist/app.noindex/Try Omarchy.app"
 contents="$app/Contents"
 bundled_qemu="$contents/Resources/runtime/bin/Try Omarchy"
 module_cache="$macos_dir/.build/module-cache"
@@ -107,11 +108,17 @@ fi
   exit 1
 }
 
-mkdir -p "$repo_dir/dist"
-# Keep generated development bundles out of Spotlight. The installed copy in
-# /Applications is the canonical user-facing app; indexing both makes
-# Command-Space offer an indistinguishable duplicate after a local build.
-touch "$repo_dir/dist/.metadata_never_index"
+if [[ -e $legacy_app || -L $legacy_app ]]; then
+  lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+  if [[ -x $lsregister ]]; then
+    "$lsregister" -u "$legacy_app" >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "$legacy_app"
+fi
+mkdir -p "$repo_dir/dist/app.noindex"
+# A .noindex container is the supported per-directory Spotlight exclusion.
+# Removing and unregistering the legacy bundle above also prevents a previously
+# indexed build at the old path from surviving this migration.
 cd "$macos_dir"
 mkdir -p "$module_cache/swift" "$module_cache/clang" "$module_cache/icon"
 export SWIFT_MODULECACHE_PATH="$module_cache/swift"

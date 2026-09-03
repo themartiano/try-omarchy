@@ -10,7 +10,7 @@ Use the root Makefile for normal development:
 
 ```sh
 make runtime   # macos/.build/qemu-gpu-runtime
-make app       # dist/Try Omarchy.app
+make app       # dist/app.noindex/Try Omarchy.app
 make run
 make package   # signed and notarized dist/TryOmarchy.dmg
 make release   # signed and notarized dist/TryOmarchy.dmg
@@ -48,7 +48,8 @@ make run DEVELOPMENT_SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"
 default to the configured release credentials. It fails instead of producing
 an unnotarized fallback.
 Runtime caches are private to `macos/.build/`; user-facing output always goes
-to `dist/`.
+to `dist/`. The generated app lives inside `dist/app.noindex/`, which keeps a
+development build from appearing beside an installed copy in Command-Space.
 
 Normal app launches maintain one stable user VM disk under
 `~/Library/Application Support/Try Omarchy/VM/v1`. Storage integration tests
