@@ -1140,6 +1140,7 @@ HOTPLUG=1
             staged_icons = staged_root / "usr/share/icons/hicolor/256x256/apps"
             icon_names = {path.name for path in staged_icons.iterdir() if path.is_file()}
             expected_normalized_icons = {
+                "battle-net.png",
                 "disk-usage.png",
                 "google-contacts.png",
                 "google-maps.png",
@@ -1150,6 +1151,8 @@ HOTPLUG=1
             check(
                 expected_normalized_icons <= icon_names
                 and not {
+                    "Battle.net.png",
+                    "battle.net.png",
                     "Disk Usage.png",
                     "Google Contacts.png",
                     "Google Maps.png",

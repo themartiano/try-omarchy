@@ -185,9 +185,15 @@ install_file 0644 "$source_dir/etc/fastfetch/config.jsonc" "$root/etc/fastfetch/
 # Preserve the application metadata and artwork used by Quickshell's real app
 # provider. Normalize display-style artwork names to the lowercase, hyphenated
 # icon identifiers used by the desktop files and accepted by GTK's icon cache.
+# The stem is normalized separately so Battle.net.png becomes battle-net.png
+# rather than battle.net.png.
 mkdir -p "$root/usr/share/icons/hicolor/256x256/apps"
 while IFS= read -r icon; do
-  icon_name=$(basename "$icon" | LC_ALL=C tr '[:upper:] ' '[:lower:]-')
+  icon_base=$(basename "$icon")
+  icon_stem=${icon_base%.*}
+  icon_ext=${icon_base##*.}
+  icon_stem=$(printf '%s' "$icon_stem" | LC_ALL=C tr '[:upper:]. ' '[:lower:]--')
+  icon_name="$icon_stem.$icon_ext"
   icon_target="$root/usr/share/icons/hicolor/256x256/apps/$icon_name"
   [[ ! -e $icon_target ]] || fail "normalized icon name collides: $icon_name"
   install_file 0644 "$icon" "$icon_target"
