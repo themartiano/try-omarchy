@@ -654,10 +654,23 @@ def main() -> None:
         and "--gid 0" in vivaldi_installer
         and "gzip -n -9 >.MTREE" in vivaldi_installer
         and "could not generate the Vivaldi package mtree" in vivaldi_installer
-        and "sudo pacman -U --needed --noconfirm" in vivaldi_installer
         and "sys.argv[1].strip()" in vivaldi_installer
         and "already installed" in vivaldi_installer,
         "Vivaldi installer verifies and packages one signed ARM64 vendor release with root-owned integrity metadata",
+    )
+    check(
+        "repo-add" in vivaldi_installer
+        and "repo-add --remove --quiet" in vivaldi_installer
+        and 'sudo pacman -S --needed --noconfirm "$repo_name/vivaldi"'
+        in vivaldi_installer
+        and "sudo pacman -U --needed --noconfirm" not in vivaldi_installer
+        and "classified as a foreign/AUR package" in vivaldi_installer
+        and "pacman -Qem" in vivaldi_installer
+        and "yay -Sua" in vivaldi_installer
+        and "/usr/share/try-omarchy/repo" in vivaldi_installer
+        and "/var/lib/pacman/sync/$repo_name.db" in vivaldi_installer
+        and "Re-registering installed Vivaldi" in vivaldi_installer,
+        "Vivaldi installer publishes into the local sync repository so Omarchy's AUR updater cannot take over",
     )
     check(
         'vivaldi_installer="$root/usr/local/lib/try-omarchy/install-vivaldi-arm64"'

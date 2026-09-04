@@ -14,7 +14,7 @@ key=/usr/local/share/try-omarchy/vivaldi/linux_signing_key.pub
 [[ -f $spec && ! -L $spec ]] || fail "the Try Omarchy build spec is missing or unsafe"
 [[ -f $key && ! -L $key ]] || fail "the Vivaldi package key is missing or unsafe"
 
-for command in bsdtar curl gpg gzip pacman python3 sha256sum tar vercmp zstd; do
+for command in bsdtar curl gpg gzip pacman python3 repo-add sha256sum tar vercmp zstd; do
   command -v "$command" >/dev/null || fail "$command is required"
 done
 
@@ -69,11 +69,19 @@ expected_url="https://downloads.vivaldi.com/stable/vivaldi-stable-$version-$rpm_
 [[ $source_date_epoch =~ ^[0-9]+$ ]] || fail "invalid source date epoch"
 
 package_version="$version-$pkgrel"
+repo_dir=/usr/share/try-omarchy/repo
+repo_name=try-omarchy
+[[ -d $repo_dir && ! -L $repo_dir ]] || fail "the local Try Omarchy repository is missing or unsafe"
+grep -Fq $'[try-omarchy]\n' /etc/pacman.conf || fail "the local Try Omarchy repository is not configured"
 if installed=$(pacman -Q vivaldi 2>/dev/null); then
   installed_version=${installed#vivaldi }
   if (( $(vercmp "$installed_version" "$package_version") >= 0 )); then
-    echo "Vivaldi $installed_version is already installed"
-    exit 0
+    # pacman -Qem means Omarchy's updater will hand the package to yay -Sua.
+    if ! pacman -Qem 2>/dev/null | awk '{ print $1 }' | grep -Fxq vivaldi; then
+      echo "Vivaldi $installed_version is already installed"
+      exit 0
+    fi
+    echo "Re-registering installed Vivaldi in the local Try Omarchy repository"
   fi
 fi
 
@@ -288,9 +296,31 @@ tar \
 
 [[ $(pacman -Qp "$package_archive") == "vivaldi $package_version" ]] ||
   fail "the generated Vivaldi package has an unexpected identity"
-sudo pacman -U --needed --noconfirm "$package_archive" || fail "could not install Vivaldi"
+
+# Publish into the immutable-style local sync repository before installing so
+# pacman does not classify Vivaldi as a foreign/AUR package. Omarchy's updater
+# runs `yay -Sua` whenever `pacman -Qem` is non-empty, which would otherwise
+# route this ARM64 guest at the x86_64-only AUR recipe.
+shopt -s nullglob
+old_archives=("$repo_dir"/vivaldi-*-aarch64.pkg.tar.zst)
+shopt -u nullglob
+for old_archive in "${old_archives[@]}"; do
+  sudo rm -f -- "$old_archive"
+done
+sudo install -m 0644 "$package_archive" "$repo_dir/$(basename "$package_archive")"
+sudo repo-add --remove --quiet "$repo_dir/$repo_name.db.tar.gz" \
+  "$repo_dir/$(basename "$package_archive")" ||
+  fail "could not register Vivaldi in the local Try Omarchy repository"
+sudo ln -sfn "$repo_name.db.tar.gz" "$repo_dir/$repo_name.db"
+sudo install -d -m 0755 /var/lib/pacman/sync
+sudo install -m 0644 "$repo_dir/$repo_name.db.tar.gz" "/var/lib/pacman/sync/$repo_name.db"
+
+sudo pacman -S --needed --noconfirm "$repo_name/vivaldi" || fail "could not install Vivaldi"
 [[ $(pacman -Q vivaldi) == "vivaldi $package_version" ]] || fail "the installed Vivaldi version is unexpected"
 pacman -Qkk vivaldi >/dev/null || fail "the installed Vivaldi package is incomplete"
+if pacman -Qem 2>/dev/null | awk '{ print $1 }' | grep -Fxq vivaldi; then
+  fail "installed Vivaldi is still classified as a foreign/AUR package"
+fi
 actual_reported_version=$(/opt/vivaldi/vivaldi-bin --version)
 actual_reported_version=$(python3 -c 'import sys; print(sys.argv[1].strip())' "$actual_reported_version")
 [[ $actual_reported_version == "$reported_version" ]] ||
