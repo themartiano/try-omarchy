@@ -5,28 +5,50 @@ import Testing
 @Suite("Start menu appearance", .serialized)
 @MainActor
 struct StartMenuAppearanceTests {
-    @Test("permission card border follows the effective appearance")
-    func permissionCardBorder() throws {
+    @Test("start menu keeps the Omarchy appearance across system themes")
+    func brandedWindowAppearance() throws {
         _ = NSApplication.shared
-        let lightAppearance = try #require(NSAppearance(named: .aqua))
-        let darkAppearance = try #require(NSAppearance(named: .darkAqua))
-        let card = PermissionCardView(frame: .zero)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 760),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.close() }
 
-        card.appearance = lightAppearance
-        let lightBorder = try #require(card.layer?.borderColor)
-        #expect(lightBorder == separatorColor(for: lightAppearance))
+        window.appearance = NSAppearance(named: .aqua)
+        StartMenuWindowChrome.apply(to: window)
 
-        card.appearance = darkAppearance
-        let darkBorder = try #require(card.layer?.borderColor)
-        #expect(darkBorder == separatorColor(for: darkAppearance))
-        #expect(darkBorder != lightBorder)
+        #expect(window.appearance?.name == .darkAqua)
+        #expect(window.backgroundColor == OmarchyStartMenuTheme.background)
+        #expect(window.isOpaque)
     }
 
-    private func separatorColor(for appearance: NSAppearance) -> CGColor {
-        var color = NSColor.clear.cgColor
-        appearance.performAsCurrentDrawingAppearance {
-            color = NSColor.separatorColor.cgColor
-        }
-        return color
+    @Test("Omarchy controls retain native keyboard and accessibility behavior")
+    func brandedControlBehavior() {
+        _ = NSApplication.shared
+        let action = OmarchyActionButton(
+            title: "Launch Omarchy",
+            style: .primary,
+            target: nil,
+            action: nil
+        )
+        action.keyEquivalent = "\r"
+
+        #expect(action.keyEquivalent == "\r")
+        #expect(action.accessibilityLabel() == "Launch Omarchy")
+        #expect(action.attributedTitle.string == "LAUNCH OMARCHY")
+        #expect(action.focusRingType == .exterior)
+        #expect(!action.isBordered)
+
+        let toggle = OmarchyToggleButton(isOn: true, target: nil, action: nil)
+        #expect(toggle.state == .on)
+        #expect(toggle.accessibilityLabel() == "Immersive mode")
+        #expect(toggle.accessibilityValue() as? String == "On")
+        #expect(toggle.attributedTitle.string == "[ ON ]")
+
+        toggle.state = .off
+        #expect(toggle.accessibilityValue() as? String == "Off")
+        #expect(toggle.attributedTitle.string == "[ OFF ]")
     }
 }
