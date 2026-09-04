@@ -1,5 +1,5 @@
 diff --git a/bin/omarchy-update-requires-free-space b/bin/omarchy-update-requires-free-space
-index 07523eb..0d47c5e 100755
+index 07523eb..1c31c1e 100755
 --- a/bin/omarchy-update-requires-free-space
 +++ b/bin/omarchy-update-requires-free-space
 @@ -11,6 +11,13 @@ elif read -r available_bytes < <(df --output=avail --block-size=1 / 2>/dev/null
@@ -11,7 +11,7 @@ index 07523eb..0d47c5e 100755
 +    echo
 +    df -h / 2>/dev/null || true
 +    echo
-+    echo "Free space with: sudo pacman -Scc, remove unused packages, or enlarge the VM disk."
++    echo "Free space with: sudo pacman -Scc or remove unused packages."
 +  fi
    exit 1
  else
