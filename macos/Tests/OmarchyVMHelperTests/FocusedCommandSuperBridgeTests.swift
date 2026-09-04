@@ -170,9 +170,16 @@ struct QMPMetaKeyClientTests {
     @Test("a closed QMP connection makes command writes throw")
     func closedSocketThrows() throws {
         var descriptors: [Int32] = [-1, -1]
-        #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors) == 0)
-        guard descriptors[0] >= 0, descriptors[1] >= 0 else { return }
-        defer { Darwin.close(descriptors[0]) }
+        let created = descriptors.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return Int32(-1) }
+            return socketpair(AF_UNIX, SOCK_STREAM, 0, base)
+        }
+        #expect(created == 0)
+        #expect(descriptors[0] >= 0 && descriptors[1] >= 0)
+        defer {
+            if descriptors[0] >= 0 { Darwin.close(descriptors[0]) }
+            if descriptors[1] >= 0 { Darwin.close(descriptors[1]) }
+        }
 
         var noSignal: Int32 = 1
         #expect(withUnsafePointer(to: &noSignal) {
@@ -184,13 +191,23 @@ struct QMPMetaKeyClientTests {
                 socklen_t(MemoryLayout<Int32>.size)
             )
         } == 0)
+
+        // Half-close the peer so the next write must observe EPIPE even if a
+        // tiny payload would otherwise sit in the local send buffer.
+        #expect(Darwin.shutdown(descriptors[1], SHUT_RDWR) == 0)
         Darwin.close(descriptors[1])
+        descriptors[1] = -1
 
         #expect(throws: HelperError.self) {
-            try QMPMetaKeyClient.writeJSON(
-                ["execute": "input-send-event"],
-                to: descriptors[0]
-            )
+            // Keep writing until the kernel reports the broken pipe. A single
+            // small write has been observed to succeed on CI before the peer
+            // close is visible to the writer.
+            for _ in 0..<4_096 {
+                try QMPMetaKeyClient.writeJSON(
+                    ["execute": "input-send-event"],
+                    to: descriptors[0]
+                )
+            }
         }
     }
 }
