@@ -10,6 +10,10 @@ Try Omarchy packages a project-built ARM64 Arch Linux image configured with Omar
 
 <img width="800" src="https://github.com/user-attachments/assets/1368a8f5-5099-43e4-8d3b-3d7d7fba0326" />
 
+The Omarchy mark in the app icon is sourced from the
+[official Omarchy brand kit](https://omarchy.org/brand/) and remains subject to
+Omarchy's trademark rights.
+
 ## Highlights
 
 - Hardware-accelerated ARM64 virtualization and VirGL graphics

@@ -2,21 +2,14 @@
   width="1024" height="1024" viewBox="0 0 1024 1024"
   role="img" aria-labelledby="title desc">
   <title id="title">Try Omarchy app icon</title>
-  <desc id="desc">A centered green play symbol framed by Omarchy-inspired square geometry on a dark rounded tile.</desc>
+  <desc id="desc">The official Omarchy logo, centered on a dark rounded tile.</desc>
   <rect x="100" y="100" width="824" height="824" rx="191"
     fill="#151912" stroke="#9ECE6A" stroke-opacity="0.28" stroke-width="4"/>
-  <g transform="translate(212 212) scale(2)">
-    <g fill="none" stroke="#9ECE6A" stroke-width="20"
-      stroke-linecap="butt" stroke-linejoin="miter">
-      <path d="M 0 10 H 260"/>
-      <path d="M 290 0 V 260"/>
-      <path d="M 40 290 H 300"/>
-      <path d="M 10 40 V 300"/>
-      <path d="M 120 60 H 60 V 120"/>
-      <path d="M 180 60 H 240 V 120"/>
-      <path d="M 240 180 V 240 H 180"/>
-      <path d="M 120 240 H 60 V 180"/>
-    </g>
-    <path d="M 128 112 L 194 150 L 128 188 Z" fill="#9ECE6A"/>
+  <!-- Official mark from omacom/omarchy-site@70d4015 (SHA-256 4d00403e...),
+       preserved without recoloring. See https://omarchy.org/brand/. -->
+  <g transform="translate(212 212) scale(0.5)">
+    <path clip-rule="evenodd"
+      d="m1200 1200h-480v-80h400v-1040h-479.996v160h-400v720h720v-720h-80v-80h159.996v880h-400v160h-640v-1200h1200zm-1120-80h480v-80h-400l.004-400h-80.004zm0-560h80.004v-400h400v-80h-480.004z"
+      fill="#9ece6a" fill-rule="evenodd"/>
   </g>
 </svg>
