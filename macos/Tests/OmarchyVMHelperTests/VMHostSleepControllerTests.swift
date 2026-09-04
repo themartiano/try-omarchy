@@ -116,6 +116,44 @@ struct VMHostSleepCoordinatorTests {
         #expect(policy.nextDelay() == 0.25)
     }
 
+    @Test("re-sleep cancels a wake retry without releasing pause ownership")
+    @MainActor
+    func resleepCancelsPendingWakeRetry() throws {
+        var pendingRetry: DispatchWorkItem?
+        let retryScheduler = VMHostWakeRetryScheduler(
+            delays: [0.25],
+            scheduleWorkItem: { _, workItem in
+                pendingRetry = workItem
+            }
+        )
+        let controller = FakeHostSleepController(pauseResult: true)
+        let coordinator = VMHostSleepCoordinator(wakeRetryScheduler: retryScheduler)
+        coordinator.attach(controller)
+
+        try coordinator.prepareForHostSleep(vmIsRunning: true, isStopping: false)
+        controller.resumeError = TestControlError.expected
+        #expect(throws: TestControlError.self) {
+            try coordinator.resumeAfterHostWake(vmIsRunning: true, isStopping: false)
+        }
+        #expect(coordinator.scheduleWakeRetry {
+            try? coordinator.resumeAfterHostWake(vmIsRunning: true, isStopping: false)
+        })
+
+        // The new sleep cancels stale wake work while retaining the
+        // already-owned pause for the next wake.
+        try coordinator.prepareForHostSleep(vmIsRunning: true, isStopping: false)
+        pendingRetry?.perform()
+
+        #expect(controller.pauseCalls == 1)
+        #expect(controller.resumeCalls == 1)
+        #expect(coordinator.pausedForHostSleep)
+
+        controller.resumeError = nil
+        try coordinator.resumeAfterHostWake(vmIsRunning: true, isStopping: false)
+        #expect(controller.resumeCalls == 2)
+        #expect(!coordinator.pausedForHostSleep)
+    }
+
     @Test("child exit while asleep drops the control session without resuming it")
     func exitWhileAsleepClearsOwnership() throws {
         let controller = FakeHostSleepController(pauseResult: true)

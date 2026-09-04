@@ -33,6 +33,50 @@ struct VMHostWakeRetryPolicy {
     }
 }
 
+final class VMHostWakeRetryScheduler {
+    typealias Schedule = (TimeInterval, DispatchWorkItem) -> Void
+
+    private let scheduleWorkItem: Schedule
+    private var policy: VMHostWakeRetryPolicy
+    private var workItem: DispatchWorkItem?
+
+    init(
+        delays: [TimeInterval] = [0.25, 0.75, 1.5, 3.0],
+        scheduleWorkItem: @escaping Schedule = { delay, workItem in
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + delay,
+                execute: workItem
+            )
+        }
+    ) {
+        policy = VMHostWakeRetryPolicy(delays: delays)
+        self.scheduleWorkItem = scheduleWorkItem
+    }
+
+    @discardableResult
+    func schedule(_ action: @escaping @MainActor () -> Void) -> Bool {
+        guard let delay = policy.nextDelay() else { return false }
+        let workItem = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.workItem = nil
+                action()
+            }
+        }
+        self.workItem = workItem
+        scheduleWorkItem(delay, workItem)
+        return true
+    }
+
+    /// Cancels only the pending reconnect attempt. Pause ownership remains in
+    /// `VMHostSleepCoordinator` until a matching wake resumes it.
+    func cancel() {
+        workItem?.cancel()
+        workItem = nil
+        policy.reset()
+    }
+}
+
 protocol VMHostSleepControlling: AnyObject {
     /// Returns true only when STOP was observed while this call's stop command
     /// was pending for a VM that had just reported itself running.
@@ -178,7 +222,12 @@ final class QMPVMHostSleepController: VMHostSleepControlling {
 /// exits, and pre-existing QEMU pauses deterministic and testable.
 final class VMHostSleepCoordinator {
     private var controller: (any VMHostSleepControlling)?
+    private let wakeRetryScheduler: VMHostWakeRetryScheduler
     private(set) var pausedForHostSleep = false
+
+    init(wakeRetryScheduler: VMHostWakeRetryScheduler = VMHostWakeRetryScheduler()) {
+        self.wakeRetryScheduler = wakeRetryScheduler
+    }
 
     func connect(to socketPath: String) throws {
         attach(try QMPVMHostSleepController(socketPath: socketPath))
@@ -190,12 +239,14 @@ final class VMHostSleepCoordinator {
     }
 
     func disconnect() {
+        wakeRetryScheduler.cancel()
         controller?.close()
         controller = nil
         pausedForHostSleep = false
     }
 
     func prepareForHostSleep(vmIsRunning: Bool, isStopping: Bool) throws {
+        wakeRetryScheduler.cancel()
         guard vmIsRunning,
               !isStopping,
               !pausedForHostSleep,
@@ -230,5 +281,14 @@ final class VMHostSleepCoordinator {
             }
             throw error
         }
+    }
+
+    @discardableResult
+    func scheduleWakeRetry(_ action: @escaping @MainActor () -> Void) -> Bool {
+        wakeRetryScheduler.schedule(action)
+    }
+
+    func cancelWakeRetry() {
+        wakeRetryScheduler.cancel()
     }
 }

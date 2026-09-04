@@ -63,8 +63,6 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private var volumeObserver: NSObjectProtocol?
     private var hostPowerObserver: HostPowerNotificationObserver?
     private let hostSleepCoordinator = VMHostSleepCoordinator()
-    private var hostWakeRetryWorkItem: DispatchWorkItem?
-    private var hostWakeRetryPolicy = VMHostWakeRetryPolicy()
 
     /// The workspace the running VM is writing to, so an unmount of its volume
     /// can be recognized as the disk disappearing under QEMU.
@@ -712,30 +710,17 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
                   childRunning,
                   !lifecycle.isStopping
             else { return }
-            guard let delay = hostWakeRetryPolicy.nextDelay() else {
+            guard hostSleepCoordinator.scheduleWakeRetry({ [weak self] in
+                self?.resumeAfterHostWake()
+            }) else {
                 presentHostWakeRecovery(error: error)
                 return
             }
-
-            let workItem = DispatchWorkItem { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.hostWakeRetryWorkItem = nil
-                    self.resumeAfterHostWake()
-                }
-            }
-            hostWakeRetryWorkItem = workItem
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + delay,
-                execute: workItem
-            )
         }
     }
 
     private func cancelHostWakeRetry() {
-        hostWakeRetryWorkItem?.cancel()
-        hostWakeRetryWorkItem = nil
-        hostWakeRetryPolicy.reset()
+        hostSleepCoordinator.cancelWakeRetry()
     }
 
     private func presentHostWakeRecovery(error: Error) {
