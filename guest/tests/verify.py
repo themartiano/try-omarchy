@@ -166,6 +166,7 @@ def main() -> None:
         == [
             "1password-arm64-installer",
             "vivaldi-arm64-browser",
+            "vivaldi-menu-entries",
             "notification-hover-close",
             "notification-screen-privacy",
             "update-free-space-message",
@@ -1444,6 +1445,18 @@ HOTPLUG=1
                 and "set_fallback_default_browser vivaldi-stable.desktop" in remove_browser
                 and "omarchy-pkg-drop vivaldi" in remove_browser,
                 "Vivaldi participates in Omarchy install, default, and removal workflows",
+            )
+            menu = read(staged_omarchy / "default/omarchy/omarchy-menu.jsonc")
+            check(
+                '"install.browser.vivaldi"' in menu
+                and '"remove.browser.vivaldi"' in menu
+                and '"setup.default.browser.vivaldi"' in menu
+                and 'omarchy-install-browser vivaldi' in menu
+                and 'omarchy-remove-browser vivaldi' in menu
+                and 'omarchy-default-browser vivaldi' in menu
+                and 'omarchy-pkg-present vivaldi' in menu
+                and 'omarchy-cmd-present vivaldi-stable' in menu,
+                "Vivaldi appears in Install, Remove, and Default Browser menus",
             )
             check(
                 "/opt/vivaldi/" in theme_browser

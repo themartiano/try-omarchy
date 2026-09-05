@@ -208,6 +208,20 @@
         ]
       },
       {
+        "id": "vivaldi-menu-entries",
+        "description": "Expose Vivaldi in Install/Remove/Default Browser menus for the Try Omarchy ARM64 installer.",
+        "reference": "https://github.com/basecamp/omarchy/blob/346e69e1cec6c4e8924531874af6ba010a1bc99e/default/omarchy/omarchy-menu.jsonc",
+        "patch": "patches/omarchy/vivaldi-menu-entries.patch",
+        "patchSha256": "29fe08729d6285b07682fadd8cecc4687ba2f93aa8bda4d8eb13ff75001d5852",
+        "targets": [
+          {
+            "path": "default/omarchy/omarchy-menu.jsonc",
+            "beforeSha256": "027096cc20b52f3073c7d61ad43ff1fc8fddeb127b05b41c129b0a97826cecb2",
+            "afterSha256": "ec8a95d63b83a5c47dd0c1e3aceadb949b1f16895f8be855e756912731964ee8"
+          }
+        ]
+      },
+      {
         "id": "notification-hover-close",
         "description": "Restore the upstream hover-revealed notification dismiss control omitted from v4.0.2.",
         "reference": "https://github.com/basecamp/omarchy/commit/9b72edcc94513cba016f145b1ac4ffdaea54b577",
