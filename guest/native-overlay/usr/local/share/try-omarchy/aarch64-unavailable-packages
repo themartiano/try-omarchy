@@ -1,0 +1,18 @@
+# Packages that Install-menu paths cannot satisfy on Try Omarchy aarch64.
+# Format: package<TAB>display-name
+# Kept intentionally narrow: x86_64-only AUR/binaries, or repo-only names absent
+# from Arch Linux ARM (with no practical aarch64 install path today).
+# Wine/umu are NOT listed here: they are refused only from Battle.net / Lutris
+# installers so aarch64 pkg-add of those deps elsewhere is not blocked.
+ghostty	Ghostty
+microsoft-edge-stable-bin	Edge
+spotify	Spotify
+dropbox	Dropbox
+dropbox-cli	Dropbox
+nautilus-dropbox	Dropbox
+cursor-bin	Cursor
+grok-bot	Grok Bot
+lmstudio-bin	LM Studio
+steam	Steam
+minecraft-launcher	Minecraft
+heroic-games-launcher-bin	Heroic

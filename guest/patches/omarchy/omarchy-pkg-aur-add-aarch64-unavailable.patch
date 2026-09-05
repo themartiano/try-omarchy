@@ -1,0 +1,14 @@
+--- a/bin/omarchy-pkg-aur-add
++++ b/bin/omarchy-pkg-aur-add
+@@ -2,6 +2,11 @@
+ 
+ # omarchy:summary=Add the named packages to the system from the AUR if they're missing. Returns false if it couldn't be done.
+ # omarchy:args=<packages...>
++
++# Try Omarchy: refuse known aarch64-unavailable Install-menu packages.
++if [[ -x /usr/local/bin/omarchy-pkg-refuse-aarch64-unavailable ]]; then
++  /usr/local/bin/omarchy-pkg-refuse-aarch64-unavailable "$@" || exit $?
++fi
+ 
+ if omarchy-pkg-missing "$@"; then
+   yay -S --noconfirm --needed "$@" || exit 1

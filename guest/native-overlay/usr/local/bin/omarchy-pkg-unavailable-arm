@@ -1,0 +1,15 @@
+#!/bin/bash
+
+# omarchy:summary=Report that a named app is unavailable on aarch64 and exit unsuccessfully
+# omarchy:args=<display-name>
+# omarchy:examples=omarchy-pkg-unavailable-arm Ghostty
+# omarchy:hidden=true
+
+name=${1-}
+if [[ -z $name ]]; then
+  echo "Usage: omarchy-pkg-unavailable-arm <display-name>" >&2
+  exit 2
+fi
+
+echo "The ${name} app is not available via pacman/AUR for aarch64 at this time." >&2
+exit 1

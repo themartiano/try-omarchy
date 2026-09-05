@@ -1,0 +1,20 @@
+#!/bin/bash
+
+# omarchy:summary=Refuse known aarch64-unavailable packages with the shared message
+# omarchy:args=<packages...>
+# omarchy:hidden=true
+
+[[ $(uname -m) == aarch64 ]] || exit 0
+
+map=/usr/local/share/try-omarchy/aarch64-unavailable-packages
+[[ -f $map && ! -L $map ]] || exit 0
+
+for package in "$@"; do
+  [[ -n $package ]] || continue
+  name=$(awk -F '\t' -v package="$package" '$1 == package { print $2; exit }' "$map")
+  if [[ -n $name ]]; then
+    exec /usr/local/bin/omarchy-pkg-unavailable-arm "$name"
+  fi
+done
+
+exit 0

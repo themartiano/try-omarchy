@@ -253,6 +253,90 @@
             "afterSha256": "8e8102cb08ff4fde4f89c64a7febeca0ba142c309e20e581ae0cf295f6e7f093"
           }
         ]
+      },
+      {
+        "id": "pkg-add-aarch64-unavailable",
+        "description": "Refuse known aarch64-unavailable packages from omarchy-pkg-add with the shared message.",
+        "reference": "https://github.com/basecamp/omarchy/blob/346e69e1cec6c4e8924531874af6ba010a1bc99e/bin/omarchy-pkg-add",
+        "patch": "patches/omarchy/omarchy-pkg-add-aarch64-unavailable.patch",
+        "patchSha256": "da90db1be0f3b32426ad55991d971d71cb5811f598957fe55c3d9284aa0803df",
+        "targets": [
+          {
+            "path": "bin/omarchy-pkg-add",
+            "beforeSha256": "76bf74a1e4e65d07a29c06ebc5a621bf36662efc0a175ffc53b723bd80339a3e",
+            "afterSha256": "f9cfab3be6f9dbdc5a60915ea9eea55d0a44e3828a7ec0d098a3f7a48398a3c3"
+          }
+        ]
+      },
+      {
+        "id": "pkg-aur-add-aarch64-unavailable",
+        "description": "Refuse known aarch64-unavailable packages from omarchy-pkg-aur-add with the shared message.",
+        "reference": "https://github.com/basecamp/omarchy/blob/346e69e1cec6c4e8924531874af6ba010a1bc99e/bin/omarchy-pkg-aur-add",
+        "patch": "patches/omarchy/omarchy-pkg-aur-add-aarch64-unavailable.patch",
+        "patchSha256": "58578eb598d9fded75fe5ff7ea64afb1a887faf6c8bd12adfa9eda2f2c2ff675",
+        "targets": [
+          {
+            "path": "bin/omarchy-pkg-aur-add",
+            "beforeSha256": "ec2f57b0d153bb814cae344618f61603282cbedce0012647b2c391d9000cd5f6",
+            "afterSha256": "8d230a2628a27ae690ef3b630f8c1e8bba6ba8a74254e175717509cfc21a802b"
+          }
+        ]
+      },
+      {
+        "id": "dropbox-aarch64-unavailable",
+        "description": "Stop the Dropbox installer on aarch64 before tray setup, using the shared unavailable message.",
+        "reference": "https://github.com/basecamp/omarchy/blob/346e69e1cec6c4e8924531874af6ba010a1bc99e/bin/omarchy-install-service-dropbox",
+        "patch": "patches/omarchy/dropbox-aarch64-unavailable.patch",
+        "patchSha256": "c97a991a7ced28b0d02ce89497522a50198f6f9744fa5a44213e62c84bc422a5",
+        "targets": [
+          {
+            "path": "bin/omarchy-install-service-dropbox",
+            "beforeSha256": "90f36082ab995dc5e124996da15d551d058892eedbc7d290c93ded4f495ba6af",
+            "afterSha256": "29b93859659093ef24338ee37136cf12ac61a9abd9dc9e0aa8b76033614be8f7"
+          }
+        ]
+      },
+      {
+        "id": "geforce-now-aarch64-unavailable",
+        "description": "Fail GeForce NOW install on aarch64 with the shared pacman/AUR unavailable message (vendor installer is x86_64-only).",
+        "reference": "https://github.com/basecamp/omarchy/blob/346e69e1cec6c4e8924531874af6ba010a1bc99e/bin/omarchy-install-gaming-geforce-now",
+        "patch": "patches/omarchy/geforce-now-aarch64-unavailable.patch",
+        "patchSha256": "64c3f52d990982c3003040289f91d6b9f718b9ffd3992a72ea6c37e9ad1037bd",
+        "targets": [
+          {
+            "path": "bin/omarchy-install-gaming-geforce-now",
+            "beforeSha256": "c039bf511dc66a86af93c52b5445485ee9b592a7f54006e6dcdf637b35f0577c",
+            "afterSha256": "55821a3cc43f9161b58fb27f568cd1c58809e43cb2329f46e613a3c06e0eb884"
+          }
+        ]
+      },
+      {
+        "id": "battlenet-aarch64-unavailable",
+        "description": "Fail Battle.net Install on aarch64 before umu-launcher/Wine setup (installer-only; not a global wine denylist).",
+        "reference": "https://github.com/basecamp/omarchy/blob/346e69e1cec6c4e8924531874af6ba010a1bc99e/bin/omarchy-install-gaming-battlenet",
+        "patch": "patches/omarchy/battlenet-aarch64-unavailable.patch",
+        "patchSha256": "6b8475d9b1e5c4e88117889fc3588babd0afc4b9f96b475176f998fe50db7052",
+        "targets": [
+          {
+            "path": "bin/omarchy-install-gaming-battlenet",
+            "beforeSha256": "7d687f439d9ea1b5de6cc7b5c8c054e8276fe3357e9792a67a6c5304e06dcfbb",
+            "afterSha256": "afdbbe9c9c1fdcbe158964f153f60923c19d74be08340bbcad8a07f0180e8f26"
+          }
+        ]
+      },
+      {
+        "id": "lutris-aarch64-unavailable",
+        "description": "Fail Lutris Install on aarch64 before Wine/umu package pulls (installer-only; not a global wine denylist).",
+        "reference": "https://github.com/basecamp/omarchy/blob/346e69e1cec6c4e8924531874af6ba010a1bc99e/bin/omarchy-install-gaming-lutris",
+        "patch": "patches/omarchy/lutris-aarch64-unavailable.patch",
+        "patchSha256": "912fdc52fc4f44264d364efbc78d30e79c270664d96fbce280db3addc83eca3b",
+        "targets": [
+          {
+            "path": "bin/omarchy-install-gaming-lutris",
+            "beforeSha256": "b742e54d9bda2da2a8e98e6b236fcd050302919e4e25836bedf3f8dfcf3edbc8",
+            "afterSha256": "22062e6fc14f8405d3da23f2edc892fc22dcaf51ed4c944ee5d7c0fc3b0992bd"
+          }
+        ]
       }
     ],
     "postBuildUserInstallers": [

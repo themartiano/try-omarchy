@@ -1,0 +1,14 @@
+--- a/bin/omarchy-pkg-add
++++ b/bin/omarchy-pkg-add
+@@ -4,6 +4,11 @@
+ # omarchy:args=<packages...>
+ # omarchy:examples=omarchy pkg add jq ripgrep
+ # omarchy:requires-sudo=true
++
++# Try Omarchy: refuse known aarch64-unavailable Install-menu packages.
++if [[ -x /usr/local/bin/omarchy-pkg-refuse-aarch64-unavailable ]]; then
++  /usr/local/bin/omarchy-pkg-refuse-aarch64-unavailable "$@" || exit $?
++fi
+ 
+ if omarchy-pkg-missing "$@"; then
+   if (( EUID == 0 )); then
