@@ -47,7 +47,9 @@ def main() -> None:
         check=False,
     )
     if result.returncode:
-        raise SystemExit(result.stderr or result.stdout)
+        # pacman reports the failure on stderr but names each unsatisfied
+        # dependency on stdout, so a diagnosis needs both streams.
+        raise SystemExit("".join(part for part in (result.stderr, result.stdout) if part).strip())
 
     resolved: dict[str, str] = {}
     for line in result.stdout.splitlines():

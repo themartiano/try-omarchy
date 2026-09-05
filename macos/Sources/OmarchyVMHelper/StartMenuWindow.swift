@@ -211,6 +211,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let validateStorageLocation: (String) -> String?
     private let chooseStorageLocation: (String) -> String?
     private let useDefaultStorageLocation: () -> Void
+    private let diskCapacity: () -> Int
+    private let saveDiskCapacity: (Int) -> String?
 
     private var microphoneRequestInFlight = false
     private var cameraRequestInFlight = false
@@ -275,6 +277,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         validateStorageLocation: @escaping (String) -> String?,
         chooseStorageLocation: @escaping (String) -> String?,
         useDefaultStorageLocation: @escaping () -> Void,
+        diskCapacity: @escaping () -> Int,
+        saveDiskCapacity: @escaping (Int) -> String?,
         resetStorage: @escaping () -> Void,
         sharedFolderStatus: @escaping () -> SharedFolderMenuState,
         chooseSharedFolder: @escaping (String) -> String?,
@@ -299,6 +303,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         self.validateStorageLocation = validateStorageLocation
         self.chooseStorageLocation = chooseStorageLocation
         self.useDefaultStorageLocation = useDefaultStorageLocation
+        self.diskCapacity = diskCapacity
+        self.saveDiskCapacity = saveDiskCapacity
         self.resetStorage = resetStorage
         self.sharedFolderStatus = sharedFolderStatus
         self.chooseSharedFolder = chooseSharedFolder
@@ -610,9 +616,26 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             )
         }
 
+        let capacityRow: NSView? = canResetStorage
+            ? permissionRow(
+                symbolName: "internaldrive",
+                title: "VM disk limit",
+                detail: "Maximum capacity for a new or reset VM. Existing VM disks are not resized.",
+                granted: true,
+                statusLabels: (
+                    "\u{25cf}  \(diskCapacity()) GB",
+                    "\u{25cf}  \(diskCapacity()) GB"
+                ),
+                actions: [("Change\u{2026}", #selector(beginDiskCapacitySelection))]
+            )
+            : nil
+
         var permissionRowViews = [accessibilityRow, microphoneRow, cameraRow, sharedFolderRow]
         if let storageRow {
             permissionRowViews.append(storageRow)
+        }
+        if let capacityRow {
+            permissionRowViews.append(capacityRow)
         }
         permissionRowViews.append(contentsOf: [portForwardingRow, immersiveRow])
 
@@ -1389,6 +1412,66 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         launchInProgress = true
         render()
         launch()
+    }
+
+    @objc private func beginDiskCapacitySelection() {
+        guard canResetStorage,
+              !launchInProgress,
+              !resetInProgress
+        else { return }
+        presentDiskCapacityEditor(initialText: String(diskCapacity()))
+    }
+
+    private func presentDiskCapacityEditor(initialText: String) {
+        let alert = NSAlert()
+        alert.messageText = "Set VM disk limit"
+        alert.informativeText = "Enter the maximum virtual disk capacity in GB. The minimum is \(DiskCapacityPreference.minimumGigabytes) GB. This applies when a VM is first created or reset."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+
+        let field = NSTextField(string: initialText)
+        field.placeholderString = "\(DiskCapacityPreference.defaultGigabytes)"
+        field.alignment = .right
+        field.setAccessibilityLabel("VM disk limit in GB")
+
+        let unit = NSTextField(labelWithString: "GB")
+        let accessory = NSStackView(views: [field, unit])
+        accessory.orientation = .horizontal
+        accessory.alignment = .centerY
+        accessory.spacing = 8
+        accessory.frame = NSRect(x: 0, y: 0, width: 220, height: 26)
+        field.widthAnchor.constraint(equalToConstant: 170).isActive = true
+        alert.accessoryView = accessory
+
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            let entered = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let gigabytes = Int(entered), String(gigabytes) == entered else {
+                self.presentDiskCapacityProblem(
+                    "Enter a whole number of GB.",
+                    enteredValue: entered
+                )
+                return
+            }
+            if let problem = self.saveDiskCapacity(gigabytes) {
+                self.presentDiskCapacityProblem(problem, enteredValue: entered)
+                return
+            }
+            self.render()
+        }
+    }
+
+    private func presentDiskCapacityProblem(_ message: String, enteredValue: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Invalid disk limit"
+        alert.informativeText = message
+        alert.addButton(withTitle: "Try Again")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.presentDiskCapacityEditor(initialText: enteredValue)
+        }
     }
 }
 

@@ -215,7 +215,7 @@ qemu_persistent_storage_stage_selected_boot_kit() {
   QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY=0
 }
 qemu_persistent_storage_select() {
-  printf 'select %s\n' "$1" >>"$FAKE_STORAGE_LOG"
+  printf 'select %s %s\n' "$1" "$7" >>"$FAKE_STORAGE_LOG"
   if [[ $1 == ephemeral ]]; then
     mkdir -p "$6"
     QEMU_SELECTED_DISK="$6/rootfs.ext4"
@@ -335,6 +335,19 @@ assert_contains "$disabled_qemu" \
   'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,immersive=on,swap-opt-cmd=off'
 assert_contains "$(<"$test_root/disabled/storage.log")" select-existing
 assert_contains "$(<"$test_root/disabled/storage.log")" create
+
+run_scenario custom-capacity 0 --reset-storage-only \
+  OMARCHY_QEMU_GPU_DISK_SIZE_GB=80
+assert_contains "$(<"$test_root/custom-capacity/storage.log")" \
+  'select reset 85899345920'
+
+for invalid_capacity in 9 0 10.5 unlimited 8193; do
+  scenario="invalid-capacity-${invalid_capacity//./-}"
+  run_scenario "$scenario" 1 --reset-storage-only \
+    "OMARCHY_QEMU_GPU_DISK_SIZE_GB=$invalid_capacity"
+  [[ ! -s $test_root/$scenario/storage.log ]] || \
+    fail "invalid disk capacity touched storage"
+done
 
 run_scenario non-immersive 0 '' OMARCHY_QEMU_GPU_IMMERSIVE=0
 non_immersive_qemu=$(<"$test_root/non-immersive/qemu.log")

@@ -262,6 +262,11 @@ new VM, after a confirmed **Reset Omarchy**, or for an ephemeral launch.
 Before Reset is enabled, the confirmation sheet requires typing `Try Omarchy`
 exactly; cancelling the sheet returns to the start menu without changing the VM.
 
+The start menu's **VM disk limit** setting chooses the capacity of a new or
+reset VM in whole GB, with a 10 GB minimum and a 24 GB default. Changing it
+does not resize an existing VM; the selected limit takes effect the next time
+a VM is created or explicitly reset.
+
 VMs created before paired boot files were introduced are preserved too. On the
 first launch that needs them, Try Omarchy explains the transition in a
 **Continue** / **Cancel** dialog before starting recovery. Continue performs a
@@ -296,8 +301,10 @@ you choose — it never creates a folder inside it on your behalf.
   the moment it was created. Network volumes are refused because the VM's disk
   lock is unreliable on them. Anything else is turned away when you pick it, with
   the actual format named.
-- You need roughly 7 GB free to create the VM, and up to 30 GB as it fills. The
-  disk is sparse, so it only ever occupies what the guest has actually written.
+- You need roughly 7 GB free to create the default VM. With the default 24 GB
+  disk limit, the workspace can use up to roughly 30 GB including its factory
+  image. A larger selected limit raises that maximum. The disk is sparse, so
+  it only occupies what the guest has actually written.
 - **Changing the location does not move your existing VM.** It stays where it
   is, and switching back reaches it again.
 - Do not disconnect the drive while Omarchy is running. macOS refuses a normal
