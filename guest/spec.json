@@ -121,6 +121,58 @@
       "signingFingerprint": "8D1FA52AEF58A09D889DD4221256C34716BD9233",
       "reportedVersion": "Vivaldi 8.2.4133.33",
       "license": "Multiple, see https://www.vivaldi.com/"
+    },
+    "voxtype": {
+      "version": "1.0.1",
+      "pkgrel": 1,
+      "repository": "https://github.com/peteonrails/voxtype",
+      "sourceUrl": "https://github.com/peteonrails/voxtype/archive/refs/tags/v1.0.1.tar.gz",
+      "sourceSha256": "a4d0a256167f58ce90153077da82620794422f5172c918625d480ff9ffca625e",
+      "sourceSignatureUrl": "https://github.com/peteonrails/voxtype/releases/download/v1.0.1/voxtype-1.0.1.tar.gz.asc",
+      "sourceSignatureSha256": "48788d37417dd7f00e3ced8dcdb6660f9744157bc01c7a1b15423b208f6823fd",
+      "signingKey": "keys/voxtype-release.asc",
+      "signingKeySha256": "6e8dc8b4014ddc4677e5645d9d8cb607d38c5617c52694c3a9fd62fca1cbd06e",
+      "signingFingerprint": "9CCF7915B750CAE8B095ED1AA3FC9F33FD209279",
+      "reportedVersion": "voxtype 1.0.1",
+      "license": "MIT",
+      "assets": {
+        "audioBridge": {
+          "url": "https://github.com/peteonrails/voxtype/releases/download/v1.0.1/voxtype-1.0.1-linux-aarch64-audio-bridge",
+          "sha256": "35170ad89fea2874fce0f08758ccc2164892ed643aacae632bcfbc6f10433976",
+          "signatureUrl": "https://github.com/peteonrails/voxtype/releases/download/v1.0.1/voxtype-1.0.1-linux-aarch64-audio-bridge.asc",
+          "signatureSha256": "787965900647ee9b04c8b65123d04b63e38636bfc671fa3b53360823f886b42c"
+        },
+        "cpu": {
+          "url": "https://github.com/peteonrails/voxtype/releases/download/v1.0.1/voxtype-1.0.1-linux-aarch64-cpu",
+          "sha256": "b5e31a85aaa952d1a78c12b8a16ba5cbdcd92eb31adc7d1a908f3c9d06edd4f1",
+          "signatureUrl": "https://github.com/peteonrails/voxtype/releases/download/v1.0.1/voxtype-1.0.1-linux-aarch64-cpu.asc",
+          "signatureSha256": "3cd2f3fafca40e394a42b90dac031c67160256898a7f4a52893585b99f8f74bb"
+        },
+        "onnx": {
+          "url": "https://github.com/peteonrails/voxtype/releases/download/v1.0.1/voxtype-1.0.1-linux-aarch64-onnx",
+          "sha256": "c3771f3e568629178201990976520f88da6d7599ec2d9e404a137570d6c1e108",
+          "signatureUrl": "https://github.com/peteonrails/voxtype/releases/download/v1.0.1/voxtype-1.0.1-linux-aarch64-onnx.asc",
+          "signatureSha256": "cd58773349eac0108cdad0efcc78d13f5d7c21623117381afa99b912c397b94a"
+        },
+        "osd": {
+          "url": "https://github.com/peteonrails/voxtype/releases/download/v1.0.1/voxtype-1.0.1-linux-aarch64-osd",
+          "sha256": "ea910d4fd1fe331d38dbed1c3a639cb7e0c04542919192ff6f74be2139afe3c6",
+          "signatureUrl": "https://github.com/peteonrails/voxtype/releases/download/v1.0.1/voxtype-1.0.1-linux-aarch64-osd.asc",
+          "signatureSha256": "e079ebdd567e318502b710af95e4987fe13623d65673e21877afe88fe18bda55"
+        },
+        "osdGtk4": {
+          "url": "https://github.com/peteonrails/voxtype/releases/download/v1.0.1/voxtype-1.0.1-linux-aarch64-osd-gtk4",
+          "sha256": "0d2148e0cd32bac538692470edc06aa9a2f5c6a891aaa373f59fbe78c247fae3",
+          "signatureUrl": "https://github.com/peteonrails/voxtype/releases/download/v1.0.1/voxtype-1.0.1-linux-aarch64-osd-gtk4.asc",
+          "signatureSha256": "0ce841f2caa9a1a7e8294a521bef0bab8823dddacd36fff66012b1127e0c1957"
+        },
+        "osdQuickshell": {
+          "url": "https://github.com/peteonrails/voxtype/releases/download/v1.0.1/voxtype-1.0.1-linux-aarch64-osd-quickshell",
+          "sha256": "097bd518d5e2eac2c3cbad714b65dd8058c818dcb4d900b9a16e442af7d65b8a",
+          "signatureUrl": "https://github.com/peteonrails/voxtype/releases/download/v1.0.1/voxtype-1.0.1-linux-aarch64-osd-quickshell.asc",
+          "signatureSha256": "f48b8071f78fde0b2d20072e875a8b8e0d8fab4caf6c8ec91cd8e2aa0b031063"
+        }
+      }
     }
   },
   "themes": [

@@ -26,6 +26,10 @@ code.
 - **yay** — GPL-3.0-or-later; the official ARM64 release and its versioned
   license are pinned in `guest/spec.json` and packaged into the guest's local
   repository.
+- **Voxtype** — MIT; the signed v1.0.1 ARM64 CPU, ONNX, and OSD release assets,
+  release key, source archive, and checksums are pinned in `guest/spec.json`.
+  They are packaged in the guest's local repository but remain uninstalled
+  until the user invokes Omarchy's optional dictation installer.
 - **1Password** — proprietary software not redistributed by Try Omarchy. When a
   user explicitly invokes its optional ARM64 installer, the guest resolves the
   current vendor release and AUR CLI recipe after the factory build. These

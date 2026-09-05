@@ -329,6 +329,71 @@ def main() -> None:
         == vivaldi["signingKeySha256"],
         "Vivaldi package key digest matches the build spec",
     )
+    voxtype = spec.get("supplyChain", {}).get("voxtype", {})
+    voxtype_version = voxtype.get("version", "")
+    voxtype_release = f"https://github.com/peteonrails/voxtype/releases/download/v{voxtype_version}"
+    voxtype_assets = voxtype.get("assets", {})
+    expected_voxtype_suffixes = {
+        "audioBridge": "audio-bridge",
+        "cpu": "cpu",
+        "onnx": "onnx",
+        "osd": "osd",
+        "osdGtk4": "osd-gtk4",
+        "osdQuickshell": "osd-quickshell",
+    }
+    check(
+        set(voxtype)
+        == {
+            "assets",
+            "license",
+            "pkgrel",
+            "reportedVersion",
+            "repository",
+            "signingFingerprint",
+            "signingKey",
+            "signingKeySha256",
+            "sourceSha256",
+            "sourceSignatureSha256",
+            "sourceSignatureUrl",
+            "sourceUrl",
+            "version",
+        }
+        and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", voxtype_version) is not None
+        and voxtype.get("pkgrel") == 1
+        and voxtype.get("repository") == "https://github.com/peteonrails/voxtype"
+        and voxtype.get("sourceUrl")
+        == f"https://github.com/peteonrails/voxtype/archive/refs/tags/v{voxtype_version}.tar.gz"
+        and voxtype.get("sourceSignatureUrl")
+        == f"{voxtype_release}/voxtype-{voxtype_version}.tar.gz.asc"
+        and voxtype.get("signingFingerprint") == "9CCF7915B750CAE8B095ED1AA3FC9F33FD209279"
+        and voxtype.get("signingKey") == "keys/voxtype-release.asc"
+        and voxtype.get("reportedVersion") == f"voxtype {voxtype_version}"
+        and voxtype.get("license") == "MIT"
+        and all(
+            re.fullmatch(r"[0-9a-f]{64}", voxtype.get(key, "")) is not None
+            for key in (
+                "sourceSha256",
+                "sourceSignatureSha256",
+                "signingKeySha256",
+            )
+        )
+        and set(voxtype_assets) == set(expected_voxtype_suffixes)
+        and all(
+            asset.get("url")
+            == f"{voxtype_release}/voxtype-{voxtype_version}-linux-aarch64-{expected_voxtype_suffixes[name]}"
+            and asset.get("signatureUrl") == f'{asset.get("url")}.asc'
+            and re.fullmatch(r"[0-9a-f]{64}", asset.get("sha256", "")) is not None
+            and re.fullmatch(r"[0-9a-f]{64}", asset.get("signatureSha256", "")) is not None
+            for name, asset in voxtype_assets.items()
+        ),
+        "signed official Voxtype ARM64 release is fully pinned",
+    )
+    voxtype_key = GUEST / voxtype["signingKey"]
+    check(
+        voxtype_key.is_file()
+        and hashlib.sha256(voxtype_key.read_bytes()).hexdigest() == voxtype["signingKeySha256"],
+        "Voxtype release key digest matches the build spec",
+    )
     ttfx = spec.get("supplyChain", {}).get("ttfx", {})
     check(
         ttfx
@@ -423,6 +488,21 @@ def main() -> None:
         and vivaldi["rpmSha256"] in launcher
         and vivaldi["signingFingerprint"] in launcher,
         "native launcher accepts only the reviewed signed Vivaldi ARM64 release",
+    )
+    voxtype_identity = hashlib.sha256(
+        json.dumps(
+            voxtype,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    check(
+        'supply_chain.get("voxtype")' in launcher
+        and '"build spec voxtype component"' in launcher
+        and '"build spec voxtype assets"' in launcher
+        and voxtype_identity in launcher,
+        "native launcher accepts and pins the signed Voxtype ARM64 component",
     )
     hyprland_patch_text = read(hyprland_patch)
     check(
@@ -567,14 +647,15 @@ def main() -> None:
         "pacman recovery files snapshot the final local-repository configuration",
     )
     check(
-        "expected_archive_count=5" in local_repository
+        "expected_archive_count=6" in local_repository
         and "factory repository is missing pinned ttfx" in local_repository
         and "factory repository is missing pinned yay" in local_repository
         and "factory repository is missing patched Hyprland" in local_repository
+        and "factory repository is missing pinned Voxtype" in local_repository
         and "immutable local repository does not have priority" in local_repository
-        and "resolves the patched Hyprland package locally" in local_repository
+        and "resolve patched and ARM64-only packages locally" in local_repository
         and "refusing canonical unsafe root" in local_repository,
-        "immutable local repository requires and prioritizes the patched Hyprland",
+        "immutable local repository requires and prioritizes patched and ARM64-only packages",
     )
     shared_folder = spec["runtime"]["sharedFolder"]
     check(
@@ -755,10 +836,42 @@ def main() -> None:
         and "refusing canonical unsafe root" in register_hyprland,
         "guest builds and packages the verified Hyprland rounded-border backport",
     )
+    register_voxtype = read(GUEST / "scripts/register-pinned-voxtype.sh")
+    finalizer = read(GUEST / "scripts/finalize-rootfs.sh")
+    check(
+        "register-pinned-voxtype.sh" in build
+        and build.index("register-pinned-voxtype.sh")
+        < build.index("register-local-repository.sh")
+        and "Voxtype signing key digest mismatch" in register_voxtype
+        and "Voxtype release signature used an unexpected key" in register_voxtype
+        and "Voxtype source archive has an unsafe member set" in register_voxtype
+        and "is not an ARM64 ELF binary" in register_voxtype
+        and "pkgname = $package_name" in register_voxtype
+        and "package_name=voxtype-bin" in register_voxtype
+        and "provides = voxtype=$version" in register_voxtype
+        and "conflict = voxtype" in register_voxtype
+        and "depend = gtk4-layer-shell" in register_voxtype
+        and "depend = which" in register_voxtype
+        and "Voxtype package is missing required runtime dependency" in register_voxtype
+        and "optdepend = gtk4-layer-shell" not in register_voxtype
+        and 'ln -s /usr/lib/voxtype/voxtype-native "$stage/usr/bin/voxtype"'
+        in register_voxtype
+        and "Registered opt-in $query" in register_voxtype
+        and "pacman -Sp --print-format '%n %v %a' voxtype-bin" in finalizer
+        and "Voxtype runtime dependency does not resolve for ARM64" in finalizer
+        and "Opt-in Voxtype must not be installed in the factory image" in finalizer,
+        "guest packages signed ARM64 Voxtype as an opt-in upstream-compatible target",
+    )
     third_party_notices = read(REPO / "THIRD_PARTY_NOTICES.md")
     check(
         "**yay**" in third_party_notices and "GPL-3.0-or-later" in third_party_notices,
         "third-party notices cover the pinned yay redistribution",
+    )
+    check(
+        "**Voxtype**" in third_party_notices
+        and "MIT" in third_party_notices
+        and "remain uninstalled" in third_party_notices,
+        "third-party notices cover the opt-in Voxtype redistribution",
     )
     check(
         "**ttfx**" in third_party_notices

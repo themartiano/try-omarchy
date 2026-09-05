@@ -513,6 +513,7 @@ supply_chain_keys = {
     "omarchyPackagesRepository",
     "ttfx",
     "vivaldi",
+    "voxtype",
     "yay",
 }
 supply_chain = exact_keys(spec.get("supplyChain"), supply_chain_keys, "build spec supply chain")
@@ -687,6 +688,41 @@ if vivaldi != {
     "license": "Multiple, see https://www.vivaldi.com/",
 }:
     fail("Vivaldi installer is not pinned to the reviewed signed ARM64 release")
+voxtype = exact_keys(
+    supply_chain.get("voxtype"),
+    {
+        "assets",
+        "license",
+        "pkgrel",
+        "reportedVersion",
+        "repository",
+        "signingFingerprint",
+        "signingKey",
+        "signingKeySha256",
+        "sourceSha256",
+        "sourceSignatureSha256",
+        "sourceSignatureUrl",
+        "sourceUrl",
+        "version",
+    },
+    "build spec voxtype component",
+)
+voxtype_assets = exact_keys(
+    voxtype.get("assets"),
+    {"audioBridge", "cpu", "onnx", "osd", "osdGtk4", "osdQuickshell"},
+    "build spec voxtype assets",
+)
+for name, asset in voxtype_assets.items():
+    exact_keys(
+        asset,
+        {"sha256", "signatureSha256", "signatureUrl", "url"},
+        f"build spec voxtype asset {name}",
+    )
+voxtype_identity = hashlib.sha256(
+    json.dumps(voxtype, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+if voxtype_identity != "906951dd6a221d39a63116af86dddf77c202bf8dfca59cccc73536c44cd22669":
+    fail("factory Voxtype component is not the reviewed signed ARM64 release")
 
 command_line = runtime.get("kernelCommandLine")
 if not isinstance(command_line, str) or not command_line or any(character in command_line for character in "\x00\r\n\t"):

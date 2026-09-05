@@ -48,6 +48,22 @@ printf '%s  %s\n' "$expected_hyprland_sha256" /usr/bin/Hyprland | sha256sum -c -
   echo "Rounded-border Hyprland binary digest mismatch" >&2
   exit 1
 }
+expected_voxtype="$(read_spec '["supplyChain"]["voxtype"]["version"]')-$(read_spec '["supplyChain"]["voxtype"]["pkgrel"]')"
+[[ ! $(pacman -Qq voxtype-bin 2>/dev/null || true) ]] || {
+  echo "Opt-in Voxtype must not be installed in the factory image" >&2
+  exit 1
+}
+voxtype_resolution=$(pacman -Sp --print-format '%n %v %a' voxtype-bin)
+grep -Fxq "voxtype-bin $expected_voxtype aarch64" <<<"$voxtype_resolution" || {
+  echo "Pinned ARM64 Voxtype package does not resolve: $voxtype_resolution" >&2
+  exit 1
+}
+for dependency in gtk4-layer-shell which; do
+  grep -Eq "^${dependency} [^ ]+ aarch64$" <<<"$voxtype_resolution" || {
+    echo "Voxtype runtime dependency does not resolve for ARM64: $dependency" >&2
+    exit 1
+  }
+done
 [[ $(pacman -Qoq /usr/local/bin/omarchy-native-cursor-restore) == try-omarchy-runtime ]] || {
   echo "Screensaver cursor helper is not owned by the Omarchy runtime package" >&2
   exit 1
