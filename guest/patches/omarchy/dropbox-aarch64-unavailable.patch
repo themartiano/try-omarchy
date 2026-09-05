@@ -1,0 +1,17 @@
+--- a/bin/omarchy-install-service-dropbox
++++ b/bin/omarchy-install-service-dropbox
+@@ -2,8 +2,13 @@
+ 
+ # omarchy:summary=Install and start the Dropbox service. Must then be authenticated via the web.
+ 
++# Dropbox ships x86_64-only binaries; refuse before post-install tray setup.
++if [[ $(uname -m) == aarch64 ]]; then
++  exec omarchy-pkg-unavailable-arm Dropbox dropbox
++fi
++
+ echo "Installing all dependencies..."
+-omarchy-pkg-add dropbox dropbox-cli libappindicator-gtk3 python-gpgme nautilus-dropbox
++omarchy-pkg-add dropbox dropbox-cli libappindicator-gtk3 python-gpgme nautilus-dropbox || exit $?
+ 
+ echo "Adding Dropbox to the bar..."
+ omarchy-plugin-enable omarchy.dropbox

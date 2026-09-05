@@ -1,0 +1,14 @@
+--- a/bin/omarchy-install-gaming-retroarch
++++ b/bin/omarchy-install-gaming-retroarch
+@@ -3,6 +3,11 @@
+ # omarchy:summary=Install RetroArch with the full libretro core set plus FBNeo and a ~/Games ROM directory.
+ 
+ set -e
++
++# Full RetroArch + libretro core set is not available on Try Omarchy aarch64.
++if [[ $(uname -m) == aarch64 ]]; then
++  exec omarchy-pkg-unavailable-arm RetroArch retroarch
++fi
+ 
+ echo "Installing RetroArch..."
+ omarchy-pkg-add \

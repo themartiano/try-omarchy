@@ -1,0 +1,14 @@
+--- a/bin/omarchy-install-gaming-battlenet
++++ b/bin/omarchy-install-gaming-battlenet
+@@ -8,6 +8,11 @@
+ PREFIX="$HOME/Games/battlenet"
+ LAUNCHER="$PREFIX/drive_c/Program Files (x86)/Battle.net/Battle.net Launcher.exe"
+ INSTALLER_URL="https://downloader.battle.net/download/getInstallerForGame?os=win&gameProgram=BATTLENET_APP&version=Live"
++
++# Battle.net standalone depends on umu-launcher / Wine, which Install cannot satisfy on aarch64.
++if [[ $(uname -m) == aarch64 ]]; then
++  exec omarchy-pkg-unavailable-arm 'Battle.net' battlenet
++fi
+ 
+ echo "Installing Battle.net..."
+ 

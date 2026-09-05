@@ -1,0 +1,51 @@
+#!/bin/bash
+
+# omarchy:summary=Report that a named app is unavailable on aarch64 and optionally hide it
+# omarchy:args=<display-name> [install-id]
+# omarchy:examples=omarchy-pkg-unavailable-arm Ghostty ghostty
+# omarchy:hidden=true
+
+name=${1-}
+install_id=${2-}
+if [[ -z $name ]]; then
+  echo "Usage: omarchy-pkg-unavailable-arm <display-name> [install-id]" >&2
+  exit 2
+fi
+
+echo "The ${name} app is not available via pacman/AUR for aarch64 at this time."
+
+# Offer hide prompts only in an interactive Install terminal on aarch64.
+if [[ -t 0 && -t 1 ]] && /usr/local/bin/omarchy-arch-aarch64; then
+  if [[ -z $install_id ]]; then
+    map=/usr/local/share/try-omarchy/aarch64-unavailable-packages
+    if [[ -f $map && ! -L $map ]]; then
+      install_id=$(awk -F '\t' -v name="$name" '$2 == name { print $1; exit }' "$map")
+    fi
+  fi
+
+  if [[ -n $install_id ]]; then
+    state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/try-omarchy"
+    hide_all="$state_dir/hide-all-aarch64-unavailable"
+
+    if [[ ! -f $hide_all ]]; then
+      read -r -p "Hide ${name} from the Install menu? [y/N] " reply || reply=
+      case ${reply,,} in
+        y|yes)
+          /usr/local/bin/omarchy-install-hide "$install_id"
+          echo "Hid ${name} from the Install menu."
+
+          read -r -p "Hide all known unavailable Install apps too? [y/N] " reply_all || reply_all=
+          case ${reply_all,,} in
+            y|yes)
+              /usr/local/bin/omarchy-install-hide-all-unavailable
+              echo "Hid all known unavailable Install apps."
+              ;;
+          esac
+          ;;
+      esac
+    fi
+  fi
+fi
+
+# 130 skips omarchy-show-done in the floating Install terminal (same as Ctrl-C).
+exit 130

@@ -1,0 +1,25 @@
+# Install-menu ids that can be hidden on Try Omarchy aarch64.
+# These match omarchy-install-menu-visible arguments (usually package names).
+ghostty
+microsoft-edge-stable-bin
+spotify
+dropbox
+cursor-bin
+grok-bot
+lmstudio-bin
+steam
+minecraft-launcher
+heroic-games-launcher-bin
+geforce-now
+battlenet
+lutris
+retroarch
+sublime-text-4
+visual-studio-code-bin
+zed
+nordvpn-bin
+once-bin
+openai-codex-desktop
+xpadneo-dkms
+bitwarden
+ollama

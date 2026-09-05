@@ -1,0 +1,8 @@
+#!/bin/bash
+
+# omarchy:summary=Hide all known aarch64-unavailable Install-menu apps
+# omarchy:hidden=true
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/try-omarchy"
+mkdir -p "$state_dir"
+: >"$state_dir/hide-all-aarch64-unavailable"

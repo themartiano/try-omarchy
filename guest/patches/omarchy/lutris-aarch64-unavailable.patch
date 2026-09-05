@@ -1,0 +1,14 @@
+--- a/bin/omarchy-install-gaming-lutris
++++ b/bin/omarchy-install-gaming-lutris
+@@ -4,6 +4,11 @@
+ # omarchy:requires-sudo=true
+ 
+ set -e
++
++# Lutris Install pulls Wine/umu packages that are not a workable Try Omarchy aarch64 path.
++if [[ $(uname -m) == aarch64 ]]; then
++  exec omarchy-pkg-unavailable-arm Lutris lutris
++fi
+ 
+ echo "Installing Lutris..."
+ omarchy-pkg-add lutris umu-launcher wine-staging wine-mono wine-gecko winetricks python-protobuf

@@ -1,0 +1,8 @@
+#!/bin/bash
+
+# omarchy:summary=Restore Install-menu apps previously hidden on aarch64
+# omarchy:examples=omarchy-install-restore-hidden
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/try-omarchy"
+rm -f "$state_dir/hide-all-aarch64-unavailable" "$state_dir/hidden-install-packages"
+echo "Restored previously hidden Install menu apps."

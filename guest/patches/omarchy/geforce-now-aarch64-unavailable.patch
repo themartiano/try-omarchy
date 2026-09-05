@@ -1,0 +1,14 @@
+--- a/bin/omarchy-install-gaming-geforce-now
++++ b/bin/omarchy-install-gaming-geforce-now
+@@ -5,6 +5,11 @@
+ # omarchy:name=gaming geforce-now
+ 
+ set -e
++
++# GeForce NOW ships an x86_64 Linux installer only.
++if [[ $(uname -m) == aarch64 ]]; then
++  exec omarchy-pkg-unavailable-arm 'NVIDIA GeForce NOW' geforce-now
++fi
+ 
+ echo "Installing GeForce NOW..."
+ omarchy-pkg-add flatpak

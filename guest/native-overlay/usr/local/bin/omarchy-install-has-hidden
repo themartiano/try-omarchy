@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# omarchy:summary=True when the user has hidden any aarch64-unavailable Install items
+# omarchy:hidden=true
+
+/usr/local/bin/omarchy-arch-aarch64 || exit 1
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/try-omarchy"
+[[ -f $state_dir/hide-all-aarch64-unavailable && ! -L $state_dir/hide-all-aarch64-unavailable ]] && exit 0
+[[ -f $state_dir/hidden-install-packages && ! -L $state_dir/hidden-install-packages ]] || exit 1
+grep -q '[^[:space:]]' "$state_dir/hidden-install-packages"

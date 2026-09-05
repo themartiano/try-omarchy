@@ -1,0 +1,30 @@
+# Packages that Install-menu paths cannot satisfy on Try Omarchy aarch64.
+# Format: package<TAB>display-name
+# Includes x86_64-only AUR/binaries, and packages the Install path asks pacman for
+# that are absent from this guest's repos (often AUR / omarchy x86 channel only).
+# Wine/umu are NOT listed here: they are refused only from Battle.net / Lutris
+# installers so aarch64 pkg-add of those deps elsewhere is not blocked.
+ghostty	Ghostty
+microsoft-edge-stable-bin	Edge
+spotify	Spotify
+dropbox	Dropbox
+dropbox-cli	Dropbox
+nautilus-dropbox	Dropbox
+cursor-bin	Cursor
+grok-bot	Grok Bot
+lmstudio-bin	LM Studio
+steam	Steam
+minecraft-launcher	Minecraft
+heroic-games-launcher-bin	Heroic
+sublime-text-4	Sublime Text
+visual-studio-code-bin	VSCode
+zed	Zed
+omazed	Zed
+nordvpn-bin	NordVPN
+once-bin	ONCE
+openai-codex-desktop	ChatGPT Desktop
+xpadneo-dkms	Xbox Controllers
+bitwarden	Bitwarden
+ollama	Ollama
+ollama-cuda	Ollama
+ollama-rocm	Ollama

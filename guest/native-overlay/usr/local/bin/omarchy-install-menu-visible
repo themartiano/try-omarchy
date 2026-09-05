@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# omarchy:summary=True when an Install-menu id should stay visible on this guest
+# omarchy:args=<install-id>
+# omarchy:hidden=true
+
+id=${1-}
+[[ -n $id ]] || exit 0
+
+# Non-aarch64 guests never hide via this helper.
+/usr/local/bin/omarchy-arch-aarch64 || exit 0
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/try-omarchy"
+hidden_list="$state_dir/hidden-install-packages"
+hide_all="$state_dir/hide-all-aarch64-unavailable"
+known=/usr/local/share/try-omarchy/aarch64-unavailable-install-ids
+
+if [[ -f $hide_all && ! -L $hide_all ]]; then
+  if [[ -f $known && ! -L $known ]] && grep -qxF -- "$id" "$known"; then
+    exit 1
+  fi
+fi
+
+if [[ -f $hidden_list && ! -L $hidden_list ]] && grep -qxF -- "$id" "$hidden_list"; then
+  exit 1
+fi
+
+exit 0

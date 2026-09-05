@@ -169,6 +169,14 @@ def main() -> None:
             "notification-hover-close",
             "notification-screen-privacy",
             "update-free-space-message",
+            "pkg-add-aarch64-unavailable",
+            "pkg-aur-add-aarch64-unavailable",
+            "dropbox-aarch64-unavailable",
+            "geforce-now-aarch64-unavailable",
+            "retroarch-aarch64-unavailable",
+            "battlenet-aarch64-unavailable",
+            "lutris-aarch64-unavailable",
+            "aarch64-hide-unavailable-installs",
         ],
         "Omarchy backports are explicitly ordered and identified",
     )
@@ -195,6 +203,125 @@ def main() -> None:
         and "/usr/share/try-omarchy/build-spec.json" in update_free_space_patch
         and "df -h /" in update_free_space_patch,
         "update free-space backport clarifies the guest VM disk requirement",
+    )
+    geforce_unavailable_patch = read(GUEST / "patches/omarchy/geforce-now-aarch64-unavailable.patch")
+    check(
+        "exec omarchy-pkg-unavailable-arm 'NVIDIA GeForce NOW' geforce-now"
+        in geforce_unavailable_patch,
+        "GeForce NOW aarch64 backport fails via the shared unavailable helper",
+    )
+    retroarch_unavailable_patch = read(GUEST / "patches/omarchy/retroarch-aarch64-unavailable.patch")
+    check(
+        "exec omarchy-pkg-unavailable-arm RetroArch retroarch" in retroarch_unavailable_patch,
+        "RetroArch aarch64 backport fails via the shared unavailable helper",
+    )
+    battlenet_unavailable_patch = read(GUEST / "patches/omarchy/battlenet-aarch64-unavailable.patch")
+    check(
+        "exec omarchy-pkg-unavailable-arm 'Battle.net' battlenet" in battlenet_unavailable_patch,
+        "Battle.net aarch64 backport fails via the shared unavailable helper",
+    )
+    lutris_unavailable_patch = read(GUEST / "patches/omarchy/lutris-aarch64-unavailable.patch")
+    check(
+        "exec omarchy-pkg-unavailable-arm Lutris lutris" in lutris_unavailable_patch,
+        "Lutris aarch64 backport fails via the shared unavailable helper",
+    )
+    dropbox_unavailable_patch = read(GUEST / "patches/omarchy/dropbox-aarch64-unavailable.patch")
+    check(
+        "exec omarchy-pkg-unavailable-arm Dropbox dropbox" in dropbox_unavailable_patch
+        and "omarchy-plugin-enable omarchy.dropbox" in dropbox_unavailable_patch,
+        "Dropbox aarch64 backport stops before tray setup via the shared unavailable helper",
+    )
+    pkg_add_patch = read(GUEST / "patches/omarchy/omarchy-pkg-add-aarch64-unavailable.patch")
+    pkg_aur_patch = read(GUEST / "patches/omarchy/omarchy-pkg-aur-add-aarch64-unavailable.patch")
+    check(
+        "/usr/local/bin/omarchy-pkg-refuse-aarch64-unavailable" in pkg_add_patch
+        and "/usr/local/bin/omarchy-pkg-refuse-aarch64-unavailable" in pkg_aur_patch,
+        "pkg-add/pkg-aur-add backports refuse known aarch64-unavailable packages",
+    )
+    arch_helper = GUEST / "native-overlay/usr/local/bin/omarchy-arch-aarch64"
+    unavailable_helper = GUEST / "native-overlay/usr/local/bin/omarchy-pkg-unavailable-arm"
+    refuse_helper = GUEST / "native-overlay/usr/local/bin/omarchy-pkg-refuse-aarch64-unavailable"
+    unavailable_packages = GUEST / "native-overlay/usr/local/share/try-omarchy/aarch64-unavailable-packages"
+    check(
+        arch_helper.is_file()
+        and arch_helper.stat().st_mode & stat.S_IXUSR != 0
+        and '[[ $(uname -m) == aarch64 ]]' in read(arch_helper),
+        "aarch64 architecture predicate ships in the native overlay",
+    )
+    check(
+        unavailable_helper.is_file()
+        and unavailable_helper.stat().st_mode & stat.S_IXUSR != 0
+        and "not available via pacman/AUR for aarch64 at this time."
+        in read(unavailable_helper)
+        and "Hide" in read(unavailable_helper)
+        and "omarchy-install-hide" in read(unavailable_helper)
+        and "omarchy-install-hide-all-unavailable" in read(unavailable_helper)
+        and "exit 130" in read(unavailable_helper),
+        "shared aarch64 unavailable helper ships in the native overlay",
+    )
+    check(
+        refuse_helper.is_file()
+        and refuse_helper.stat().st_mode & stat.S_IXUSR != 0
+        and "aarch64-unavailable-packages" in read(refuse_helper)
+        and 'omarchy-pkg-unavailable-arm "$name" "$package"' in read(refuse_helper),
+        "aarch64 unavailable package refuse helper ships in the native overlay",
+    )
+    visible_helper = GUEST / "native-overlay/usr/local/bin/omarchy-install-menu-visible"
+    has_hidden_helper = GUEST / "native-overlay/usr/local/bin/omarchy-install-has-hidden"
+    restore_helper = GUEST / "native-overlay/usr/local/bin/omarchy-install-restore-hidden"
+    install_ids = GUEST / "native-overlay/usr/local/share/try-omarchy/aarch64-unavailable-install-ids"
+    hide_menu_patch = read(GUEST / "patches/omarchy/aarch64-hide-unavailable-installs.patch")
+    check(
+        visible_helper.is_file()
+        and has_hidden_helper.is_file()
+        and restore_helper.is_file()
+        and install_ids.is_file()
+        and "hide-all-aarch64-unavailable" in read(visible_helper)
+        and "hidden-install-packages" in read(visible_helper)
+        and "ghostty" in read(install_ids)
+        and "geforce-now" in read(install_ids)
+        and "retroarch" in read(install_ids)
+        and "omarchy-install-menu-visible ghostty" in hide_menu_patch
+        and "omarchy-install-menu-visible retroarch" in hide_menu_patch
+        and "omarchy-install-menu-visible sublime-text-4" in hide_menu_patch
+        and "omarchy-install-menu-visible ollama" in hide_menu_patch
+        and '"setup.restore-hidden-installs"' in hide_menu_patch
+        and "omarchy-install-has-hidden" in hide_menu_patch,
+        "aarch64 Install hide helpers and menu gates ship in the overlay/backport",
+    )
+    check(
+        not (GUEST / "native-overlay/usr/local/bin/omarchy-pkg-add").exists()
+        and not (GUEST / "native-overlay/usr/local/bin/omarchy-pkg-aur-add").exists(),
+        "pkg-add refusal is authenticity-backed rather than PATH-wrapped",
+    )
+    unavailable_package_text = read(unavailable_packages)
+    check(
+        unavailable_packages.is_file()
+        and "ghostty\tGhostty" in unavailable_package_text
+        and "microsoft-edge-stable-bin\tEdge" in unavailable_package_text
+        and "spotify\tSpotify" in unavailable_package_text
+        and "dropbox\tDropbox" in unavailable_package_text
+        and "cursor-bin\tCursor" in unavailable_package_text
+        and "grok-bot\tGrok Bot" in unavailable_package_text
+        and "lmstudio-bin\tLM Studio" in unavailable_package_text
+        and "steam\tSteam" in unavailable_package_text
+        and "minecraft-launcher\tMinecraft" in unavailable_package_text
+        and "heroic-games-launcher-bin\tHeroic" in unavailable_package_text
+        and "umu-launcher\tWine game launcher" not in unavailable_package_text
+        and "wine-staging\tWine" not in unavailable_package_text
+        and "wine-mono\tWine" not in unavailable_package_text
+        and "wine-gecko\tWine" not in unavailable_package_text
+        and "sublime-text-4\tSublime Text" in unavailable_package_text
+        and "visual-studio-code-bin\tVSCode" in unavailable_package_text
+        and "zed\tZed" in unavailable_package_text
+        and "nordvpn-bin\tNordVPN" in unavailable_package_text
+        and "once-bin\tONCE" in unavailable_package_text
+        and "openai-codex-desktop\tChatGPT Desktop" in unavailable_package_text
+        and "xpadneo-dkms\tXbox Controllers" in unavailable_package_text
+        and "bitwarden\tBitwarden" in unavailable_package_text
+        and "ollama\tOllama" in unavailable_package_text
+        and "ollama-cuda\tOllama" in unavailable_package_text,
+        "aarch64 unavailable package denylist covers Install gaps without globally blocking Wine/umu",
     )
 
     post_build_installers = authenticity["postBuildUserInstallers"]
@@ -464,6 +591,16 @@ def main() -> None:
     )
 
     configure = read(GUEST / "scripts/configure-rootfs.sh")
+    check(
+        '"$root/usr/local/bin/omarchy-arch-aarch64"' in configure
+        and '"$root/usr/local/bin/omarchy-pkg-unavailable-arm"' in configure
+        and '"$root/usr/local/bin/omarchy-pkg-refuse-aarch64-unavailable"' in configure
+        and '"$root/usr/local/bin/omarchy-install-menu-visible"' in configure
+        and '"$root/usr/local/bin/omarchy-install-restore-hidden"' in configure
+        and "aarch64-unavailable-packages" in configure
+        and "aarch64-unavailable-install-ids" in configure,
+        "rootfs configuration marks the aarch64 availability helpers executable",
+    )
     check("factory-overlay" in configure and "native-overlay" in configure, "rootfs receives only native factory overlays")
     check(
         "compat/ttfx-arm64" not in configure and not (GUEST / "compat/ttfx-arm64").exists(),
