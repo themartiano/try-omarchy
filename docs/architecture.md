@@ -127,7 +127,10 @@ creates the account on first boot.
 - The guest normally consumes upstream Arch Linux ARM packages. Hyprland is the
   documented exception: an upstream package is reproducibly rebuilt with a
   guarded rounded-border coverage patch for the VM graphics path, then held in
-  the guest's immutable local repository.
+  the guest's immutable local repository. While that pin still needs
+  `libaquamarine.so=13`, the factory also vendors `aquamarine 0.14.0-2` for
+  empty-root resolve (ALARM mirrors only publish `.so=14`) and holds aquamarine
+  on `IgnorePkg` in the finished guest so Omarchy updates cannot pull the break.
 - The final Arch Linux ARM pacman files live under `/usr/share/try-omarchy/`.
   An Omarchy-supported `pre-refresh-pacman` hook restores them after a channel
   refresh writes its x86_64 templates to `/etc`; the upstream templates remain

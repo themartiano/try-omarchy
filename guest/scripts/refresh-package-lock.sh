@@ -73,10 +73,26 @@ chmod 0755 "$temporary"
 mkdir -p "$temporary/db"
 chmod 0755 "$temporary/db"
 config="$temporary/pacman.conf"
-cp "$upstream_pacman_config" "$config"
+package_lock_input=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["packageLock"])' "$spec")
+package_lock_file="$guest_dir/$package_lock_input"
+[[ -f $package_lock_file ]] || fail "package lock not found: $package_lock_file"
+
+builder_conf_args=(
+  python3 "$script_dir/write-builder-pacman-conf.py"
+  --spec "$spec"
+  --guest-dir "$guest_dir"
+  --guest-config "$upstream_pacman_config"
+  --package-lock "$package_lock_file"
+  --output "$config"
+)
 if [[ ${OMARCHY_PACMAN_DISABLE_SANDBOX:-0} == "1" ]]; then
-  sed -i '/^\[options\]$/a DisableSandbox' "$config"
+  builder_conf_args+=(--disable-sandbox)
 fi
+abi_pin_count=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("inputs", {}).get("abiPackagePins", [])))' "$spec")
+if (( abi_pin_count > 0 )); then
+  builder_conf_args+=(--abi-repo "$temporary/abi-pin-repo")
+fi
+"${builder_conf_args[@]}" || fail "could not derive the factory builder pacman configuration"
 
 pacman -Syy --noconfirm --config "$config" \
   --dbpath "$temporary/db" --logfile "$temporary/pacman.log"

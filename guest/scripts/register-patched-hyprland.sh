@@ -398,7 +398,8 @@ import sys
 
 source = pathlib.Path(sys.argv[1]).read_text().splitlines()
 sections = [line[1:-1] for line in source if re.fullmatch(r"\[[A-Za-z0-9@._+-]+\]", line)]
-if sections != ["options", "core", "extra", "alarm", "aur", "omarchy"]:
+allowed = {"options", "core", "extra", "alarm", "aur", "omarchy", "try-omarchy-abi-pins", "try-omarchy-pinned-cache"}
+if not sections or sections[0] != "options" or "omarchy" not in sections or any(s not in allowed for s in sections):
     raise SystemExit(1)
 
 output = []
@@ -406,7 +407,9 @@ section = None
 for line in source:
     if re.fullmatch(r"\[[A-Za-z0-9@._+-]+\]", line):
         section = line[1:-1]
-    if section == "omarchy" or line.startswith("IgnorePkg"):
+    # Keep try-omarchy-abi-pins so Hyprland build deps can still resolve
+    # libaquamarine.so=13 while ALA only publishes .so=14.
+    if section in {"omarchy", "try-omarchy-pinned-cache"} or line.startswith("IgnorePkg"):
         continue
     output.append(line)
 

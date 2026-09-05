@@ -58,7 +58,7 @@
       "buildPackages": {
         "base-devel": "1-2",
         "binutils": "2.46+r70+g155188ea10a7-1",
-        "cmake": "4.4.3-1",
+        "cmake": "4.4.3-2",
         "gcc": "16.1.1+r12+g301eb08fa2c5-1",
         "gcc-libs": "16.1.1+r12+g301eb08fa2c5-1",
         "glibc": "2.43+r22+g8362e8ce10b2-2",
@@ -134,7 +134,15 @@
   "inputs": {
     "packages": "packages.txt",
     "packageLock": "packages.lock.json",
-    "pacmanConfig": "pacman.aarch64.conf"
+    "pacmanConfig": "pacman.aarch64.conf",
+    "abiPackagePins": [
+      {
+        "name": "aquamarine",
+        "version": "0.14.0-2",
+        "archive": "pinned-packages/aquamarine-0.14.0-2-aarch64.pkg.tar.zst",
+        "sha256": "64f7dc4df3680a59fb4db5237257bf61defdecd87a1f39c2ffb672eda10ac4e8"
+      }
+    ]
   },
   "authenticity": {
     "verbatimRuntimeTrees": [

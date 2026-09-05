@@ -130,9 +130,42 @@ def main() -> None:
         "SSH preset and boot activation are an exact loopback-only runtime contract",
     )
     check(spec["runtime"]["storage"]["expandedSizeMiB"] == 24576, "working disk expands to 24 GiB")
-    check(set(spec["inputs"]) == {"packages", "packageLock", "pacmanConfig"}, "spec has a minimal input set")
-    for path in spec["inputs"].values():
-        check((GUEST / path).is_file(), f"spec input exists: {path}")
+    check(
+        set(spec["inputs"]) == {"packages", "packageLock", "pacmanConfig", "abiPackagePins"},
+        "spec has a minimal input set",
+    )
+    for key, value in spec["inputs"].items():
+        if key == "abiPackagePins":
+            continue
+        check((GUEST / value).is_file(), f"spec input exists: {value}")
+    abi_pins = spec["inputs"]["abiPackagePins"]
+    check(
+        abi_pins
+        == [
+            {
+                "name": "aquamarine",
+                "version": "0.14.0-2",
+                "archive": "pinned-packages/aquamarine-0.14.0-2-aarch64.pkg.tar.zst",
+                "sha256": "64f7dc4df3680a59fb4db5237257bf61defdecd87a1f39c2ffb672eda10ac4e8",
+            }
+        ],
+        "factory abi pins keep aquamarine on libaquamarine.so=13 for the locked Hyprland",
+    )
+    for pin in abi_pins:
+        archive = GUEST / pin["archive"]
+        check(archive.is_file(), f"abi pin archive exists: {pin['archive']}")
+        check(
+            hashlib.sha256(archive.read_bytes()).hexdigest() == pin["sha256"],
+            f"abi pin digest matches: {pin['name']}",
+        )
+    builder_conf_writer = read(GUEST / "scripts/write-builder-pacman-conf.py")
+    check(
+        "try-omarchy-abi-pins" in builder_conf_writer
+        and "drop_ignore" in builder_conf_writer
+        and "write-builder-pacman-conf.py" in read(GUEST / "build.sh")
+        and "write-builder-pacman-conf.py" in read(GUEST / "scripts/refresh-package-lock.sh"),
+        "factory builder pacman derivation installs abi pins and strips them from IgnorePkg",
+    )
 
     wallpaper = DEFAULT_WALLPAPER.read_bytes()
     check(
@@ -247,8 +280,8 @@ def main() -> None:
         "factory pacman retains the ARM Omarchy keyring repository",
     )
     check(
-        "IgnorePkg = linux-aarch64 linux-aarch64-headers hyprland" in pacman_conf,
-        "factory pacman holds the QEMU-booted kernel, matching headers, and patched compositor",
+        "IgnorePkg = linux-aarch64 linux-aarch64-headers hyprland aquamarine" in pacman_conf,
+        "factory pacman holds the QEMU-booted kernel, matching headers, patched compositor, and its aquamarine ABI",
     )
     arm_mirrorlist = read(GUEST / "mirrorlist.aarch64")
     check(
@@ -266,6 +299,11 @@ def main() -> None:
     )
     packages = package_lock.get("packages")
     check(isinstance(packages, dict) and len(packages) > 100, "package transaction is fully locked")
+    for pin in spec["inputs"]["abiPackagePins"]:
+        check(
+            packages.get(pin["name"]) == pin["version"],
+            f"abi pin version matches the transaction lock: {pin['name']}",
+        )
     requested_packages = {
         line.strip()
         for line in package_text.decode().splitlines()
@@ -379,7 +417,7 @@ def main() -> None:
             "buildPackages": {
                 "base-devel": "1-2",
                 "binutils": "2.46+r70+g155188ea10a7-1",
-                "cmake": "4.4.3-1",
+                "cmake": "4.4.3-2",
                 "gcc": "16.1.1+r12+g301eb08fa2c5-1",
                 "gcc-libs": "16.1.1+r12+g301eb08fa2c5-1",
                 "glibc": "2.43+r22+g8362e8ce10b2-2",
@@ -769,6 +807,12 @@ def main() -> None:
     check(
         "**Hyprland**" in third_party_notices and "BSD-3-Clause" in third_party_notices,
         "third-party notices cover the patched Hyprland redistribution",
+    )
+    check(
+        "**aquamarine**" in third_party_notices
+        and "pinned-packages/" in third_party_notices
+        and "IgnorePkg" in third_party_notices,
+        "third-party notices cover the vendored aquamarine ABI pin",
     )
     check(
         "**Glaze**" in third_party_notices and "MIT" in third_party_notices,
