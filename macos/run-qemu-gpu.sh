@@ -1296,6 +1296,36 @@ case ${OMARCHY_QEMU_GPU_IMMERSIVE:-1} in
   *) fail "OMARCHY_QEMU_GPU_IMMERSIVE must be 0 or 1" ;;
 esac
 
+# Guest memory is a boot-time allocation. The Swift app resolves the user's
+# stored choice against this host before exporting it; re-check independently
+# here so a hand-set environment value can never start a guest below the
+# manifest's minimumMemoryMiB or starve the host. The 4096 default matches the
+# manifest's recommendedMemoryMiB, both verified at build time. The host cap
+# applies only above the default: 4096 has always booted unconditionally, and
+# hosts smaller than 8 GiB exist (CI runners), so gating the default on host
+# size would be a regression, not a safeguard.
+memory_mib=${OMARCHY_QEMU_GPU_MEMORY_MIB:-4096}
+# Seven digits bound the value below any real host while keeping the
+# arithmetic far from 64-bit wraparound; forcing base 10 stops bash from
+# reading a leading zero as octal while QEMU would read the same string as
+# decimal.
+[[ $memory_mib =~ ^[0-9]{1,7}$ ]] || fail "OMARCHY_QEMU_GPU_MEMORY_MIB must be a whole number of MiB"
+memory_mib=$((10#$memory_mib))
+(( memory_mib >= 2048 )) || fail "the ARM guest requires at least 2048 MiB of memory"
+if (( memory_mib > 4096 )); then
+  host_memory_bytes=$(sysctl -n hw.memsize 2>/dev/null) || fail "cannot determine the host memory size"
+  [[ $host_memory_bytes =~ ^[0-9]+$ ]] || fail "host memory size is invalid: $host_memory_bytes"
+  host_memory_mib=$((host_memory_bytes / 1048576))
+  (( memory_mib + 4096 <= host_memory_mib )) || {
+    fail "OMARCHY_QEMU_GPU_MEMORY_MIB must leave the host at least 4096 MiB (host has ${host_memory_mib} MiB)"
+  }
+fi
+if (( memory_mib % 1024 == 0 )); then
+  memory_display="$((memory_mib / 1024)) GiB"
+else
+  memory_display="${memory_mib} MiB"
+fi
+
 qemu_args=(
   -name 'Try Omarchy'
   -machine "$qemu_machine"
@@ -1303,7 +1333,7 @@ qemu_args=(
   # one: Linux otherwise probes the dead device and prints a misleading failure.
   -cpu 'host,pmu=off'
   -smp "$vcpu_count,sockets=1,cores=$vcpu_count,threads=1"
-  -m 4G
+  -m "${memory_mib}M"
   -nodefaults
   # Reboot the guest inside this QEMU process, but let shutdown close the app.
   -action 'reboot=reset,shutdown=poweroff'
@@ -1389,10 +1419,10 @@ fi
 }
 
 if [[ $QEMU_SELECTED_STORAGE_MODE == persistent ]]; then
-  echo "[qemu-gpu] Starting the persistent ARM64 VirGL guest with $vcpu_count vCPUs and 4 GiB RAM." >&2
+  echo "[qemu-gpu] Starting the persistent ARM64 VirGL guest with $vcpu_count vCPUs and $memory_display RAM." >&2
   echo "[qemu-gpu] User data: $QEMU_PERSISTENT_STORAGE_DIRECTORY" >&2
 else
-  echo "[qemu-gpu] Starting a disposable ARM64 VirGL guest with $vcpu_count vCPUs and 4 GiB RAM." >&2
+  echo "[qemu-gpu] Starting a disposable ARM64 VirGL guest with $vcpu_count vCPUs and $memory_display RAM." >&2
 fi
 if [[ -n $shared_folder ]]; then
   echo "[qemu-gpu] Shared folder: $shared_folder (guest ~/$shared_folder_name)" >&2

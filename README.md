@@ -249,6 +249,25 @@ Loopback binding prevents devices on Wi-Fi, Ethernet, or the wider LAN from
 connecting. It does not isolate the listener from other users or processes on
 the same Mac; guest SSH authentication is still required.
 
+## Giving Omarchy more memory
+
+Use **Memory** on the start menu to pick how much of the Mac's RAM the guest
+boots with. The default is 4 GiB, and the menu only offers larger allocations
+(6, 8, 12, or 16 GiB) that leave macOS at least 8 GiB for itself, so an 8 GiB
+Mac shows the default alone. The choice is not tied to installation: change it
+before any launch, and it applies the next time Omarchy starts. Memory is a
+boot-time QEMU setting, never part of the guest image or VM data, so switching
+allocations never needs a reset and never touches your files. A stored choice
+that no longer fits the Mac it runs on falls back to the default.
+
+Scripted launches can set `OMARCHY_QEMU_GPU_MEMORY_MIB` (a whole number of
+MiB) instead. The launcher's own rule is looser than the menu's: it refuses
+values below the guest's 2048 MiB minimum, and values above the 4096 default
+that would leave the host under 4 GiB. The default itself always boots, and
+an environment value the menu would not offer (say 12 GiB on a 16 GiB Mac)
+is still accepted — the menu is deliberately conservative, the launcher is a
+safety floor.
+
 ## Requirements
 
 - Apple Silicon Mac (`arm64`)
