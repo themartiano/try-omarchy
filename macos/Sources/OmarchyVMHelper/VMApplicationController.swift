@@ -55,6 +55,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let portForwardingStore: PortForwardingPreferenceStore
     private let fullscreenPreferenceStore: FullscreenPreferenceStore
     private let storageLocationStore: StorageLocationPreferenceStore
+    private let diskCapacityStore: DiskCapacityPreferenceStore
     private let volumeProbe: VolumeProbing
     private let volumeRootDetector: VolumeRootDetecting
     private let deviceProvider: HostAudioDeviceProviding
@@ -93,6 +94,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         portForwardingStore: PortForwardingPreferenceStore = PortForwardingPreferenceStore(),
         fullscreenPreferenceStore: FullscreenPreferenceStore = FullscreenPreferenceStore(),
         storageLocationStore: StorageLocationPreferenceStore = StorageLocationPreferenceStore(),
+        diskCapacityStore: DiskCapacityPreferenceStore = DiskCapacityPreferenceStore(),
         volumeProbe: VolumeProbing = URLVolumeProbe(),
         volumeRootDetector: VolumeRootDetecting = FileManagerVolumeRootDetector(),
         deviceProvider: HostAudioDeviceProviding = CoreAudioHostAudioDeviceProvider(),
@@ -107,6 +109,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         self.portForwardingStore = portForwardingStore
         self.fullscreenPreferenceStore = fullscreenPreferenceStore
         self.storageLocationStore = storageLocationStore
+        self.diskCapacityStore = diskCapacityStore
         self.volumeProbe = volumeProbe
         self.volumeRootDetector = volumeRootDetector
         self.deviceProvider = deviceProvider
@@ -177,6 +180,13 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             },
             useDefaultStorageLocation: { [weak self] in
                 self?.useDefaultStorageLocation()
+            },
+            diskCapacity: { [weak self] in
+                self?.diskCapacityStore.load().gigabytes
+                    ?? DiskCapacityPreference.defaultGigabytes
+            },
+            saveDiskCapacity: { [weak self] gigabytes in
+                self?.saveDiskCapacity(gigabytes)
             },
             resetStorage: { [weak self] in
                 self?.resetVirtualMachine()
@@ -416,12 +426,16 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         let storage = StorageLocationLaunchConfiguration.make(
             baseEnvironment: fullscreen.environment,
             preference: storageLocationStore.load(),
-            metrics: bundledMetrics,
+            metrics: effectiveBundledMetrics,
             probe: volumeProbe,
             volumeRootDetector: volumeRootDetector
         )
+        let diskCapacity = DiskCapacityLaunchConfiguration.make(
+            baseEnvironment: storage.environment,
+            preference: diskCapacityStore.load()
+        )
         return ChildLaunchContext(
-            environment: storage.environment,
+            environment: diskCapacity.environment,
             stateRoot: storage.stateRoot,
             portForwardMappings: forwarding.mappings,
             storageUnavailableReason: storage.unavailableReason
@@ -535,7 +549,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private func storageLocationMenuState() -> StorageLocationMenuState {
         StorageLocationMenuState.make(
             preference: storageLocationStore.load(),
-            metrics: bundledMetrics,
+            metrics: effectiveBundledMetrics,
             homeDirectory: Self.homeDirectory,
             environmentOverride: storageEnvironmentOverride,
             probe: volumeProbe,
@@ -548,7 +562,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         do {
             _ = try StorageLocationPolicy.validate(
                 path,
-                metrics: bundledMetrics,
+                metrics: effectiveBundledMetrics,
                 probe: volumeProbe,
                 volumeRootDetector: volumeRootDetector
             )
@@ -565,7 +579,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         do {
             let resolution = try StorageLocationPolicy.validate(
                 path,
-                metrics: bundledMetrics,
+                metrics: effectiveBundledMetrics,
                 probe: volumeProbe,
                 volumeRootDetector: volumeRootDetector
             )
@@ -580,6 +594,21 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
 
     private func useDefaultStorageLocation() {
         storageLocationStore.save(.default)
+    }
+
+    private var effectiveBundledMetrics: BundledGuestMetrics? {
+        guard var metrics = bundledMetrics else { return nil }
+        metrics.workingDiskBytes = diskCapacityStore.load().bytes
+        return metrics
+    }
+
+    private func saveDiskCapacity(_ gigabytes: Int) -> String? {
+        do {
+            try diskCapacityStore.save(DiskCapacityPreference(gigabytes: gigabytes))
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
     }
 
     /// What the user decided once their chosen drive turned out to be missing.
@@ -620,7 +649,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         do {
             _ = try StorageLocationPolicy.validate(
                 container,
-                metrics: bundledMetrics,
+                metrics: effectiveBundledMetrics,
                 probe: volumeProbe,
                 volumeRootDetector: volumeRootDetector
             )

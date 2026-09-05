@@ -620,11 +620,11 @@ if ttfx != {
     "url": "https://github.com/omacom-io/ttfx/archive/refs/tags/v0.3.2.tar.gz",
     "sha256": "d0c0df4867e7f03142fb7f77c66670d0e8da15534239c1a7abfd89f19dfc00f6",
     "cargoLockSha256": "49e2091962fc4d425b4cf3bde1a105719b5b50eed0583ec90e85922adb45e2ce",
-    "binarySha256": "9171a07c752b202a21f80a4ad336a9d093be06a6c96b062e8b5e0c158d2a86d2",
+    "binarySha256": "d034cc5b9a8d410ce93113ef0a5d27b5ee2327948562bf2b0e756eebd326fa8f",
     "target": "aarch64-unknown-linux-gnu",
-    "rustPackageVersion": "rust 1:1.98.0-1",
-    "rustcVersion": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
-    "cargoVersion": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)",
+    "rustPackageVersion": "rust 1:1.98.1-1",
+    "rustcVersion": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+    "cargoVersion": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
     "reportedVersion": "ttfx 0.3.2",
     "license": "MIT",
     "licenseSha256": "175441de2eb9a0d3f0627c404ad71929336fd98d75926cc27b9e364d35cc7977",
@@ -813,6 +813,24 @@ esac
 if [[ ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} == 1 ]]; then
   printf '%s\n' "$bundle_validation"
   exit 0
+fi
+
+if [[ -n ${OMARCHY_QEMU_GPU_DISK_SIZE_GB:-} ]]; then
+  requested_disk_size_gb=$OMARCHY_QEMU_GPU_DISK_SIZE_GB
+  [[ $requested_disk_size_gb =~ ^[1-9][0-9]*$ ]] || {
+    fail "OMARCHY_QEMU_GPU_DISK_SIZE_GB must be a whole number"
+  }
+  (( requested_disk_size_gb >= 10 )) || {
+    fail "OMARCHY_QEMU_GPU_DISK_SIZE_GB must be at least 10 GB"
+  }
+  (( requested_disk_size_gb <= 8192 )) || {
+    fail "OMARCHY_QEMU_GPU_DISK_SIZE_GB cannot exceed 8192 GB"
+  }
+  requested_disk_bytes=$((requested_disk_size_gb * 1024 * 1024 * 1024))
+  (( requested_disk_bytes >= source_disk_bytes )) || {
+    fail "the requested VM disk is smaller than the bundled factory image"
+  }
+  expanded_disk_bytes=$requested_disk_bytes
 fi
 
 [[ -f $storage_library && ! -L $storage_library ]] || {

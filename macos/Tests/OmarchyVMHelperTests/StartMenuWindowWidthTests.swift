@@ -109,6 +109,8 @@ struct StartMenuWindowWidthTests {
             validateStorageLocation: { _ in nil },
             chooseStorageLocation: { _ in nil },
             useDefaultStorageLocation: {},
+            diskCapacity: { 24 },
+            saveDiskCapacity: { _ in nil },
             resetStorage: {},
             sharedFolderStatus: { .disabled },
             chooseSharedFolder: { _ in nil },
